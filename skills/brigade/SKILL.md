@@ -298,9 +298,10 @@ Build the `questions` array — one entry per question, `{n, topic, question, wh
   `<skill-base>/../../workflows/brigade-research.js`. Absolute plugin/cache paths are
   accepted by the Workflow tool — do not copy scripts into `.brigade/workflows/`.
 - args (may be passed as a JSON string): `{ dishDir, repoRoot, now, tier, questions,
-  overrides, promptOverrides }` — `overrides` is the object from
-  `brigade-config resolve --json`, `promptOverrides` the map from
-  `brigade-config prompts --json`. Both are optional; omitting them runs pure tier policy.
+  overrides, promptOverrides }` — `overrides` is the `config` object from `brigade-config resolve --json`
+  (passing the whole resolve output also works — the scripts unwrap `.config`),
+  `promptOverrides` the map from `brigade-config prompts --json`. Both are optional;
+  omitting them runs pure tier policy.
 
 The script caps dispatch at the resolved scout budget (dropping and logging the rest) and
 returns `{ briefs: [{n, topic, answer, confidence, briefPath, notVerified}], dropped,
@@ -416,7 +417,9 @@ string): `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate: []
 maxParallel, overrides, promptOverrides, items: [{slug, status, dependsOn: [], heavy,
 packet}] }` — `packet` is the item's full, standalone work-packet text; `gate` is the
 repo's verification gate commands (resolved `gate` wins over `.brigade/config.md`);
-`overrides` and `promptOverrides` come from `brigade-config` as in Phase 1.
+`overrides` is the `config` object from `brigade-config resolve --json` (passing the whole
+resolve output also works — the scripts unwrap `.config`), and `promptOverrides` comes from
+`brigade-config prompts --json` — as in Phase 1.
 When building `items` from PLAN.md, map frontmatter `depends_on` → `dependsOn` (the script
 also accepts `depends_on` as an alias).
 

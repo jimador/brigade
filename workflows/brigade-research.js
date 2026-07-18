@@ -39,7 +39,7 @@ const DEFAULT_AGENTS = {
 // so a partial override is always safe.
 function resolvePolicy(tier, overrides) {
   const base = BRIGADE_TIERS[tier] || BRIGADE_TIERS['two-star']
-  const o = overrides || {}
+  const o = overrides && overrides.config ? overrides.config : overrides || {}
   const models = o.models || {}
   const agentFor = (role) => models[role] || DEFAULT_AGENTS[role]
   const attempts = (base.attempts || []).map((agentType) => {
