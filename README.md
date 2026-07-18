@@ -104,7 +104,7 @@ Pick how much model you buy per dish.
 Say `brigade heavy` or `brigade light` for one dish; set `tier` in config for the repo.
 Any single row can be decoupled from its tier — see [docs/tiers.md](docs/tiers.md).
 
-## Working memory
+### Working memory
 
 Long-horizon dispatches — heavy items and rework attempts — carry a working-memory
 ledger: the packet's constraints held as protected Canon plus the cook's own verified
