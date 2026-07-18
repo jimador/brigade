@@ -1,6 +1,6 @@
 {
   "name": "brigade",
-  "version": "0.12.0",
+  "version": "0.12.2",
   "description": "Coordinate a fleet of cheap parallel coding agents from any ticket source (Notion, ClickUp, Obsidian vault boards, or a local folder of markdown files). Groom, design-swag, and cook tickets in git worktrees with tier-selected cooks, adversarial inspection, and a mandatory analyst retro. Settings, agent roles, and prompt overrides cascade across global, team, and repo-local layers.",
   "author": {
     "name": "jimador"
