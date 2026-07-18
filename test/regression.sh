@@ -431,7 +431,7 @@ test_validate_ledger_artifacts() {
   cat >"$fixture/.brigade/dishes/sample/state/good.md" <<'EOF'
 ---
 doc: ledger
-schema: dish/item/role/model/created/attempt/updated
+schema: 1
 dish: sample
 item: one
 role: cook

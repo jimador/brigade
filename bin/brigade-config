@@ -230,6 +230,9 @@ function validate() {
   if (config.maxParallel != null && (!Number.isInteger(config.maxParallel) || config.maxParallel < 1)) {
     problems.push({ layer: 'merged', file: null, problem: 'maxParallel must be a positive integer' })
   }
+  if (config.workingMemory != null && typeof config.workingMemory !== 'boolean') {
+    problems.push({ layer: 'merged', file: null, problem: 'workingMemory must be a boolean (true or false)' })
+  }
   if (config.gate != null && !Array.isArray(config.gate)) {
     problems.push({ layer: 'merged', file: null, problem: 'gate must be an array of shell commands' })
   }
