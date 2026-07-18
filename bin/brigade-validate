@@ -33,6 +33,7 @@ const TYPES = {
   analyst: { keys: ['items_total', 'proposals'], budget: 120 },
   research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
   design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 100 },
+  ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
 }
 const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
 const RECOMMENDED = ['role', 'model', 'created']
@@ -143,6 +144,7 @@ function validateFile(file) {
     analyst: ['## Scorecard', '## Patterns', '## Proposals'],
     brief: ['## Answer'],
     plan_check: ['## Blind sketch', '## Comparison', '## Recommendations'],
+    ledger: ['## Canon', '## World state'],
   }
   const required = REQUIRED_SECTIONS[doc]
   if (required) {
@@ -264,6 +266,19 @@ function validateFile(file) {
       }
       break
     }
+    case 'ledger': {
+      // Count Canon entries (C<n>. pattern)
+      const canonCount = body.filter((l) => /^C\d+\./.test(l.trim())).length
+      if (canonCount > 20) {
+        warnings.push(`Canon has ${canonCount} units, exceeds ledger budget of 20`)
+      }
+      // Count World state entries (W<n>. pattern)
+      const worldCount = body.filter((l) => /^W\d+\./.test(l.trim())).length
+      if (worldCount > 30) {
+        warnings.push(`World state has ${worldCount} units, exceeds ledger budget of 30`)
+      }
+      break
+    }
     default:
       break
   }
@@ -282,7 +297,7 @@ function collectDefaultTargets(root) {
       const f = path.join(dir, rel)
       if (fs.existsSync(f)) targets.push(f)
     }
-    for (const sub of ['briefs', 'reports', 'research']) {
+    for (const sub of ['briefs', 'reports', 'research', 'state']) {
       const d = path.join(dir, sub)
       if (!fs.existsSync(d)) continue
       for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) targets.push(path.join(d, f))

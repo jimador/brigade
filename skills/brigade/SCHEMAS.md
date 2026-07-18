@@ -178,6 +178,7 @@ files_changed:                    # must be ⊆ the packet's file list
 commands:                         # every Verify command run, in order
   - bun test src/foo.test.ts
 findings_addressed: []            # rework only: finding id → how resolved
+ledger: <path|null>               # working-memory ledger, when the dispatch carried one
 ```
 
 Body sections, in order: `## Summary` (what changed, why, ≤ 5 lines), `## Evidence`
@@ -265,6 +266,30 @@ Body sections, in order: `## What this seems to be`, `## Likely shape of work`,
 `## Codebase grounding`, `## Open questions`, `## Risks & unknowns`, `## Readiness`,
 `## Original request`. Budget: ≤ 100 lines. Must **not** claim the ticket, set `worker`,
 create packets, or promote to `todo`.
+
+### `ledger` — cook working memory (`.brigade/dishes/<dish>/state/<item>.md`)
+
+Producer: cook (heavy items and rework attempts — dispatches whose prompt carries a
+`WORKING MEMORY` block). Consumers: the next attempt's cook (inheritance), Inspector
+(Canon audit), Analyst. Protocol: `MEMORY.md` next to this file.
+
+```yaml
+doc: ledger
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: cook
+model: <model id of the last writer>
+created: <ISO8601>                # first seeding
+attempt: 1                        # highest attempt that wrote this ledger
+updated: <ISO8601>                # stamp of the last write
+```
+
+Body sections, in order: `## Canon` (≤ 20 numbered `C<n>.` units, seeded from the packet,
+never edited — a wrong Canon unit is a packet defect reported BLOCKED), `## World state`
+(≤ 30 live numbered `W<n>.` units, each tagged `[RELIABLE]` or `[PROVISIONAL]`;
+supersede by strikethrough + replacement, never delete), `## Archive` (optional —
+struck/stale units moved on overflow). Budget: ≤ 80 lines.
 
 ### `heuristic` — durable KB note (via configured KB CLI)
 
