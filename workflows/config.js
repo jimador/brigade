@@ -55,6 +55,7 @@ function resolvePolicy(tier, overrides) {
       maxLadderExhausts: breaker.maxLadderExhausts != null ? breaker.maxLadderExhausts : CIRCUIT_BREAKER.maxLadderExhausts,
       maxTotalFails: breaker.maxTotalFails != null ? breaker.maxTotalFails : CIRCUIT_BREAKER.maxTotalFails,
     },
+    workingMemory: o.workingMemory != null ? o.workingMemory : true,
     agents: {
       scout: agentFor('scout'),
       inspector: agentFor('inspector'),
@@ -114,6 +115,7 @@ files_changed:                    # must be ⊆ the packet's file list
 commands:                         # every Verify command run, in order
   - bun test src/foo.test.ts
 findings_addressed: []            # rework only: finding id → how resolved
+ledger: <path|null>               # working-memory ledger, when the dispatch carried one
 \`\`\`
 
 Body sections, in order: \`## Summary\` (what changed, why, ≤ 5 lines), \`## Evidence\`
@@ -122,6 +124,28 @@ Body sections, in order: \`## Summary\` (what changed, why, ≤ 5 lines), \`## E
 touched), and for \`status: blocked\` a \`## Blocked\` section stating exactly what
 contradicted the packet. Authority: the working tree and the commands' real output.
 Budget: ≤ 120 lines.`,
+  ledger: `Cook working memory — one per item at .brigade/dishes/<dish>/state/<item>.md.
+
+\`\`\`yaml
+doc: ledger
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: cook
+model: <model id of the last writer>
+created: <ISO8601 first seeding>
+attempt: <highest attempt that wrote this ledger>
+updated: <ISO8601 stamp of the last write>
+\`\`\`
+
+Body sections in order: ## Canon (<= 20 numbered C<n>. units seeded from the packet,
+NEVER edited — a wrong Canon unit is a packet defect: report BLOCKED), ## World state
+(<= 30 live numbered W<n>. units tagged [RELIABLE] (verified — name the command) or
+[PROVISIONAL] (inferred, MAY be reconsidered); supersede by ~~strikethrough~~ plus a
+replacement unit "(supersedes Wn)", never delete), ## Archive (optional overflow).
+Cadence: read-or-seed before first edit; after every Verify run update World state and
+re-read Canon; before commit self-check the diff against Canon; before the report do a
+final update, quote the live World state in Evidence, set ledger: in the frontmatter.`,
   verdict: `Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 
 \`\`\`yaml

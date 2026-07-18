@@ -32,6 +32,21 @@ const findingsHistoryBlock = (findingsHistory) => {
   return `\nPrior attempts on this item failed inspection. Address every finding below.\nIf the approach itself was the problem, change it rather than repeating it harder.\n\n${rounds}\n`
 }
 
+const ledgerPath = (item) => `${A.dishDir}/state/${item.slug}.md`
+
+const ledgerBlock = (item, attemptIndex) => {
+  if (!POLICY.workingMemory) return ''
+  if (!item.heavy && attemptIndex === 0) return ''
+  return `
+WORKING MEMORY — this dispatch carries a ledger (heavy item or rework attempt):
+  Ledger file: ${ledgerPath(item)}
+  If it exists, READ IT FIRST — it is the prior attempt's verified state.
+  If not, create it and seed Canon from the packet before your first edit.
+  Follow the cadence in your agent instructions. Ledger schema:
+${MD_SCHEMA_BLOCKS.ledger}
+`
+}
+
 const cookPrompt = (item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, attemptIndex) => `
 You are cooking ONE work packet in an automated cook/inspect/land pipeline.
 
@@ -47,6 +62,7 @@ An Inspector will read that report and write its verdict to: ${verdictPath}
 Verification gate — run every command, paste the real output as evidence:
 ${gateBlock()}
 ${findingsHistoryBlock(findingsHistory)}
+${ledgerBlock(item, attemptIndex)}
 THE PACKET (your entire contract):
 
 ${item.packet}
@@ -55,7 +71,7 @@ Report schema — follow this shape exactly:
 ${MD_SCHEMA_BLOCKS.report}
 `
 
-const inspectorPrompt = (item, worktreePath, branch, reportPath, verdictPath) => `
+const inspectorPrompt = (item, worktreePath, branch, reportPath, verdictPath, ledgered) => `
 You are the Inspector reviewing ONE cooked work packet before it lands.
 
 WORKTREE: ${worktreePath}
@@ -73,6 +89,7 @@ Write your verdict to: ${verdictPath}
 Verification gate the cook should have run — check the evidence is real, not paraphrased:
 ${gateBlock()}
 
+${ledgered ? `Working-memory ledger — audit it: ${ledgerPath(item)}. Canon must match the packet; a missing, stale (updated: predates the final commit), or Canon-edited ledger is a finding.\n` : ''}
 Rule PASS or FAIL with severity-ranked findings. Your report is information for the
 next cook or the planner — you never implement fixes yourself, and you never edit
 any file in the worktree.
@@ -313,7 +330,7 @@ async function runItem(item, promises) {
     blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
     const verdictResult = await agent(
       withPromptOverrides(
-        inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath),
+        inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
         PROMPT_EXTRAS.inspector,
       ),
       {
