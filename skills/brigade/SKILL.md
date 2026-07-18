@@ -480,6 +480,15 @@ from; its branch names are auto-generated rather than delivery-scoped and tracea
 location is `.claude/worktrees/` rather than the git-excluded `.brigade/worktrees/`; and it
 has no rebase-then-fast-forward landing choreography of its own.
 
+**Working memory is script-decided, not planner-decided.** The execute script attaches a
+ledger (`MEMORY.md` next to this SKILL) to heavy items and rework attempts: the cook
+keeps the packet's constraints as protected Canon plus its own verified World state at
+`.brigade/dishes/<dish>/state/<item>.md`, the next attempt inherits it, and the
+Inspector audits it. On by default; `workingMemory: false` in any config layer disables
+it fleet-wide. Packets need no extra section — Canon is seeded from the packet's
+existing file list, contracts, and Verify commands, which is one more reason those must
+be pasted and exact.
+
 ## Phase 6 — Handoff & analyst
 
 When all items are merged:
@@ -657,6 +666,9 @@ an optional batched progress comment on the parent, not a status thrash.
 - `TIERS.md` (next to this SKILL) — the service tiers (three-star / two-star / one-star):
   per-tier model policy, scout caps, plan-check policy, the escalation ladder as
   implemented by `brigade-execute`, retro cadence, difficult-planning triggers.
+- `MEMORY.md` (next to this SKILL) — the cook working-memory ledger protocol: who gets
+  one (heavy items, rework attempts), the Canon/World-state format, cadence, and the
+  Inspector audit.
 - `GRAPHITE.md` (next to this SKILL) — optional Graphite mode: `graphite_restack`
   (gt-driven landing/rework rebases, local-only) and `graphite_platform` (stacked-PR
   handoff via `gt submit`). Both off by default; read it only when the repo config
