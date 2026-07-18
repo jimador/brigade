@@ -35,6 +35,7 @@ const DEFAULTS = {
   tier: 'two-star',
   mainBranch: 'main',
   maxParallel: 4,
+  workingMemory: true,
   gate: [],
   policy: {
     scoutCap: null, // null = take the tier's value from TIERS.md
