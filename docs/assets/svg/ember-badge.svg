@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="420" viewBox="0 0 420 420" role="img" aria-label="Brigade badge — let your agents cook">
+<defs>
+<linearGradient id="eg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff5c1f"></stop><stop offset="0.55" stop-color="#ff9d3d"></stop><stop offset="1" stop-color="#ffd48a"></stop></linearGradient>
+<linearGradient id="egv" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ff5c1f"></stop><stop offset="0.55" stop-color="#ff9d3d"></stop><stop offset="1" stop-color="#ffd48a"></stop></linearGradient>
+<radialGradient id="warm" cx="0.5" cy="0.55" r="0.65"><stop offset="0" stop-color="#ff7a2f" stop-opacity="0.22"></stop><stop offset="1" stop-color="#ff7a2f" stop-opacity="0"></stop></radialGradient>
+<filter id="gl" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4"></feGaussianBlur></filter>
+</defs>
+<defs><path id="tp" d="M 62 210 A 148 148 0 0 1 358 210" fill="none"></path></defs>
+<circle cx="210" cy="210" r="200" fill="#0e1013"></circle>
+<circle cx="210" cy="210" r="200" fill="url(#warm)" opacity="0.5"></circle>
+<circle cx="210" cy="210" r="186" fill="none" stroke="url(#eg)" stroke-width="5"></circle>
+<g transform="translate(210,214) scale(1.02)"><g fill="none" stroke="#f5f7fa" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"><path d="M -42 34 L -42 12 A 24 24 0 1 1 -25 -30 A 30 30 0 0 1 25 -30 A 24 24 0 1 1 42 12 L 42 34 Z"></path><path d="M -16 8 L -16 26 M 0 10 L 0 28 M 16 8 L 16 26"></path><rect x="-46" y="46" width="92" height="22" rx="8"></rect></g></g>
+<text fill="url(#eg)" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="24" font-weight="600" letter-spacing="4"><textPath href="#tp" startOffset="50%" text-anchor="middle">LET YOUR AGENTS COOK</textPath></text>
+<text x="210" y="342" fill="#79828f" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="22" font-weight="600" letter-spacing="9" text-anchor="middle">BRIGADE</text>
+</svg>

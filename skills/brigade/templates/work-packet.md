@@ -1,0 +1,135 @@
+# Work packet format
+
+Every work item in `PLAN.md` carries one packet in exactly this shape. The packet is the
+ONLY context a Cook gets — subagents cannot see the planning conversation, the ticket, or
+the scout briefs. If it isn't in the packet, it doesn't exist. Write packets like you're
+briefing a competent junior who starts in five minutes and can't ask questions.
+
+Packets use typed steps — Explore, Implement, Verify — with two hard rules the Cook
+enforces: **Explore steps come first and are strictly read-only**, and **every packet ends
+with a Verify step whose failure stops the Cook** (report BLOCKED, never merge-hope).
+Cooks have no Propose/Review steps — the Planner's plan checkpoint and the Inspector gate are
+those steps, lifted out of the packet.
+
+---
+
+## <item-slug> — <one-sentence behavior, no "and">
+
+- **branch:** wip/<delivery-slug>/<item-slug>
+- **worktree:** .brigade/worktrees/<delivery-slug>--<item-slug>   (absolute path at dispatch)
+- **depends_on:** [<item-slug>, ...] | none
+- **heavy:** false            # true → dispatches to the sonnet Cook from the start
+- **files:** the ONLY files you may touch
+  - path/to/file.ts (edit)
+  - path/to/new-file.test.ts (create)
+
+### Goal
+
+One short paragraph: the behavior to exist when you're done, and why (one sentence of
+context so the Cook makes sane micro-decisions).
+
+### Contracts you code against
+
+The exact signatures/types/schemas this change must fit — pasted, not referenced:
+
+```ts
+// pasted from src/foo/types.ts (do not modify this file)
+export interface Widget { id: string; render(): Node }
+```
+
+### Current behavior (pasted anchors)
+
+The relevant existing snippet(s), quoted with file path, so the Cook lands the edit in the
+right place without searching:
+
+```ts
+// src/foo/registry.ts, in registerDefaults():
+registry.add(new BarWidget())
+```
+
+### Preconditions & hazards
+
+Only when they apply — omit the section if neither does:
+
+- **Named input-hazard.** If the target module already defends against a specific input-hazard
+  class (delimiter-unsafe free text, nullable-key MERGE collisions, stale snapshots, etc.),
+  name that hazard here, forbid the known-wrong shortcut (never string-parse a rendered form
+  when a structured source exists; never delimit-encode free text), and require the Step 3
+  adversarial test to target it specifically — against real infra (a testcontainer) for
+  data-correctness changes, never a fake that returns canned rows. If the module lacks that
+  real-test infra, standing it up is in scope for this packet, not a reason to fall back to fakes.
+- **Finding-derived premise.** If this packet comes from a review/audit finding, name the exact
+  command that confirms the finding's premise (e.g. `git grep <symbol>`). If it contradicts the
+  premise, the Cook reports `status: done` with zero file changes and the command's output as
+  evidence — a false premise resolves to a safe no-op, never a blind edit.
+- **Guarantee-class claim.** If the packet's contract promises a concurrency/exclusivity
+  guarantee (CAS, exactly-one-winner, mutual exclusion, "serializes on") the packet MUST
+  include a concurrent-caller test in ITS OWN acceptance criteria — N concurrent callers →
+  exactly one success, at N and 10N — never deferred to a downstream load/perf item; serial
+  crash/atomicity suites do not exercise it. If the hazard class is security (path traversal,
+  symlink escape, injection, authz bypass), require a live adversarial probe against a hostile
+  fixture as PASS evidence, and write any framework-mechanism fixture (AOP, proxying,
+  interception) in the language's DEFAULT shape, asserting the mechanism FIRED, not that it
+  is wired.
+- **Bug-fix self-falsification.** A packet fixing a bug requires the Cook to reintroduce the
+  bug, paste the red run, restore the fix, and paste the green run — a fix whose test never
+  goes red on the broken code is tautological.
+
+### Steps
+
+1. **Explore (read-only, ≤ N files):** read the files listed above — nothing else. If
+   reality contradicts this packet (missing file, different signature), STOP and report
+   BLOCKED with what you found. Do not improvise around a wrong packet.
+2. **Implement:** <precise change 1>.
+3. **Implement:** <precise change 2 — including the new test: name the cases; at least one
+   adversarial/edge case (malformed input, empty/null boundary, error path), not just the
+   happy path>.
+4. **Verify (must pass):**
+
+```bash
+<exact command(s) — e.g. bun test src/foo/registry.test.ts && bun run types>
+```
+
+### Acceptance criteria
+
+- [ ] <observable outcome 1>
+- [ ] <observable outcome 2>
+- [ ] New/updated tests cover the behavior incl. one adversarial case
+- [ ] Verify commands pass; output pasted in the report
+
+### Conventions
+
+<the 2–4 repo conventions that apply to THESE files — from config "Local conventions" +
+anything a scout brief flagged. e.g. "imports at top; exhaustive switch with never default;
+no new dependencies.">
+
+### Out of scope
+
+Name the tempting-but-forbidden things explicitly: files not to touch, refactors not to do,
+adjacent bugs to leave alone (report them instead).
+
+---
+
+## Packet quality bar (Planner self-check before dispatch)
+
+- Could a stranger with zero repo knowledge complete this from the packet alone?
+- Are all contracts/anchors **pasted**, not "see file X"?
+- Is every step unambiguous — no "appropriately", "as needed", "look around"?
+- 1–3 files, ≤ ~150 lines, one behavior, mechanically verifiable?
+- Does the Verify step actually prove the acceptance criteria, and can it fail? (Exit-code
+  hygiene: never `cmd | tail; echo $?` — pipe status masks the build's code. Include the
+  repo's lint check scoped to the packet's files when one exists.)
+- Is every stated premise verified against source, not memory: cited precedent tests read at
+  line level (what calls they actually make), library/third-party contracts read from the
+  actual sources, lookup/query behavior quoted from the query builder, external-API claims
+  tagged with a primary source? Dry-run every self-check/grep gate on the base branch —
+  confirm it fails for the right reason and cannot force a code change just to satisfy the
+  grep.
+- Is every named hazard paired with a matching acceptance-criterion test? Guidance without a
+  test leaves the regression path open.
+- If the module defends against an input hazard, or the packet came from a finding: is the
+  hazard/premise named, the wrong shortcut forbidden, and a targeted adversarial test required
+  (real infra for data-correctness)?
+
+Any "no" → keep researching or keep splitting. A vague packet costs more in FAIL loops
+than the planning tokens it saved.

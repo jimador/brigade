@@ -1,0 +1,431 @@
+#!/usr/bin/env node
+// brigade-config — resolve the layered brigade configuration, at zero model tokens.
+//
+// Brigade reads its settings from four layers. Later layers win, key by key, so a
+// person can change one thing without restating everything above it:
+//
+//   1. defaults   built into this file (what brigade does with no config at all)
+//   2. global     ~/.brigade/config.json                 personal, every repo
+//   3. team       <repo>/brigade.config.json             committed, shared
+//   4. local      <repo>/.brigade/config.local.json      personal, this repo, never committed
+//
+// Prompt and agent overrides use the same four layers, but they STACK instead of
+// replacing: every layer that has a file for a name contributes text, appended in
+// layer order, so a repo can tighten a global rule without losing it.
+//
+// Usage:
+//   brigade-config resolve [--json]        merged settings (+ where each key came from)
+//   brigade-config get <dotted.key>        one value, and which layer set it
+//   brigade-config layers [--json]         which layer files exist, in precedence order
+//   brigade-config prompts [--json]        override stacks, by name
+//   brigade-config prompt <name>           the resolved override text for one name
+//   brigade-config doctor [--json]         validate every layer; explain what is wrong
+//
+// Exit codes: 0 ok, 1 validation failed (doctor) or key not found (get), 2 usage/IO error.
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+const TIERS = ['three-star', 'two-star', 'one-star']
+const PLAN_CHECKS = ['always', 'triggers', 'never']
+const SOURCE_TYPES = ['static-file', 'mcp', 'skill', 'command']
+
+// What brigade does when nothing is configured. Every key here is overridable.
+const DEFAULTS = {
+  tier: 'two-star',
+  mainBranch: 'main',
+  maxParallel: 4,
+  gate: [],
+  policy: {
+    scoutCap: null, // null = take the tier's value from TIERS.md
+    planCheck: null,
+    retro: null,
+    heavyShareWarn: 0.2,
+  },
+  models: {
+    scout: null,
+    cook: null,
+    cookHeavy: null,
+    inspector: null,
+    analyst: null,
+    design: null,
+    steward: null,
+  },
+  circuitBreaker: {
+    maxLadderExhausts: 2,
+    maxTotalFails: 4,
+  },
+  graphite: {
+    restack: false,
+    platform: false,
+  },
+  kb: {
+    enabled: false,
+    cli: null,
+    search_args: [],
+    ingest_args: [],
+  },
+  worktreeRoot: null, // null = <repo>/.brigade/worktrees
+  remotePr: true,
+  contextSources: [],
+  prompts: {}, // name -> { append: [...text] }
+}
+
+const KNOWN_TOP_LEVEL = new Set(Object.keys(DEFAULTS))
+
+// --- layer discovery ---------------------------------------------------------
+
+function repoRoot() {
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd()
+}
+
+function layerFiles() {
+  const root = repoRoot()
+  const home = process.env.BRIGADE_HOME || path.join(os.homedir(), '.brigade')
+  return [
+    { name: 'defaults', file: null, overrideDir: null },
+    { name: 'global', file: path.join(home, 'config.json'), overrideDir: path.join(home, 'overrides') },
+    { name: 'team', file: path.join(root, 'brigade.config.json'), overrideDir: path.join(root, '.brigade-overrides') },
+    { name: 'local', file: path.join(root, '.brigade', 'config.local.json'), overrideDir: path.join(root, '.brigade', 'overrides') },
+  ]
+}
+
+function readLayer(layer) {
+  if (!layer.file) return { ...layer, present: false, data: DEFAULTS, error: null }
+  if (!fs.existsSync(layer.file)) return { ...layer, present: false, data: {}, error: null }
+  try {
+    const raw = fs.readFileSync(layer.file, 'utf8')
+    const data = JSON.parse(raw)
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      return { ...layer, present: true, data: {}, error: 'top level must be a JSON object' }
+    }
+    return { ...layer, present: true, data, error: null }
+  } catch (err) {
+    return { ...layer, present: true, data: {}, error: `unreadable JSON: ${err.message}` }
+  }
+}
+
+// --- merge -------------------------------------------------------------------
+
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+
+// Merge one layer into the accumulator, recording which layer set each leaf so
+// `resolve` and `get` can always answer "where did this come from".
+function mergeLayer(target, provenance, source, layerName, prefix = '') {
+  for (const [key, value] of Object.entries(source)) {
+    const dotted = prefix ? `${prefix}.${key}` : key
+    if (key === 'contextSources') {
+      target[key] = mergeContextSources(target[key] || [], value, provenance, layerName)
+      continue
+    }
+    if (isPlainObject(value)) {
+      if (!isPlainObject(target[key])) target[key] = {}
+      mergeLayer(target[key], provenance, value, layerName, dotted)
+      continue
+    }
+    target[key] = value
+    provenance[dotted] = layerName
+  }
+  return target
+}
+
+// Context sources merge by id rather than by position: a later layer can disable
+// or retune one source without restating the whole list.
+function mergeContextSources(current, incoming, provenance, layerName) {
+  if (!Array.isArray(incoming)) return current
+  const byId = new Map(current.map((s) => [s.id, s]))
+  for (const source of incoming) {
+    if (!isPlainObject(source) || !source.id) continue
+    const existing = byId.get(source.id)
+    byId.set(source.id, existing ? { ...existing, ...source } : source)
+    provenance[`contextSources.${source.id}`] = layerName
+  }
+  return [...byId.values()]
+}
+
+function resolveConfig() {
+  const layers = layerFiles().map(readLayer)
+  const provenance = {}
+  const merged = {}
+  for (const layer of layers) {
+    const data = layer.name === 'defaults' ? DEFAULTS : layer.data
+    mergeLayer(merged, provenance, data, layer.name)
+  }
+  return { config: merged, provenance, layers }
+}
+
+// --- prompt / agent overrides ------------------------------------------------
+
+// Override text stacks across layers. `kinds` is any of 'agents' / 'prompts'; a name maps
+// to <overrideDir>/<kind>/<name>.md in any layer that has one.
+//
+// Layer order is the outer loop: everything a layer contributes lands together, so a more
+// specific layer always appends after a less specific one regardless of which
+// subdirectory the text came from.
+function overrideStack(kinds, name) {
+  const wanted = Array.isArray(kinds) ? kinds : [kinds]
+  return layerFiles()
+    .filter((l) => l.overrideDir)
+    .flatMap((l) => wanted.map((kind) => ({ layer: l.name, file: path.join(l.overrideDir, kind, `${name}.md`) })))
+    .filter((entry) => fs.existsSync(entry.file))
+    .map((entry) => ({ ...entry, text: fs.readFileSync(entry.file, 'utf8').trim() }))
+}
+
+function allOverrideNames() {
+  const names = { agents: new Set(), prompts: new Set() }
+  for (const layer of layerFiles()) {
+    if (!layer.overrideDir) continue
+    for (const kind of ['agents', 'prompts']) {
+      const dir = path.join(layer.overrideDir, kind)
+      if (!fs.existsSync(dir)) continue
+      for (const file of fs.readdirSync(dir)) {
+        if (file.endsWith('.md')) names[kind].add(file.slice(0, -3))
+      }
+    }
+  }
+  return { agents: [...names.agents].sort(), prompts: [...names.prompts].sort() }
+}
+
+// Inline `prompts: { <name>: { append: [...] } }` from config layers counts as an
+// override too, so short additions do not need their own file.
+function inlinePromptAppends(config, name) {
+  const entry = config.prompts && config.prompts[name]
+  if (!entry || !Array.isArray(entry.append)) return []
+  return entry.append.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim())
+}
+
+function resolvedPrompt(name) {
+  const { config } = resolveConfig()
+  const fileParts = overrideStack(['agents', 'prompts'], name)
+  const inline = inlinePromptAppends(config, name).map((text) => ({ layer: 'config', file: null, text }))
+  return [...fileParts, ...inline]
+}
+
+// --- validation --------------------------------------------------------------
+
+function validate() {
+  const problems = []
+  const layers = layerFiles().map(readLayer)
+
+  for (const layer of layers) {
+    if (layer.error) problems.push({ layer: layer.name, file: layer.file, problem: layer.error })
+  }
+
+  const { config } = resolveConfig()
+
+  for (const key of Object.keys(config)) {
+    if (!KNOWN_TOP_LEVEL.has(key)) {
+      problems.push({ layer: 'merged', file: null, problem: `unknown top-level key "${key}"` })
+    }
+  }
+
+  if (config.tier != null && !TIERS.includes(config.tier)) {
+    problems.push({ layer: 'merged', file: null, problem: `tier must be one of ${TIERS.join(', ')} (got "${config.tier}")` })
+  }
+  const planCheck = config.policy && config.policy.planCheck
+  if (planCheck != null && !PLAN_CHECKS.includes(planCheck)) {
+    problems.push({ layer: 'merged', file: null, problem: `policy.planCheck must be one of ${PLAN_CHECKS.join(', ')} (got "${planCheck}")` })
+  }
+  if (config.maxParallel != null && (!Number.isInteger(config.maxParallel) || config.maxParallel < 1)) {
+    problems.push({ layer: 'merged', file: null, problem: 'maxParallel must be a positive integer' })
+  }
+  if (config.gate != null && !Array.isArray(config.gate)) {
+    problems.push({ layer: 'merged', file: null, problem: 'gate must be an array of shell commands' })
+  }
+  if (config.kb && config.kb.enabled && !config.kb.cli) {
+    problems.push({ layer: 'merged', file: null, problem: 'kb.enabled is true but kb.cli is not set' })
+  }
+
+  // Duplicate ids have to be caught per layer: the merge keys by id, so by the time a
+  // layer's list reaches the merged config the second entry has already silently won.
+  for (const layer of layers) {
+    const sources = layer.data && layer.data.contextSources
+    if (!Array.isArray(sources)) continue
+    const seenInLayer = new Set()
+    for (const source of sources) {
+      if (!isPlainObject(source) || !source.id) continue
+      if (seenInLayer.has(source.id)) {
+        problems.push({ layer: layer.name, file: layer.file, problem: `duplicate contextSources id "${source.id}"` })
+      }
+      seenInLayer.add(source.id)
+    }
+  }
+
+  for (const source of config.contextSources || []) {
+    if (!source.id) {
+      problems.push({ layer: 'merged', file: null, problem: 'every contextSources entry needs an id' })
+      continue
+    }
+    if (source.type && !SOURCE_TYPES.includes(source.type)) {
+      problems.push({ layer: 'merged', file: null, problem: `contextSources "${source.id}": type must be one of ${SOURCE_TYPES.join(', ')}` })
+    }
+    if (source.type === 'static-file' && source.path && !fs.existsSync(path.resolve(repoRoot(), source.path))) {
+      problems.push({ layer: 'merged', file: null, problem: `contextSources "${source.id}": path does not exist (${source.path})` })
+    }
+  }
+
+  return problems
+}
+
+// --- output ------------------------------------------------------------------
+
+function flatten(value, prefix = '', out = {}) {
+  for (const [key, val] of Object.entries(value)) {
+    const dotted = prefix ? `${prefix}.${key}` : key
+    if (isPlainObject(val)) flatten(val, dotted, out)
+    else out[dotted] = val
+  }
+  return out
+}
+
+function getByPath(config, dotted) {
+  return dotted.split('.').reduce((acc, key) => (acc == null ? acc : acc[key]), config)
+}
+
+function printResolve(json) {
+  const { config, provenance, layers } = resolveConfig()
+  if (json) {
+    console.log(JSON.stringify({ config, provenance, layers: layers.map((l) => ({ layer: l.name, file: l.file, present: l.present })) }, null, 2))
+    return
+  }
+  console.log('## brigade config (merged; "from" is the winning layer)')
+  const flat = flatten(config)
+  for (const [key, value] of Object.entries(flat)) {
+    const from = provenance[key] || 'defaults'
+    console.log(`  ${key} = ${JSON.stringify(value)}   [${from}]`)
+  }
+  if ((config.contextSources || []).length) {
+    console.log('## context sources')
+    for (const source of config.contextSources) {
+      const state = source.enabled === false ? 'disabled' : 'enabled'
+      console.log(`  ${source.id} (${source.type || 'unknown'}, ${state})   [${provenance[`contextSources.${source.id}`] || 'defaults'}]`)
+    }
+  }
+}
+
+function printLayers(json) {
+  const layers = layerFiles().map(readLayer).map((l) => ({
+    layer: l.name,
+    file: l.file,
+    present: l.present,
+    overrideDir: l.overrideDir,
+    overrideDirPresent: l.overrideDir ? fs.existsSync(l.overrideDir) : false,
+    error: l.error,
+  }))
+  if (json) {
+    console.log(JSON.stringify({ layers }, null, 2))
+    return
+  }
+  console.log('## config layers (later wins)')
+  for (const l of layers) {
+    const mark = l.file === null ? 'built in' : l.present ? 'found' : 'absent'
+    console.log(`  ${l.layer.padEnd(8)} ${mark.padEnd(8)} ${l.file || '(defaults in brigade-config)'}`)
+    if (l.overrideDir) {
+      console.log(`  ${''.padEnd(8)} overrides ${l.overrideDirPresent ? 'found ' : 'absent '} ${l.overrideDir}`)
+    }
+    if (l.error) console.log(`  ${''.padEnd(8)} ERROR    ${l.error}`)
+  }
+}
+
+function printPrompts(json) {
+  const names = allOverrideNames()
+  const { config } = resolveConfig()
+  const inlineNames = Object.keys(config.prompts || {})
+  const result = {}
+  for (const name of [...new Set([...names.agents, ...names.prompts])].sort()) {
+    result[name] = overrideStack(['agents', 'prompts'], name).map((e) => ({ layer: e.layer, file: e.file, lines: e.text.split('\n').length }))
+  }
+  for (const name of inlineNames) {
+    result[name] = (result[name] || []).concat(
+      inlinePromptAppends(config, name).map((text) => ({ layer: 'config', file: null, lines: text.split('\n').length })),
+    )
+  }
+  if (json) {
+    console.log(JSON.stringify({ overrides: result }, null, 2))
+    return
+  }
+  const entries = Object.entries(result)
+  if (!entries.length) {
+    console.log('## prompt overrides\n  (none)')
+    return
+  }
+  console.log('## prompt overrides (applied in this order, appended to the shipped text)')
+  for (const [name, stack] of entries) {
+    console.log(`  ${name}:`)
+    for (const entry of stack) console.log(`    ${entry.layer.padEnd(7)} ${entry.file || '(inline in config)'} (${entry.lines} lines)`)
+  }
+}
+
+function printPrompt(name) {
+  const stack = resolvedPrompt(name)
+  if (!stack.length) return
+  for (const entry of stack) {
+    console.log(`<!-- brigade override: ${entry.layer}${entry.file ? ` ${entry.file}` : ''} -->`)
+    console.log(entry.text)
+    console.log('')
+  }
+}
+
+function printDoctor(json) {
+  const problems = validate()
+  if (json) {
+    console.log(JSON.stringify({ ok: problems.length === 0, problems }, null, 2))
+  } else if (!problems.length) {
+    console.log('brigade-config: all layers valid')
+  } else {
+    for (const p of problems) console.error(`brigade-config: [${p.layer}] ${p.problem}${p.file ? ` (${p.file})` : ''}`)
+  }
+  return problems.length === 0 ? 0 : 1
+}
+
+function printGet(dotted, json) {
+  const { config, provenance } = resolveConfig()
+  const value = getByPath(config, dotted)
+  if (value === undefined) {
+    console.error(`brigade-config: no such key "${dotted}"`)
+    return 1
+  }
+  if (json) console.log(JSON.stringify({ key: dotted, value, from: provenance[dotted] || 'defaults' }, null, 2))
+  else console.log(typeof value === 'string' ? value : JSON.stringify(value))
+  return 0
+}
+
+// --- entry point -------------------------------------------------------------
+
+const argv = process.argv.slice(2)
+const json = argv.includes('--json')
+const positional = argv.filter((a) => !a.startsWith('--'))
+const command = positional[0] || 'resolve'
+
+switch (command) {
+  case 'resolve':
+    printResolve(json)
+    break
+  case 'layers':
+    printLayers(json)
+    break
+  case 'prompts':
+    printPrompts(json)
+    break
+  case 'prompt':
+    if (!positional[1]) {
+      console.error('usage: brigade-config prompt <name>')
+      process.exit(2)
+    }
+    printPrompt(positional[1])
+    break
+  case 'get':
+    if (!positional[1]) {
+      console.error('usage: brigade-config get <dotted.key>')
+      process.exit(2)
+    }
+    process.exit(printGet(positional[1], json))
+    break
+  case 'doctor':
+    process.exit(printDoctor(json))
+    break
+  default:
+    console.error(`brigade-config: unknown command "${command}"`)
+    console.error('commands: resolve | get <key> | layers | prompts | prompt <name> | doctor')
+    process.exit(2)
+}

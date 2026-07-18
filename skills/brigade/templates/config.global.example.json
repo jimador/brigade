@@ -1,0 +1,55 @@
+{
+  "_comment": "Copy to ~/.brigade/config.json. Personal settings that follow you into every repo. Anything a repo does not override comes from here. Remove the _comment keys before use.",
+
+  "tier": "two-star",
+  "maxParallel": 4,
+
+  "policy": {
+    "_comment": "null means 'use whatever the tier says' (see skills/brigade/TIERS.md).",
+    "scoutCap": null,
+    "planCheck": null,
+    "retro": null
+  },
+
+  "models": {
+    "_comment": "Point a role at a different agent type. Absent or null keeps the shipped brigade agent.",
+    "scout": null,
+    "cook": null,
+    "cookHeavy": null,
+    "inspector": null,
+    "analyst": null,
+    "design": null,
+    "steward": null
+  },
+
+  "kb": {
+    "_comment": "Optional personal knowledge base for cross-repo heuristics. Brigade shells out to this CLI and skips silently if it is missing.",
+    "enabled": false,
+    "cli": "your-kb-cli",
+    "search_args": ["search", "--tags", "brigade,heuristic,active", "--json", "--limit", "50"],
+    "ingest_args": ["ingest"]
+  },
+
+  "contextSources": [
+    {
+      "id": "personal-heuristics",
+      "type": "mcp",
+      "enabled": false,
+      "localOnly": true,
+      "preflight": ["research", "decompose"],
+      "mcp": {
+        "server": "your-mcp-server",
+        "tool": "search",
+        "description": "Personal prior art, pulled in before decomposition",
+        "arguments": { "query": "{{query}}", "limit": 8 }
+      }
+    }
+  ],
+
+  "prompts": {
+    "_comment": "Short additions appended to a role's shipped prompt. Longer text belongs in ~/.brigade/overrides/agents/<role>.md instead.",
+    "cook": {
+      "append": ["Prefer the smallest diff that satisfies the packet. Never reformat untouched lines."]
+    }
+  }
+}

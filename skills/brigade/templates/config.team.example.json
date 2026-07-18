@@ -1,0 +1,41 @@
+{
+  "_comment": "Copy to <repo>/brigade.config.json and commit it. Settings everyone working in this repo should get. Overrides the global layer; a person's own .brigade/config.local.json still wins over this.",
+
+  "tier": "two-star",
+  "mainBranch": "main",
+
+  "gate": [
+    "bun run types",
+    "bun test"
+  ],
+
+  "policy": {
+    "_comment": "This repo has wide blast radius, so the plan always gets an adversarial check.",
+    "planCheck": "always"
+  },
+
+  "graphite": {
+    "restack": false,
+    "platform": false
+  },
+
+  "worktreeRoot": null,
+
+  "contextSources": [
+    {
+      "id": "repo-conventions",
+      "type": "static-file",
+      "enabled": true,
+      "path": "docs/conventions.md",
+      "preflight": ["research", "decompose"]
+    }
+  ],
+
+  "prompts": {
+    "cook": {
+      "append": [
+        "Database work goes through the repository layer; never write raw SQL in a handler."
+      ]
+    }
+  }
+}

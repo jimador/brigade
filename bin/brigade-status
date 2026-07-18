@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# brigade-status — mechanical dish-state summary, zero model tokens.
+# Default: compact text for context injection. --json: structured output for
+# tooling and reproducible state checks. Safe to run anywhere; silent/empty
+# (exit 0) when the repo has no .brigade/.
+set -euo pipefail
+
+ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+B="$ROOT/.brigade"
+MODE="${1:-text}"
+
+if [ ! -d "$B" ]; then
+  [ "$MODE" = "--json" ] && echo '{"brigade": false}'
+  exit 0
+fi
+
+# --- collectors -------------------------------------------------------------
+
+config_pairs() { # "key\tvalue" lines from config.md
+  [ -f "$B/config.md" ] || return 0
+  grep -E '^- [a-z_]+:' "$B/config.md" 2>/dev/null \
+    | sed -E 's/^- ([a-z_]+): *(.*)$/\1\t\2/' || true
+}
+
+dish_items() { # for one PLAN.md: "slug\tstatus" lines from frontmatter
+  awk '
+    function inline_field(record, key, value, pattern) {
+      pattern = "(^|[,{}])[[:space:]-]*" key ":[[:space:]]*"
+      if (!match(record, pattern)) return ""
+      value = substr(record, RSTART + RLENGTH)
+      sub(/[[:space:],}].*$/, "", value)
+      return value
+    }
+    function emit_inline(slug, status) {
+      if (inline_record == "") return
+      slug = inline_field(inline_record, "slug")
+      status = inline_field(inline_record, "status")
+      if (slug != "" && status != "") print slug "\t" status
+      inline_record = ""
+    }
+    /^---$/ {
+      if (fm == 1) emit_inline()
+      fm++
+      in_items = 0
+      next
+    }
+    fm != 1 { next }
+    /^items:[[:space:]]*$/ {
+      in_items = 1
+      next
+    }
+    in_items && /^[[:alnum:]_-]+:[[:space:]]*/ {
+      emit_inline()
+      in_items = 0
+      next
+    }
+    !in_items { next }
+    /^[[:space:]]*-[[:space:]]*\{/ {
+      emit_inline()
+      inline_record = $0
+      next
+    }
+    inline_record != "" {
+      inline_record = inline_record " " $0
+      next
+    }
+    /^[[:space:]]*-[[:space:]]*slug:[[:space:]]*/ {
+      slug = $0
+      sub(/^.*slug:[[:space:]]*/, "", slug)
+      next
+    }
+    /^[[:space:]]*status:[[:space:]]*/ {
+      status = $0
+      sub(/^.*status:[[:space:]]*/, "", status)
+      if (slug != "") {
+        print slug "\t" status
+        slug = ""
+      }
+    }
+    END { emit_inline() }
+  ' "$1"
+}
+
+tier_value() { # service tier from config.md; absent key = default
+  config_pairs | awk -F'\t' '$1=="tier"{v=$2} END{print (v=="" ? "two-star (default)" : v)}'
+}
+
+efficiency_sums() { # "dishes items_total items_reworked escalations conflicts" summed over analyst retros
+  for retro in "$B"/dishes/*/analyst.md; do
+    [ -f "$retro" ] || continue
+    awk '
+      /^---$/ { fm++; next }
+      fm == 1 && $1 == "items_total:"    { t = $2 }
+      fm == 1 && $1 == "items_reworked:" { r = $2 }
+      fm == 1 && $1 == "escalations:"    { e = $2 }
+      fm == 1 && $1 == "conflicts:"      { c = $2 }
+      END { print t+0, r+0, e+0, c+0 }
+    ' "$retro"
+  done | awk '{ n++; t+=$1; r+=$2; e+=$3; c+=$4 } END { print n+0, t+0, r+0, e+0, c+0 }'
+}
+
+# --- json mode ---------------------------------------------------------------
+
+if [ "$MODE" = "--json" ]; then
+  command -v jq >/dev/null 2>&1 || { echo '{"error": "jq required for --json"}'; exit 1; }
+
+  CONFIG_JSON="$(config_pairs | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}')"
+
+  DISHES_JSON="[]"
+  if [ -d "$B/dishes" ]; then
+    DISHES_JSON="$(
+      for plan in "$B"/dishes/*/PLAN.md; do
+        [ -f "$plan" ] || continue
+        dish="$(basename "$(dirname "$plan")")"
+        items="$(dish_items "$plan" | jq -Rn '[inputs | split("\t") | {slug: .[0], status: .[1]}]')"
+        reports="$( { ls -1 "$(dirname "$plan")/reports" 2>/dev/null || true; } | jq -Rn '[inputs]')"
+        jq -n --arg dish "$dish" --argjson items "$items" --argjson reports "$reports" \
+          '{dish: $dish, items: $items,
+            totals: ($items | group_by(.status) | map({(.[0].status): length}) | add // {}),
+            reports: $reports}'
+      done | jq -s '.'
+    )"
+  fi
+
+  # || true inside the group: with pipefail, a failed ls/grep plus an outer
+  # `|| echo '[]'` emitted "[]\n[]" (jq -Rn already prints [] on empty input).
+  WTS_JSON="$( { ls -1 "$B/worktrees" 2>/dev/null || true; } | jq -Rn '[inputs]')"
+  LEARN_JSON="$( { [ -f "$B/LEARNINGS.md" ] && grep -E '^## ' "$B/LEARNINGS.md" | tail -3 || true; } | jq -Rn '[inputs]')"
+
+  EFF_JSON="$(efficiency_sums | jq -Rn 'input | split(" ") | map(tonumber) |
+    {dishes: .[0], items_total: .[1], items_reworked: .[2], escalations: .[3], conflicts: .[4]}')"
+
+  jq -n --argjson config "$CONFIG_JSON" --argjson dishes "$DISHES_JSON" \
+        --argjson worktrees "$WTS_JSON" --argjson learnings "$LEARN_JSON" \
+        --arg tier "$(tier_value)" --argjson efficiency "$EFF_JSON" \
+    '{brigade: true, tier: $tier, config: $config, dishes: $dishes, efficiency: $efficiency, worktrees: $worktrees, learnings_tail: $learnings}'
+  exit 0
+fi
+
+# --- text mode (context injection) -------------------------------------------
+
+if [ -f "$B/config.md" ]; then
+  echo "## brigade config"
+  config_pairs | sed 's/^/  - /; s/\t/: /'
+fi
+
+echo "## service tier"
+echo "  - $(tier_value)"
+
+if [ -d "$B/dishes" ]; then
+  for plan in "$B"/dishes/*/PLAN.md; do
+    [ -f "$plan" ] || continue
+    dish="$(basename "$(dirname "$plan")")"
+    echo "## dish: $dish"
+    dish_items "$plan" | awk -F'\t' '
+      { print "  " $1 ": " $2; counts[$2]++ }
+      END {
+        line = "  totals:"
+        for (s in counts) line = line " " s "=" counts[s]
+        if (line != "  totals:") print line
+      }
+    '
+    for rep in "$(dirname "$plan")"/reports/*.md; do
+      [ -f "$rep" ] || continue
+      echo "  report: $(basename "$rep")"
+    done
+  done
+fi
+
+echo "## efficiency (analyst retros)"
+efficiency_sums | awk '{
+  if ($1 == 0) { print "  - no analyst retros yet"; exit }
+  print "  - dishes with retro: " $1
+  line = "  - items: " $2 ", reworked: " $3
+  if ($2 > 0) line = line " (" int($3 * 100 / $2) "%)"
+  print line ", escalated: " $4 ", conflicts: " $5
+}'
+
+if [ -d "$B/worktrees" ]; then
+  wts="$(ls -1 "$B/worktrees" 2>/dev/null || true)"
+  if [ -n "$wts" ]; then
+    echo "## worktrees"
+    echo "$wts" | sed 's/^/  /'
+  fi
+fi
+
+if [ -f "$B/LEARNINGS.md" ]; then
+  echo "## learnings (most recent headers)"
+  grep -E '^## ' "$B/LEARNINGS.md" | tail -3 | sed 's/^/  /' || true
+fi

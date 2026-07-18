@@ -1,0 +1,6 @@
+.DS_Store
+.idea/
+
+# Local brigade state: board, dishes, worktrees, personal config layer.
+.brigade/
+

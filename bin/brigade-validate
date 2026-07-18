@@ -1,0 +1,327 @@
+#!/usr/bin/env node
+// brigade-validate — zero-token conformance checks for brigade artifacts.
+//
+// Validates the typed artifacts a dish produces (plan, briefs, reports,
+// verdicts, plan checks, analyst reports) against the registry in SCHEMAS.md:
+// envelope keys, enum values, plan-item DAG sanity, and body length budgets.
+// The Planner runs this instead of re-reading artifacts with model tokens, and
+// a clean pass is part of what makes runs reproducible: state lives in
+// frontmatter that machines (and the next session) can trust.
+//
+// Usage:
+//   brigade-validate                 # validate every dish under .brigade/
+//   brigade-validate <path.md>...    # validate specific artifact files
+//   brigade-validate --json          # machine-readable results
+//
+// Exit codes: 0 = all conforming, 1 = violations found, 2 = usage/IO error.
+import fs from 'node:fs'
+import path from 'node:path'
+
+const STATUSES = ['todo', 'dispatched', 'in_review', 'rework', 'done', 'blocked']
+const SEVERITIES = ['blocking', 'high', 'medium', 'low']
+const ATTEMPT_TRIGGERS = ['initial', 'fail-retry', 'escalation']
+const TIERS = ['three-star', 'two-star', 'one-star']
+const RESEARCH_BUDGETS = { light: 150, medium: 250, heavy: 400 }
+
+// Per-type contract: required frontmatter keys, enum checks, body line budget.
+const TYPES = {
+  plan: { keys: ['ticket', 'source', 'items'], budget: null },
+  brief: { keys: ['question', 'confidence', 'sources'], budget: 150 },
+  report: { keys: ['status', 'attempt', 'branch', 'files_changed', 'commands'], budget: 120 },
+  verdict: { keys: ['verdict', 'attempt_reviewed', 'reran_gate', 'findings'], budget: 150 },
+  plan_check: { keys: ['blind_sketch_first'], budget: 150 },
+  analyst: { keys: ['items_total', 'proposals'], budget: 120 },
+  research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
+  design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 100 },
+}
+const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
+const RECOMMENDED = ['role', 'model', 'created']
+
+function splitFrontmatter(text, file) {
+  const lines = text.split('\n')
+  if (lines[0] !== '---') return { error: `${file}: no frontmatter (must start with ---)` }
+  const end = lines.indexOf('---', 1)
+  if (end < 0) return { error: `${file}: unterminated frontmatter` }
+  return { fm: lines.slice(1, end), body: lines.slice(end + 1) }
+}
+
+function topLevelKeys(fm) {
+  const keys = new Set()
+  for (const line of fm) {
+    const m = line.match(/^([a-z_]+):/)
+    if (m) keys.add(m[1])
+  }
+  return keys
+}
+
+function fmValue(fm, key) {
+  const line = fm.find((l) => l.startsWith(`${key}:`))
+  return line ? line.slice(key.length + 1).trim() : null
+}
+
+// Splits a top-level list key's block into one string per `- ` entry, joining wrapped
+// lines — inline objects may span lines and block-style entries nest their fields on
+// following lines. Field extraction then works per entry.
+function listEntries(fm, listKey) {
+  const entries = []
+  let inList = false
+  let current = []
+  const flush = () => {
+    if (current.length > 0) entries.push(current.join(' '))
+    current = []
+  }
+  for (const line of fm) {
+    if (/^[a-z_]+:/.test(line)) {
+      flush()
+      inList = line.startsWith(`${listKey}:`)
+      continue
+    }
+    if (!inList) continue
+    if (/^\s*- /.test(line)) {
+      flush()
+      current = [line]
+    } else if (current.length > 0) {
+      current.push(line)
+    }
+  }
+  flush()
+  return entries
+}
+
+// Pulls one `field: value` per list entry (block or inline style, wrapped lines included).
+// Values are single tokens or bracketed lists; the lookahead stops before the next key so
+// a wrapped entry's following fields are never misread as part of the value.
+function nestedFieldValues(fm, listKey, field) {
+  const values = []
+  const pattern = new RegExp(`(?:^|[\\s{,])${field}:\\s*(\\[[^\\]]*\\]|"[^"]*"|[^,}\\s]+)`)
+  for (const entry of listEntries(fm, listKey)) {
+    const m = entry.match(pattern)
+    if (m && m[1]) values.push(m[1].trim())
+  }
+  return values
+}
+
+function validateFile(file) {
+  const problems = []
+  const warnings = []
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch (err) {
+    return { file, problems: [`unreadable: ${err.message}`], warnings, doc: null }
+  }
+
+  const parts = splitFrontmatter(text, file)
+  if (parts.error) return { file, problems: [parts.error.replace(`${file}: `, '')], warnings, doc: null }
+  const { fm, body } = parts
+
+  const keys = topLevelKeys(fm)
+  const doc = fmValue(fm, 'doc')
+
+  for (const k of ENVELOPE) if (!keys.has(k)) problems.push(`missing envelope key: ${k}`)
+  for (const k of RECOMMENDED) if (!keys.has(k)) warnings.push(`missing recommended key: ${k}`)
+
+  if (!doc) return { file, problems, warnings, doc: null }
+  const contract = TYPES[doc]
+  if (!contract) {
+    problems.push(`unknown doc type: ${doc} (known: ${Object.keys(TYPES).join(', ')})`)
+    return { file, problems, warnings, doc }
+  }
+
+  for (const k of contract.keys) if (!keys.has(k)) problems.push(`missing ${doc} key: ${k}`)
+
+  if (contract.budget !== null) {
+    const bodyLines = body.filter((l) => l.trim() !== '').length
+    if (bodyLines > contract.budget) {
+      problems.push(`body ${bodyLines} non-empty lines exceeds ${doc} budget of ${contract.budget}`)
+    }
+  }
+
+  // Required body sections per type (SCHEMAS.md); checked as line prefixes.
+  const REQUIRED_SECTIONS = {
+    verdict: ['## Verdict', '## Findings', '## Evidence check'],
+    analyst: ['## Scorecard', '## Patterns', '## Proposals'],
+    brief: ['## Answer'],
+    plan_check: ['## Blind sketch', '## Comparison', '## Recommendations'],
+  }
+  const required = REQUIRED_SECTIONS[doc]
+  if (required) {
+    for (const section of required) {
+      if (!body.some((l) => l.startsWith(section))) {
+        problems.push(`${doc} missing "${section}" section`)
+      }
+    }
+  }
+
+  switch (doc) {
+    case 'plan': {
+      const tier = fmValue(fm, 'tier')
+      if (tier && !TIERS.includes(tier)) {
+        problems.push(`invalid tier: ${tier} (allowed: ${TIERS.join('|')})`)
+      }
+      const slugs = nestedFieldValues(fm, 'items', 'slug')
+      const statuses = nestedFieldValues(fm, 'items', 'status')
+      if (slugs.length === 0) problems.push('plan has no items')
+      const seen = new Set()
+      for (const s of slugs) {
+        if (seen.has(s)) problems.push(`duplicate item slug: ${s}`)
+        seen.add(s)
+      }
+      for (const s of statuses) {
+        if (!STATUSES.includes(s)) problems.push(`invalid item status: ${s} (allowed: ${STATUSES.join('|')})`)
+      }
+      for (const dep of nestedFieldValues(fm, 'items', 'depends_on')) {
+        for (const d of dep.replace(/[[\]]/g, '').split(',').map((x) => x.trim()).filter((x) => x && x !== 'none')) {
+          if (!seen.has(d)) problems.push(`depends_on references unknown slug: ${d}`)
+        }
+      }
+      for (const t of nestedFieldValues(fm, 'items', 'trigger')) {
+        if (!ATTEMPT_TRIGGERS.includes(t)) {
+          problems.push(`invalid attempt trigger: ${t} (allowed: ${ATTEMPT_TRIGGERS.join('|')})`)
+        }
+      }
+      const kind = fmValue(fm, 'kind')
+      if (kind && !['build', 'research'].includes(kind)) {
+        problems.push(`invalid plan kind: ${kind} (allowed: build|research)`)
+      }
+      if (kind !== 'research') {
+        for (const s of seen) {
+          if (!body.some((l) => l.startsWith(`## Packet: ${s}`))) {
+            problems.push(`plan missing packet section for item: ${s}`)
+          }
+        }
+      }
+      break
+    }
+    case 'research': {
+      const depth = fmValue(fm, 'depth')
+      if (!RESEARCH_BUDGETS[depth]) {
+        problems.push(`invalid research depth: ${depth} (allowed: ${Object.keys(RESEARCH_BUDGETS).join('|')})`)
+      } else {
+        const bodyLines = body.filter((l) => l.trim() !== '').length
+        if (bodyLines > RESEARCH_BUDGETS[depth]) {
+          problems.push(`body ${bodyLines} non-empty lines exceeds ${depth} research budget of ${RESEARCH_BUDGETS[depth]}`)
+        }
+      }
+      if (!body.some((l) => l.startsWith('## Verdict') || l.startsWith('## Recommendation'))) {
+        problems.push('research missing "## Verdict" (or "## Recommendation") section')
+      }
+      if (!body.some((l) => l.startsWith('## Open questions'))) {
+        problems.push('research missing "## Open questions" section')
+      }
+      break
+    }
+    case 'report': {
+      const status = fmValue(fm, 'status')
+      if (status && !['done', 'blocked'].includes(status)) problems.push(`invalid report status: ${status}`)
+      if (status === 'blocked' && !body.some((l) => l.startsWith('## Blocked'))) {
+        problems.push('blocked report missing "## Blocked" section')
+      }
+      if (!body.some((l) => l.startsWith('## Evidence'))) problems.push('report missing "## Evidence" section')
+      break
+    }
+    case 'verdict': {
+      const verdict = fmValue(fm, 'verdict')
+      if (verdict && !['PASS', 'FAIL'].includes(verdict)) problems.push(`invalid verdict: ${verdict}`)
+      for (const s of nestedFieldValues(fm, 'findings', 'severity')) {
+        if (!SEVERITIES.includes(s)) problems.push(`invalid finding severity: ${s}`)
+      }
+      if (verdict === 'FAIL' && nestedFieldValues(fm, 'findings', 'severity').length === 0) {
+        problems.push('FAIL verdict with no findings')
+      }
+      break
+    }
+    case 'brief': {
+      const confidence = fmValue(fm, 'confidence')
+      if (confidence && !['high', 'medium', 'low'].includes(confidence)) {
+        problems.push(`invalid confidence: ${confidence}`)
+      }
+      break
+    }
+    case 'design_swag': {
+      const readiness = fmValue(fm, 'readiness')
+      const allowed = ['insufficient', 'needs_product', 'needs_tech', 'swaggable', 'likely_ready']
+      if (readiness && !allowed.includes(readiness)) {
+        problems.push(`invalid readiness: ${readiness} (allowed: ${allowed.join('|')})`)
+      }
+      const size = fmValue(fm, 'size_swag')
+      const sizes = ['XS', 'S', 'M', 'L', 'XL', 'unknown']
+      if (size && !sizes.includes(size)) {
+        problems.push(`invalid size_swag: ${size}`)
+      }
+      for (const section of [
+        '## What this seems to be',
+        '## Likely shape of work',
+        '## Codebase grounding',
+        '## Open questions',
+        '## Risks & unknowns',
+        '## Readiness',
+        '## Original request',
+      ]) {
+        if (!body.some((l) => l.startsWith(section))) {
+          problems.push(`design_swag missing "${section}" section`)
+        }
+      }
+      break
+    }
+    default:
+      break
+  }
+
+  return { file, problems, warnings, doc }
+}
+
+function collectDefaultTargets(root) {
+  const b = path.join(root, '.brigade', 'dishes')
+  if (!fs.existsSync(b)) return []
+  const targets = []
+  for (const dish of fs.readdirSync(b)) {
+    const dir = path.join(b, dish)
+    if (!fs.statSync(dir).isDirectory()) continue
+    for (const rel of ['PLAN.md', 'analyst.md', 'DESIGN.md']) {
+      const f = path.join(dir, rel)
+      if (fs.existsSync(f)) targets.push(f)
+    }
+    for (const sub of ['briefs', 'reports', 'research']) {
+      const d = path.join(dir, sub)
+      if (!fs.existsSync(d)) continue
+      for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) targets.push(path.join(d, f))
+    }
+  }
+  return targets
+}
+
+function main() {
+  const args = process.argv.slice(2)
+  const json = args.includes('--json')
+  const files = args.filter((a) => a !== '--json')
+  const root = process.env.CLAUDE_PROJECT_DIR || process.cwd()
+
+  const targets = files.length > 0 ? files : collectDefaultTargets(root)
+  if (targets.length === 0) {
+    if (json) console.log(JSON.stringify({ checked: 0, ok: true, results: [] }))
+    else console.log('brigade-validate: nothing to check (no .brigade/dishes artifacts found)')
+    return 0
+  }
+
+  const results = targets.map(validateFile)
+  const bad = results.filter((r) => r.problems.length > 0)
+
+  if (json) {
+    console.log(JSON.stringify({ checked: results.length, ok: bad.length === 0, results }, null, 2))
+  } else {
+    for (const r of results) {
+      const rel = path.relative(root, r.file)
+      if (r.problems.length === 0 && r.warnings.length === 0) {
+        console.log(`ok    ${rel} (${r.doc ?? '?'})`)
+      } else {
+        for (const p of r.problems) console.log(`FAIL  ${rel}: ${p}`)
+        for (const w of r.warnings) console.log(`warn  ${rel}: ${w}`)
+      }
+    }
+    console.log(`\n${results.length} checked, ${bad.length} nonconforming`)
+  }
+  return bad.length > 0 ? 1 : 0
+}
+
+process.exitCode = main()

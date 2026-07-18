@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy to <repo>/.brigade/config.local.json. Your own settings for this one repo — never committed (.brigade/ lives in .git/info/exclude). This layer wins over everything else.",
+
+  "tier": "three-star",
+  "maxParallel": 2,
+
+  "circuitBreaker": {
+    "_comment": "This repo's tests are flaky, so give items more rope before the breaker trips.",
+    "maxTotalFails": 6
+  },
+
+  "contextSources": [
+    {
+      "id": "repo-conventions",
+      "_comment": "Same id as the team layer, so this tunes that source rather than adding a second one.",
+      "enabled": false
+    }
+  ]
+}

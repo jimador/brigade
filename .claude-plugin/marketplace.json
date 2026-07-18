@@ -1,0 +1,14 @@
+{
+  "name": "brigade",
+  "description": "Brigade: a parallel dev-team fleet for Claude Code — board-first sessions against Notion, ClickUp, Obsidian vault boards, or local markdown.",
+  "owner": {
+    "name": "jimador"
+  },
+  "plugins": [
+    {
+      "name": "brigade",
+      "source": "./",
+      "description": "Parallel dev fleet planner: board-first sessions, design swag, tiny disjoint work items, haiku cooks in worktrees, adversarial review gate, analyst retros. Three service tiers set model spend per dish."
+    }
+  ]
+}
