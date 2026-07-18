@@ -423,6 +423,93 @@ PY
     fail "brigade-config doctor rejected a repo with no config layers"
 }
 
+test_validate_ledger_artifacts() {
+  fixture="$TMP_ROOT/validate-ledger"
+  mkdir -p "$fixture/.brigade/dishes/sample/state"
+
+  # Create a valid ledger fixture.
+  cat >"$fixture/.brigade/dishes/sample/state/good.md" <<'EOF'
+---
+doc: ledger
+schema: dish/item/role/model/created/attempt/updated
+dish: sample
+item: one
+role: cook
+model: claude-haiku-4-5-20251001
+created: 2026-07-18T21:00:00Z
+attempt: 1
+updated: 2026-07-18T21:30:00Z
+---
+
+## Canon
+
+C1. This is a canonical unit.
+
+## World state
+
+[RELIABLE] This is a reliable world state unit.
+EOF
+
+  # Create an invalid ledger fixture (missing required envelope keys and sections).
+  cat >"$fixture/.brigade/dishes/sample/state/bad.md" <<'EOF'
+---
+doc: ledger
+---
+
+No structure here.
+EOF
+
+  # Test good.md — should validate successfully.
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/state/good.md" 2>&1)"
+  printf '%s\n' "$output" | grep -Fq "ok" &&
+    printf '%s\n' "$output" | grep -Fq "(ledger)" ||
+    fail "brigade-validate did not report ok for valid ledger: $output"
+
+  # Test bad.md — should fail validation.
+  if CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/state/bad.md" >/dev/null 2>&1; then
+    fail "brigade-validate passed an invalid ledger"
+  fi
+}
+
+test_execute_ledger_wiring() {
+  # Check presence of WORKING MEMORY layer comment in brigade-execute.js.
+  count="$(grep -c 'WORKING MEMORY — this dispatch carries a ledger' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated WORKING MEMORY layer comment (found $count, expected 1)"
+
+  # Check presence of audit line in brigade-execute.js.
+  count="$(grep -c 'Working-memory ledger — audit it' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated audit line (found $count, expected 1)"
+
+  # Check config kill-switch guard in brigade-execute.js source.
+  grep -q '!POLICY.workingMemory' "$ROOT/workflows/src/brigade-execute.js" ||
+    fail "brigade-execute.js source missing config kill-switch guard (!POLICY.workingMemory)"
+
+  # Check small-first-attempt exclusion guard in brigade-execute.js source.
+  grep -q '!item.heavy && attemptIndex === 0' "$ROOT/workflows/src/brigade-execute.js" ||
+    fail "brigade-execute.js source missing small-first-attempt guard (!item.heavy && attemptIndex === 0)"
+
+  # Test config default with isolated layers.
+  fixture="$TMP_ROOT/config-ledger-default"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+
+  json="$(config_run "$fixture" resolve --json)"
+  python3 - "$json" <<'PY' || fail "brigade-config default missing or incorrect workingMemory setting"
+import json, sys
+
+config = json.loads(sys.argv[1])["config"]
+if config.get("workingMemory") is not True:
+    raise SystemExit(f"expected workingMemory=true, got {config.get('workingMemory')!r}")
+PY
+
+  # Test MD_SCHEMA_BLOCKS.ledger fence rendering.
+  node -e "const src=require('fs').readFileSync('$ROOT/workflows/config.js','utf8'); const s=new Function(src+'; return MD_SCHEMA_BLOCKS.ledger')(); process.exit(/^\x60\x60\x60yaml$/m.test(s) && !s.includes(String.fromCharCode(92)) ? 0 : 1)" ||
+    fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger fence rendering is broken"
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
@@ -430,4 +517,6 @@ test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
+test_validate_ledger_artifacts
+test_execute_ledger_wiring
 echo "PASS: brigade operational regressions"
