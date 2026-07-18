@@ -267,15 +267,43 @@ function validateFile(file) {
       break
     }
     case 'ledger': {
-      // Count Canon entries (C<n>. pattern)
-      const canonCount = body.filter((l) => /^C\d+\./.test(l.trim())).length
-      if (canonCount > 20) {
-        warnings.push(`Canon has ${canonCount} units, exceeds ledger budget of 20`)
+      // Find section indices for Canon and World state
+      const canonIdx = body.findIndex((l) => l.startsWith('## Canon'))
+      const worldIdx = body.findIndex((l) => l.startsWith('## World state'))
+
+      // Both sections are required
+      if (canonIdx < 0) problems.push('ledger missing "## Canon" section')
+      if (worldIdx < 0) problems.push('ledger missing "## World state" section')
+
+      // Canon must come before World state (F1 fix: order check)
+      if (canonIdx >= 0 && worldIdx >= 0 && canonIdx > worldIdx) {
+        problems.push('ledger sections out of order: "## Canon" must come before "## World state"')
       }
-      // Count World state entries (W<n>. pattern)
-      const worldCount = body.filter((l) => /^W\d+\./.test(l.trim())).length
-      if (worldCount > 30) {
-        warnings.push(`World state has ${worldCount} units, exceeds ledger budget of 30`)
+
+      // Count C<n>. units in Canon section only (F2 fix: scoped counting)
+      if (canonIdx >= 0) {
+        const nextSectionIdx = body.findIndex(
+          (l, i) => i > canonIdx && l.startsWith('## ') && !l.startsWith('## Canon')
+        )
+        const canonEnd = nextSectionIdx >= 0 ? nextSectionIdx : body.length
+        const canonSection = body.slice(canonIdx + 1, canonEnd)
+        const canonUnits = canonSection.filter((l) => /^C\d+\./.test(l.trim())).length
+        if (canonUnits > 20) {
+          warnings.push(`Canon has ${canonUnits} units (warn: ≤ 20)`)
+        }
+      }
+
+      // Count W<n>. units in World state section only (F2 fix: scoped counting)
+      if (worldIdx >= 0) {
+        const nextSectionIdx = body.findIndex(
+          (l, i) => i > worldIdx && l.startsWith('## ') && !l.startsWith('## World state')
+        )
+        const worldEnd = nextSectionIdx >= 0 ? nextSectionIdx : body.length
+        const worldSection = body.slice(worldIdx + 1, worldEnd)
+        const worldUnits = worldSection.filter((l) => /^W\d+\./.test(l.trim())).length
+        if (worldUnits > 30) {
+          warnings.push(`World state has ${worldUnits} live units (warn: ≤ 30)`)
+        }
       }
       break
     }
