@@ -192,6 +192,18 @@ function validateFile(file) {
             problems.push(`plan missing packet section for item: ${s}`)
           }
         }
+        const entries = listEntries(fm, 'items')
+        for (let i = 0; i < slugs.length; i++) {
+          if (statuses[i] === 'done') {
+            const vpath = path.join(path.dirname(file), 'reports', slugs[i] + '-verdict.md')
+            if (!fs.existsSync(vpath)) {
+              warnings.push(`done item '${slugs[i]}' has no reports/${slugs[i]}-verdict.md`)
+            }
+            if (entries[i] && !entries[i].includes('attempts:')) {
+              warnings.push(`done item '${slugs[i]}' has no attempts record`)
+            }
+          }
+        }
       }
       break
     }
