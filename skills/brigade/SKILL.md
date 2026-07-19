@@ -447,8 +447,12 @@ blockedReason}], stoppedEarly, reason }`.
 
 **Applying the ledger.** For each item: mirror `status` and `attempts` into PLAN.md; record
 `landedRange` next to it when present; if the item is also a board ticket, transition it
-live per Status mapping below (in-progress → done, or → blocked) — never batched. Then act
-on status:
+live per Status mapping below (in-progress → done, or → blocked) — never batched. Then run
+the retro-readiness check: every `done` item has a populated `attempts:` entry in PLAN.md
+AND a `reports/<item>-verdict.md` on disk — subagents have returned verdicts to the ledger
+without writing the file, leaving resume and retro blind. Reconstruct any missing artifact
+from the ledger's structured data (attributed as a reconstruction) before the dish counts
+as retro-ready. Then act on status:
 
 - `done` — landed and cleaned up; nothing further.
 - `skipped` — was already `status: done` in PLAN.md when the script started (resume).
