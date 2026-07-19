@@ -83,6 +83,27 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
    - `## Blocked` — only for `status: blocked`: exactly what contradicted the packet.
    Budget ≤ 120 lines.
 
+## Working memory (only when your dispatch carries a WORKING MEMORY block)
+
+Some dispatches name a ledger file — your bounded working memory for this item. No
+block in your prompt = no ledger; skip this section entirely.
+
+- **Before your first edit:** if the ledger exists, read it fully — it is the prior
+  attempt's verified state; trust its `[RELIABLE]` units instead of re-deriving them.
+  If it doesn't exist, create it per the schema in your dispatch and seed `## Canon`
+  from the packet: file list, quoted contracts, Verify commands, invariants — ≤ 20
+  numbered units. Canon is never edited afterwards; if reality contradicts a Canon
+  unit, that is a packet defect — report BLOCKED, never "fix" Canon.
+- **After every Verify run:** record what the run proved in `## World state` —
+  `[RELIABLE]` units name the command that verified them, `[PROVISIONAL]` marks
+  inference. Supersede by striking (`~~…~~`) plus a replacement unit `(supersedes Wn)`;
+  never delete. Then re-read Canon top to bottom before continuing.
+- **Before commit:** self-check the diff against Canon — files ⊆ the Canon file list,
+  no invariant violated, every Verify command run.
+- **Before the report:** final ledger update; set `ledger:` in the report frontmatter
+  and quote the live World state in Evidence. A ledgered report missing either is an
+  Inspector finding.
+
 ## Rework dispatches
 
 If your prompt includes Inspector findings, this is a rework pass on the same branch: address

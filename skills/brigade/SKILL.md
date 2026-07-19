@@ -298,9 +298,10 @@ Build the `questions` array — one entry per question, `{n, topic, question, wh
   `<skill-base>/../../workflows/brigade-research.js`. Absolute plugin/cache paths are
   accepted by the Workflow tool — do not copy scripts into `.brigade/workflows/`.
 - args (may be passed as a JSON string): `{ dishDir, repoRoot, now, tier, questions,
-  overrides, promptOverrides }` — `overrides` is the object from
-  `brigade-config resolve --json`, `promptOverrides` the map from
-  `brigade-config prompts --json`. Both are optional; omitting them runs pure tier policy.
+  overrides, promptOverrides }` — `overrides` is the `config` object from `brigade-config resolve --json`
+  (passing the whole resolve output also works — the scripts unwrap `.config`),
+  `promptOverrides` the map from `brigade-config prompts --json`. Both are optional;
+  omitting them runs pure tier policy.
 
 The script caps dispatch at the resolved scout budget (dropping and logging the rest) and
 returns `{ briefs: [{n, topic, answer, confidence, briefPath, notVerified}], dropped,
@@ -416,7 +417,9 @@ string): `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate: []
 maxParallel, overrides, promptOverrides, items: [{slug, status, dependsOn: [], heavy,
 packet}] }` — `packet` is the item's full, standalone work-packet text; `gate` is the
 repo's verification gate commands (resolved `gate` wins over `.brigade/config.md`);
-`overrides` and `promptOverrides` come from `brigade-config` as in Phase 1.
+`overrides` is the `config` object from `brigade-config resolve --json` (passing the whole
+resolve output also works — the scripts unwrap `.config`), and `promptOverrides` comes from
+`brigade-config prompts --json` — as in Phase 1.
 When building `items` from PLAN.md, map frontmatter `depends_on` → `dependsOn` (the script
 also accepts `depends_on` as an alias).
 
@@ -479,6 +482,15 @@ Native Claude Code worktree support was evaluated for this and not adopted: its 
 from; its branch names are auto-generated rather than delivery-scoped and traceable; its
 location is `.claude/worktrees/` rather than the git-excluded `.brigade/worktrees/`; and it
 has no rebase-then-fast-forward landing choreography of its own.
+
+**Working memory is script-decided, not planner-decided.** The execute script attaches a
+ledger (`MEMORY.md` next to this SKILL) to heavy items and rework attempts: the cook
+keeps the packet's constraints as protected Canon plus its own verified World state at
+`.brigade/dishes/<dish>/state/<item>.md`, the next attempt inherits it, and the
+Inspector audits it. On by default; `workingMemory: false` in any config layer disables
+it fleet-wide. Packets need no extra section — Canon is seeded from the packet's
+existing file list, contracts, and Verify commands, which is one more reason those must
+be pasted and exact.
 
 ## Phase 6 — Handoff & analyst
 
@@ -657,6 +669,9 @@ an optional batched progress comment on the parent, not a status thrash.
 - `TIERS.md` (next to this SKILL) — the service tiers (three-star / two-star / one-star):
   per-tier model policy, scout caps, plan-check policy, the escalation ladder as
   implemented by `brigade-execute`, retro cadence, difficult-planning triggers.
+- `MEMORY.md` (next to this SKILL) — the cook working-memory ledger protocol: who gets
+  one (heavy items, rework attempts), the Canon/World-state format, cadence, and the
+  Inspector audit.
 - `GRAPHITE.md` (next to this SKILL) — optional Graphite mode: `graphite_restack`
   (gt-driven landing/rework rebases, local-only) and `graphite_platform` (stacked-PR
   handoff via `gt submit`). Both off by default; read it only when the repo config

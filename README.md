@@ -104,6 +104,17 @@ Pick how much model you buy per dish.
 Say `brigade heavy` or `brigade light` for one dish; set `tier` in config for the repo.
 Any single row can be decoupled from its tier — see [docs/tiers.md](docs/tiers.md).
 
+### Working memory
+
+Long-horizon dispatches — heavy items and rework attempts — carry a working-memory
+ledger: the packet's constraints held as protected Canon plus the cook's own verified
+World state, kept in one bounded file per item, inherited across attempts, audited by
+the Inspector. Small first-attempt items skip it; at that horizon the packet alone is
+enough. On by default — set `workingMemory: false` in any config layer to disable.
+Protocol: `skills/brigade/MEMORY.md`; adapted from
+[arc-mem](https://github.com/jimador/arc-mem) (Activation-Ranked Context — governed
+working memory for LLM agents).
+
 ## Configuration and overrides
 
 Settings come from four layers, later winning key by key:

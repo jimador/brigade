@@ -3,6 +3,7 @@
 
   "tier": "two-star",
   "maxParallel": 4,
+  "workingMemory": true,
 
   "policy": {
     "_comment": "null means 'use whatever the tier says' (see skills/brigade/TIERS.md).",

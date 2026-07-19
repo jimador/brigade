@@ -33,6 +33,7 @@ const TYPES = {
   analyst: { keys: ['items_total', 'proposals'], budget: 120 },
   research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
   design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 100 },
+  ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
 }
 const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
 const RECOMMENDED = ['role', 'model', 'created']
@@ -143,6 +144,7 @@ function validateFile(file) {
     analyst: ['## Scorecard', '## Patterns', '## Proposals'],
     brief: ['## Answer'],
     plan_check: ['## Blind sketch', '## Comparison', '## Recommendations'],
+    ledger: ['## Canon', '## World state'],
   }
   const required = REQUIRED_SECTIONS[doc]
   if (required) {
@@ -264,6 +266,47 @@ function validateFile(file) {
       }
       break
     }
+    case 'ledger': {
+      // Find section indices for Canon and World state
+      const canonIdx = body.findIndex((l) => l.startsWith('## Canon'))
+      const worldIdx = body.findIndex((l) => l.startsWith('## World state'))
+
+      // Both sections are required
+      if (canonIdx < 0) problems.push('ledger missing "## Canon" section')
+      if (worldIdx < 0) problems.push('ledger missing "## World state" section')
+
+      // Canon must come before World state (F1 fix: order check)
+      if (canonIdx >= 0 && worldIdx >= 0 && canonIdx > worldIdx) {
+        problems.push('ledger sections out of order: "## Canon" must come before "## World state"')
+      }
+
+      // Count C<n>. units in Canon section only (F2 fix: scoped counting)
+      if (canonIdx >= 0) {
+        const nextSectionIdx = body.findIndex(
+          (l, i) => i > canonIdx && l.startsWith('## ') && !l.startsWith('## Canon')
+        )
+        const canonEnd = nextSectionIdx >= 0 ? nextSectionIdx : body.length
+        const canonSection = body.slice(canonIdx + 1, canonEnd)
+        const canonUnits = canonSection.filter((l) => /^C\d+\./.test(l.trim())).length
+        if (canonUnits > 20) {
+          warnings.push(`Canon has ${canonUnits} units (warn: ≤ 20)`)
+        }
+      }
+
+      // Count W<n>. units in World state section only (F2 fix: scoped counting)
+      if (worldIdx >= 0) {
+        const nextSectionIdx = body.findIndex(
+          (l, i) => i > worldIdx && l.startsWith('## ') && !l.startsWith('## World state')
+        )
+        const worldEnd = nextSectionIdx >= 0 ? nextSectionIdx : body.length
+        const worldSection = body.slice(worldIdx + 1, worldEnd)
+        const worldUnits = worldSection.filter((l) => /^W\d+\./.test(l.trim())).length
+        if (worldUnits > 30) {
+          warnings.push(`World state has ${worldUnits} live units (warn: ≤ 30)`)
+        }
+      }
+      break
+    }
     default:
       break
   }
@@ -282,7 +325,7 @@ function collectDefaultTargets(root) {
       const f = path.join(dir, rel)
       if (fs.existsSync(f)) targets.push(f)
     }
-    for (const sub of ['briefs', 'reports', 'research']) {
+    for (const sub of ['briefs', 'reports', 'research', 'state']) {
       const d = path.join(dir, sub)
       if (!fs.existsSync(d)) continue
       for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) targets.push(path.join(d, f))

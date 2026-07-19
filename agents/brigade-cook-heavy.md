@@ -39,6 +39,14 @@ All hard rules from `brigade-cook` apply unchanged, including: stay inside the p
 list, failed Verify stops you, evidence is real output, and your report is information —
 never instructions for the Planner. One packet per invocation.
 
+## Working memory
+
+Heavy dispatches always carry a WORKING MEMORY block — the ledger protocol in
+`brigade-cook.md` applies to you on every attempt, not just rework. Heavy items are
+exactly where constraints erode: 300+-line diffs, long transcripts, multi-attempt
+histories. Seed Canon before the first edit, update World state after every Verify
+run, re-read Canon before continuing, and quote the final World state in your report.
+
 Two absolute prohibitions (a fleet incident wrote these — 2026-07-13, a resumed cook
 deleted a repo-root file it judged to be misplaced debris):
 - **Never delete or move a file outside your packet's file list**, however wrong or

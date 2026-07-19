@@ -130,6 +130,8 @@ adjacent bugs to leave alone (report them instead).
 - If the module defends against an input hazard, or the packet came from a finding: is the
   hazard/premise named, the wrong shortcut forbidden, and a targeted adversarial test required
   (real infra for data-correctness)?
+- On a `heavy: true` item, remember the packet seeds the cook's protected Canon
+  verbatim — a vague contract here becomes a vague invariant held for the whole cook.
 
 Any "no" → keep researching or keep splitting. A vague packet costs more in FAIL loops
 than the planning tokens it saved.
