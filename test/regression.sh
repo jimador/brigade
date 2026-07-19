@@ -510,6 +510,101 @@ PY
     fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger fence rendering is broken"
 }
 
+test_schema_examples_validate() {
+  fixture="$TMP_ROOT/schema-examples"
+  mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
+           "$fixture/.brigade/dishes/sample/reports" \
+           "$fixture/.brigade/dishes/sample/state"
+
+  # Extract and validate each schema block example.
+  node - "$fixture" "$ROOT/workflows/config.js" <<'NODE' || fail "failed to extract and validate schema examples"
+const fs = require('fs');
+const fixture = process.argv[2];
+const configPath = process.argv[3];
+const src = fs.readFileSync(configPath, 'utf8');
+const blocks = new Function(src + '; return MD_SCHEMA_BLOCKS')();
+
+// Verify all four blocks have schema: 1.
+for (const type of ['brief', 'report', 'verdict', 'ledger']) {
+  const block = blocks[type];
+  if (!block) {
+    throw new Error(`MD_SCHEMA_BLOCKS.${type} not found`);
+  }
+  const match = block.match(/\`\`\`yaml\n([\s\S]*?)\n\`\`\`/);
+  if (!match) {
+    throw new Error(`No YAML fence found in MD_SCHEMA_BLOCKS.${type}`);
+  }
+  if (!/^schema:\s*1/m.test(match[1])) {
+    throw new Error(`schema: 1 not found in MD_SCHEMA_BLOCKS.${type}`);
+  }
+}
+
+// Create valid fixtures with minimal envelopes (extracted keys + concrete values).
+const fixtures = {
+  brief: {
+    dir: 'briefs',
+    file: '1-sample.md',
+    envelope: 'doc: brief\nschema: 1\ndish: sample\nitem: sample\nrole: scout\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nquestion: sample\nconfidence: high\nsources: []\nurls: []',
+    body: '## Answer\n\nSample answer.'
+  },
+  report: {
+    dir: 'reports',
+    file: 'sample-cook.md',
+    envelope: 'doc: report\nschema: 1\ndish: sample\nitem: sample\nrole: cook\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nstatus: done\nattempt: 1\nbranch: wip/sample/sample\nfiles_changed: []\ncommands: []\nfindings_addressed: []\nledger: null',
+    body: '## Summary\n\nSample summary.\n\n## Evidence\n\nSample evidence.'
+  },
+  verdict: {
+    dir: 'reports',
+    file: 'sample-verdict.md',
+    envelope: 'doc: verdict\nschema: 1\ndish: sample\nitem: sample\nrole: inspector\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nverdict: PASS\nattempt_reviewed: 1\nreran_gate: true\nfindings: []\ntrivial_only: false',
+    body: '## Verdict\n\nPASS\n\n## Findings\n\nNo findings.\n\n## Evidence check\n\nValidator test.'
+  },
+  ledger: {
+    dir: 'state',
+    file: 'sample.md',
+    envelope: 'doc: ledger\nschema: 1\ndish: sample\nitem: sample\nrole: cook\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nattempt: 1\nupdated: 2026-07-04T03:10:00Z',
+    body: '## Canon\n\nC1. Sample canonical unit.\n\n## World state\n\nW1. [RELIABLE] Sample state.'
+  }
+};
+
+for (const [type, spec] of Object.entries(fixtures)) {
+  const frontmatter = `---\n${spec.envelope}\n---\n\n${spec.body}`;
+  const dir = `${fixture}/.brigade/dishes/sample/${spec.dir}`;
+  const filePath = `${dir}/${spec.file}`;
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  fs.writeFileSync(filePath, frontmatter);
+  console.log(`Created ${filePath}`);
+}
+NODE
+
+  # Run brigade-validate on each example.
+  for type in brief report verdict ledger; do
+    case "$type" in
+      brief)
+        file="$fixture/.brigade/dishes/sample/briefs/1-sample.md"
+        ;;
+      report)
+        file="$fixture/.brigade/dishes/sample/reports/sample-cook.md"
+        ;;
+      verdict)
+        file="$fixture/.brigade/dishes/sample/reports/sample-verdict.md"
+        ;;
+      ledger)
+        file="$fixture/.brigade/dishes/sample/state/sample.md"
+        ;;
+    esac
+
+    output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)"
+    printf '%s\n' "$output" | grep -Fq "ok" &&
+      printf '%s\n' "$output" | grep -Fq "($type)" ||
+      fail "brigade-validate did not report ok for $type example: $output"
+  done
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
@@ -519,4 +614,5 @@ test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_validate_ledger_artifacts
 test_execute_ledger_wiring
+test_schema_examples_validate
 echo "PASS: brigade operational regressions"
