@@ -209,6 +209,25 @@ PY
   fi
 }
 
+assert_guard_heredoc_unquoted_banned_sub() {
+  stderr_file="$TMP_ROOT/guard.stderr"
+  payload="$(python3 - <<'PY'
+import json
+# Unquoted-delimiter shared-line heredoc with banned command substitution
+print(json.dumps({"tool_input": {"command": "cat <<EOF\n$(git add -A)\nEOF"}}))
+PY
+)"
+  if run_guard_payload "$payload"; then
+    fail "guard allowed unquoted heredoc with banned substitution"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 2 ] ||
+    fail "guard returned $status instead of 2 for unquoted heredoc banned substitution"
+  grep -Fq "brigade guard: no indiscriminate staging" "$stderr_file" ||
+    fail "guard gave wrong message for unquoted heredoc banned substitution, got: $(cat "$stderr_file")"
+}
+
 test_guard_staging_policy() {
   mkdir -p "$TMP_ROOT/guard-repo/.brigade"
 
@@ -321,6 +340,25 @@ still quoted text'"
   assert_guard_parser_failure_blocks
   assert_guard_heredoc_payload_blocks
   assert_guard_heredoc_python_direct
+
+  # Benign shared-line heredoc with quoted delimiter and clean terminator — should allow
+  assert_guard_allows "cat <<'EOF'
+benign shared-line body
+EOF"
+
+  # Shared-line heredoc followed by broad-staging command via && — should block
+  assert_guard_blocks "cat <<'EOF'
+benign
+EOF
+&& git add ."
+
+  # gh pr create with shared-line heredoc body — should allow (not a git command)
+  assert_guard_allows "gh pr create --body <<'EOF'
+Pull request description text
+EOF"
+
+  # Unquoted-delimiter shared-line heredoc containing banned command substitution — should block with exact message
+  assert_guard_heredoc_unquoted_banned_sub
 }
 
 config_run() { # brigade-config against a fixture repo and a fake home
