@@ -164,6 +164,51 @@ EOF
     fail "guard gave no clear message when parser runtime failed"
 }
 
+assert_guard_heredoc_payload_blocks() {
+  stderr_file="$TMP_ROOT/guard.stderr"
+  payload="$(python3 - <<'PY'
+import json
+# Shared-line-heredoc with unbalanced quoting: heredoc marker on same line with unclosed single quote
+print(json.dumps({"tool_input": {"command": "echo <<" + "'" + "EOF"}}))
+PY
+)"
+  if printf '%s' "$payload" |
+    CLAUDE_PROJECT_DIR="$TMP_ROOT/guard-repo" "$ROOT/hooks/guard.sh" \
+      >/dev/null 2>"$stderr_file"; then
+    fail "guard allowed shared-line-heredoc command"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 2 ] ||
+    fail "guard returned $status instead of 2 for heredoc payload"
+  grep -Fq "could not safely inspect command: unbalanced quoting around a heredoc" "$stderr_file" ||
+    fail "guard gave wrong message for heredoc payload, got: $(cat "$stderr_file")"
+}
+
+assert_guard_heredoc_python_direct() {
+  stdout_file="$TMP_ROOT/guard.stdout"
+  stderr_file="$TMP_ROOT/guard.stderr"
+  payload="$(python3 - <<'PY'
+import json
+# Shared-line-heredoc with unbalanced quoting: heredoc marker on same line with unclosed single quote
+print(json.dumps({"tool_input": {"command": "echo <<" + "'" + "EOF"}}))
+PY
+)"
+  if printf '%s' "$payload" |
+    python3 "$ROOT/hooks/guard.py" >"$stdout_file" 2>"$stderr_file"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] ||
+    fail "guard.py returned $status instead of 0 for heredoc payload"
+  grep -Fq "could not safely inspect command: unbalanced quoting around a heredoc" "$stdout_file" ||
+    fail "guard.py gave wrong message for heredoc payload, got stdout: $(cat "$stdout_file")"
+  if grep -Fq "Traceback" "$stderr_file" 2>/dev/null; then
+    fail "guard.py output Traceback for heredoc payload, stderr was: $(cat "$stderr_file")"
+  fi
+}
+
 test_guard_staging_policy() {
   mkdir -p "$TMP_ROOT/guard-repo/.brigade"
 
@@ -274,6 +319,8 @@ still quoted text'"
   assert_guard_payload_blocks \
     "non-string command" '{"tool_input":{"command":["git","add","."]}}'
   assert_guard_parser_failure_blocks
+  assert_guard_heredoc_payload_blocks
+  assert_guard_heredoc_python_direct
 }
 
 config_run() { # brigade-config against a fixture repo and a fake home
