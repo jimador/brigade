@@ -609,6 +609,27 @@ PY
     fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger fence rendering is broken"
 }
 
+test_execute_artifact_verification() {
+  # Check presence of "returning a path you did not actually write" in brigade-execute.js.
+  count="$(grep -c 'returning a path you did not actually write' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated 'returning a path you did not actually write' (found $count, expected 1)"
+
+  # Check presence of "automatic FAIL with a blocking finding" in brigade-execute.js.
+  count="$(grep -c 'automatic FAIL with a blocking finding' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated 'automatic FAIL with a blocking finding' (found $count, expected 1)"
+
+  # Check presence of "Artifact check" in brigade-execute.js.
+  count="$(grep -c 'Artifact check' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated 'Artifact check' (found $count, expected 1)"
+
+  # Check steward-land prompt's artifact-check step references the verdict path in source.
+  grep -q 'Artifact check — run: head -3 ${verdictPath}' "$ROOT/workflows/src/brigade-execute.js" ||
+    fail "brigade-execute.js source missing artifact-check step referencing verdictPath"
+}
+
 test_schema_examples_validate() {
   fixture="$TMP_ROOT/schema-examples"
   mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
@@ -753,5 +774,6 @@ test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_validate_ledger_artifacts
 test_execute_ledger_wiring
+test_execute_artifact_verification
 test_schema_examples_validate
 echo "PASS: brigade operational regressions"
