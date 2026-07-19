@@ -524,61 +524,17 @@ const configPath = process.argv[3];
 const src = fs.readFileSync(configPath, 'utf8');
 const blocks = new Function(src + '; return MD_SCHEMA_BLOCKS')();
 
-// Helper to clean YAML: remove inline comments and documentation example lines,
-// and provide sensible empty values for array/object keys.
+// Helper to clean YAML: strip trailing "# comment" annotations and blank lines.
+// Array/object example content (sources:, files_changed:, findings:, etc.) is left
+// intact and instantiated for real — that's the whole point of this test: it has to
+// actually run the pasted examples' array entries (including the pipe-enum inside
+// findings) through the validator, not discard them.
 function cleanYaml(yamlText) {
-  const lines = yamlText.split('\n');
-  const cleaned = [];
-  const arrayKeys = ['sources', 'urls', 'files_changed', 'commands', 'findings_addressed', 'findings'];
-  let skipUntilIndent = -1;
-
-  for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
-
-    // If we're skipping a multi-line array, check if this line is still part of it.
-    if (skipUntilIndent >= 0) {
-      const indent = line.search(/\S/);
-      if (indent === -1 || indent > skipUntilIndent) {
-        // Still part of the multi-line array, skip it.
-        continue;
-      } else {
-        // Back to main level, stop skipping.
-        skipUntilIndent = -1;
-      }
-    }
-
-    // Remove inline comments first.
-    line = line.replace(/\s+#.*$/, '');
-
-    // Skip completely empty lines.
-    if (line.trim() === '') {
-      continue;
-    }
-
-    // Check if this is an array key with an example that needs cleanup.
-    if (line.trim().endsWith(':')) {
-      const key = line.trim().slice(0, -1);
-      if (arrayKeys.includes(key)) {
-        // This is an array key. Look ahead to see if there are example items.
-        let hasExamples = false;
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1];
-          const nextIndent = nextLine.search(/\S/);
-          const currentIndent = line.search(/\S/);
-          if (nextIndent > currentIndent && nextLine.trim().startsWith('-')) {
-            hasExamples = true;
-            skipUntilIndent = currentIndent; // Skip until we're back at this indent level.
-          }
-        }
-        // Emit the key with empty array.
-        line = line.replace(/:$/, ': []');
-      }
-    }
-
-    cleaned.push(line);
-  }
-
-  return cleaned.join('\n');
+  return yamlText
+    .split('\n')
+    .map((line) => line.replace(/\s+#.*$/, ''))
+    .filter((line) => line.trim() !== '')
+    .join('\n');
 }
 
 // For each schema type, extract and clean the YAML envelope from MD_SCHEMA_BLOCKS.
@@ -601,11 +557,22 @@ for (const type of ['brief', 'report', 'verdict', 'ledger']) {
     throw new Error(`schema: 1 not found in MD_SCHEMA_BLOCKS.${type}`);
   }
 
-  // Clean the YAML: remove comments and documentation examples.
+  // Clean the YAML: strip trailing comments and blank lines. Arrays/objects
+  // (sources, files_changed, findings, ...) survive intact.
   yamlText = cleanYaml(yamlText);
 
-  // Replace placeholders with the literal string 'sample'.
-  const envelope = yamlText.replace(/<[^>]*>/g, 'sample');
+  // Replace <placeholder> markers with the literal string 'sample'.
+  let envelope = yamlText.replace(/<[^>]*>/g, 'sample');
+
+  // Some fields document their enum inline as a bare `key: alt1|alt2|alt3` value
+  // (not a `<placeholder>`, not a trailing comment) — e.g. findings' `severity:
+  // blocking|high|medium|low`. Resolve those down to their first alternative so
+  // the instantiated example carries one concrete, real value the validator
+  // actually checks (a dropped or corrupted alternative here breaks the test).
+  envelope = envelope.replace(
+    /(:\s*)([A-Za-z][\w-]*(?:\|[A-Za-z][\w-]*)+)/g,
+    (_m, prefix, alts) => prefix + alts.split('|')[0]
+  );
 
   // Store the extracted envelope and set up the fixture spec.
   specs[type] = { envelope };
