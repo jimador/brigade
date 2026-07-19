@@ -516,7 +516,7 @@ test_schema_examples_validate() {
            "$fixture/.brigade/dishes/sample/reports" \
            "$fixture/.brigade/dishes/sample/state"
 
-  # Extract and validate each schema block example.
+  # Extract schema examples from MD_SCHEMA_BLOCKS and instantiate them as validated fixtures.
   node - "$fixture" "$ROOT/workflows/config.js" <<'NODE' || fail "failed to extract and validate schema examples"
 const fs = require('fs');
 const fixture = process.argv[2];
@@ -524,49 +524,122 @@ const configPath = process.argv[3];
 const src = fs.readFileSync(configPath, 'utf8');
 const blocks = new Function(src + '; return MD_SCHEMA_BLOCKS')();
 
-// Verify all four blocks have schema: 1.
+// Helper to clean YAML: remove inline comments and documentation example lines,
+// and provide sensible empty values for array/object keys.
+function cleanYaml(yamlText) {
+  const lines = yamlText.split('\n');
+  const cleaned = [];
+  const arrayKeys = ['sources', 'urls', 'files_changed', 'commands', 'findings_addressed', 'findings'];
+  let skipUntilIndent = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // If we're skipping a multi-line array, check if this line is still part of it.
+    if (skipUntilIndent >= 0) {
+      const indent = line.search(/\S/);
+      if (indent === -1 || indent > skipUntilIndent) {
+        // Still part of the multi-line array, skip it.
+        continue;
+      } else {
+        // Back to main level, stop skipping.
+        skipUntilIndent = -1;
+      }
+    }
+
+    // Remove inline comments first.
+    line = line.replace(/\s+#.*$/, '');
+
+    // Skip completely empty lines.
+    if (line.trim() === '') {
+      continue;
+    }
+
+    // Check if this is an array key with an example that needs cleanup.
+    if (line.trim().endsWith(':')) {
+      const key = line.trim().slice(0, -1);
+      if (arrayKeys.includes(key)) {
+        // This is an array key. Look ahead to see if there are example items.
+        let hasExamples = false;
+        if (i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          const nextIndent = nextLine.search(/\S/);
+          const currentIndent = line.search(/\S/);
+          if (nextIndent > currentIndent && nextLine.trim().startsWith('-')) {
+            hasExamples = true;
+            skipUntilIndent = currentIndent; // Skip until we're back at this indent level.
+          }
+        }
+        // Emit the key with empty array.
+        line = line.replace(/:$/, ': []');
+      }
+    }
+
+    cleaned.push(line);
+  }
+
+  return cleaned.join('\n');
+}
+
+// For each schema type, extract and clean the YAML envelope from MD_SCHEMA_BLOCKS.
+const specs = {};
 for (const type of ['brief', 'report', 'verdict', 'ledger']) {
   const block = blocks[type];
   if (!block) {
     throw new Error(`MD_SCHEMA_BLOCKS.${type} not found`);
   }
+
+  // Extract the YAML fence from the block.
   const match = block.match(/\`\`\`yaml\n([\s\S]*?)\n\`\`\`/);
   if (!match) {
     throw new Error(`No YAML fence found in MD_SCHEMA_BLOCKS.${type}`);
   }
-  if (!/^schema:\s*1/m.test(match[1])) {
+
+  // Check that schema: 1 is present.
+  let yamlText = match[1];
+  if (!/^schema:\s*1/m.test(yamlText)) {
     throw new Error(`schema: 1 not found in MD_SCHEMA_BLOCKS.${type}`);
   }
+
+  // Clean the YAML: remove comments and documentation examples.
+  yamlText = cleanYaml(yamlText);
+
+  // Replace placeholders with the literal string 'sample'.
+  const envelope = yamlText.replace(/<[^>]*>/g, 'sample');
+
+  // Store the extracted envelope and set up the fixture spec.
+  specs[type] = { envelope };
 }
 
-// Create valid fixtures with minimal envelopes (extracted keys + concrete values).
+// Define fixture paths and required body sections for each type.
 const fixtures = {
   brief: {
     dir: 'briefs',
     file: '1-sample.md',
-    envelope: 'doc: brief\nschema: 1\ndish: sample\nitem: sample\nrole: scout\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nquestion: sample\nconfidence: high\nsources: []\nurls: []',
+    envelope: specs.brief.envelope,
     body: '## Answer\n\nSample answer.'
   },
   report: {
     dir: 'reports',
     file: 'sample-cook.md',
-    envelope: 'doc: report\nschema: 1\ndish: sample\nitem: sample\nrole: cook\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nstatus: done\nattempt: 1\nbranch: wip/sample/sample\nfiles_changed: []\ncommands: []\nfindings_addressed: []\nledger: null',
+    envelope: specs.report.envelope,
     body: '## Summary\n\nSample summary.\n\n## Evidence\n\nSample evidence.'
   },
   verdict: {
     dir: 'reports',
     file: 'sample-verdict.md',
-    envelope: 'doc: verdict\nschema: 1\ndish: sample\nitem: sample\nrole: inspector\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nverdict: PASS\nattempt_reviewed: 1\nreran_gate: true\nfindings: []\ntrivial_only: false',
-    body: '## Verdict\n\nPASS\n\n## Findings\n\nNo findings.\n\n## Evidence check\n\nValidator test.'
+    envelope: specs.verdict.envelope,
+    body: '## Verdict\n\nSample verdict.\n\n## Findings\n\nNo findings.\n\n## Evidence check\n\nValidator test.'
   },
   ledger: {
     dir: 'state',
     file: 'sample.md',
-    envelope: 'doc: ledger\nschema: 1\ndish: sample\nitem: sample\nrole: cook\nmodel: haiku\ncreated: 2026-07-04T03:10:00Z\nattempt: 1\nupdated: 2026-07-04T03:10:00Z',
+    envelope: specs.ledger.envelope,
     body: '## Canon\n\nC1. Sample canonical unit.\n\n## World state\n\nW1. [RELIABLE] Sample state.'
   }
 };
 
+// Write each fixture as a markdown file with YAML frontmatter + body.
 for (const [type, spec] of Object.entries(fixtures)) {
   const frontmatter = `---\n${spec.envelope}\n---\n\n${spec.body}`;
   const dir = `${fixture}/.brigade/dishes/sample/${spec.dir}`;
@@ -581,7 +654,7 @@ for (const [type, spec] of Object.entries(fixtures)) {
 }
 NODE
 
-  # Run brigade-validate on each example.
+  # Run brigade-validate on each extracted example and assert clean ok line.
   for type in brief report verdict ledger; do
     case "$type" in
       brief)
