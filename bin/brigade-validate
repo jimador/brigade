@@ -193,14 +193,22 @@ function validateFile(file) {
           }
         }
         const entries = listEntries(fm, 'items')
-        for (let i = 0; i < slugs.length; i++) {
-          if (statuses[i] === 'done') {
-            const vpath = path.join(path.dirname(file), 'reports', slugs[i] + '-verdict.md')
-            if (!fs.existsSync(vpath)) {
-              warnings.push(`done item '${slugs[i]}' has no reports/${slugs[i]}-verdict.md`)
-            }
-            if (entries[i] && !entries[i].includes('attempts:')) {
-              warnings.push(`done item '${slugs[i]}' has no attempts record`)
+        const slugPattern = new RegExp(`(?:^|[\\s{,])slug:\\s*(\\[[^\\]]*\\]|"[^"]*"|[^,}\\s]+)`)
+        const statusPattern = new RegExp(`(?:^|[\\s{,])status:\\s*(\\[[^\\]]*\\]|"[^"]*"|[^,}\\s]+)`)
+        for (const entry of entries) {
+          const slugMatch = entry.match(slugPattern)
+          const statusMatch = entry.match(statusPattern)
+          if (slugMatch && statusMatch) {
+            const slug = slugMatch[1].trim()
+            const status = statusMatch[1].trim()
+            if (status === 'done') {
+              const vpath = path.join(path.dirname(file), 'reports', slug + '-verdict.md')
+              if (!fs.existsSync(vpath)) {
+                warnings.push(`done item '${slug}' has no reports/${slug}-verdict.md`)
+              }
+              if (!entry.includes('attempts:')) {
+                warnings.push(`done item '${slug}' has no attempts record`)
+              }
             }
           }
         }
