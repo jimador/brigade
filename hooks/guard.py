@@ -53,6 +53,53 @@ def _skip_arithmetic(line, i):
         i += 1
     if depth > 0: raise GuardError("unbalanced quoting around a heredoc")
     return i
+def _advance_quote_state(line, i, stack):
+    # One step of quote/substitution-frame bookkeeping (rules 1-2), shared by the
+    # heredoc recovery scanner and the plain frame-depth check below: single/double
+    # quotes toggle (fresh per substitution frame), backslash escapes outside single
+    # quotes, $(( skips to its matching )) verbatim, and $( pushes a fresh frame that
+    # a following ) pops. No heredoc-specific logic lives here.
+    frame = stack[-1]
+    quote = frame["quote"]
+    char = line[i]
+    if char == "\\" and quote != "'":
+        return i + 2
+    if quote == "'":
+        if char == "'": frame["quote"] = None
+        return i + 1
+    if quote == '"':
+        if char == '"':
+            frame["quote"] = None
+            return i + 1
+        if line[i:i + 3] == "$((": return _skip_arithmetic(line, i)
+        if line[i:i + 2] == "$(":
+            stack.append({"quote": None})
+            return i + 2
+        return i + 1
+    # quote is None here: OUTSIDE, whether at top level or inside a clean frame.
+    if char == "'":
+        frame["quote"] = "'"
+        return i + 1
+    if char == '"':
+        frame["quote"] = '"'
+        return i + 1
+    if line[i:i + 3] == "$((": return _skip_arithmetic(line, i)
+    if line[i:i + 2] == "$(":
+        stack.append({"quote": None})
+        return i + 2
+    if char == ")" and len(stack) > 1:
+        stack.pop()
+        return i + 1
+    return i + 1
+def _frame_depth(line, limit):
+    # How many $(...) substitution frames are still open just before `limit` in the
+    # line. Used to decide whether a heredoc operator sits inside a live substitution
+    # (rule 8) -- an ordinary top-level heredoc is left untouched so anything hiding in
+    # its own delimiter (like a nested $(...)) still reaches substitutions()/inspect().
+    stack, i = [{"quote": None}], 0
+    while i < limit:
+        i = _advance_quote_state(line, i, stack)
+    return len(stack) - 1
 def _scan_heredocs(line):
     # Recovery path for lines shlex refuses to tokenize: a line whose only "unbalanced"
     # quote is one opened by a double-quoted command substitution is still a real,
@@ -63,43 +110,11 @@ def _scan_heredocs(line):
     stack = [{"quote": None}]
     while i < n:
         frame = stack[-1]
-        quote = frame["quote"]
-        char = line[i]
-        if char == "\\" and quote != "'":
-            i += 2
-            continue
-        if quote == "'":
-            if char == "'": frame["quote"] = None
-            i += 1
-            continue
-        if quote == '"':
-            if char == '"':
-                frame["quote"] = None
-                i += 1
-            elif line[i:i + 3] == "$((":
-                i = _skip_arithmetic(line, i)
-            elif line[i:i + 2] == "$(":
-                stack.append({"quote": None})
-                i += 2
-            else:
-                i += 1
+        if frame["quote"] is not None:
+            i = _advance_quote_state(line, i, stack)
             continue
         # quote is None here: OUTSIDE, whether at top level or inside a clean frame.
-        if char == "'":
-            frame["quote"] = "'"
-            i += 1
-        elif char == '"':
-            frame["quote"] = '"'
-            i += 1
-        elif line[i:i + 3] == "$((":
-            i = _skip_arithmetic(line, i)
-        elif line[i:i + 2] == "$(":
-            stack.append({"quote": None})
-            i += 2
-        elif char == ")" and len(stack) > 1:
-            stack.pop()
-            i += 1
-        elif line[i:i + 3] == "<<<":
+        if line[i:i + 3] == "<<<":
             i += 3
         elif line[i:i + 2] == "<<":
             operator_start = i
@@ -125,7 +140,7 @@ def _scan_heredocs(line):
                 if not delimiter: raise GuardError("unbalanced quoting around a heredoc")
             results.append((delimiter, strip_tabs, quoted, (operator_start, i)))
         else:
-            i += 1
+            i = _advance_quote_state(line, i, stack)
     if len(stack) == 1 and stack[0]["quote"] is not None:
         raise GuardError("unbalanced quoting around a heredoc")
     return results
@@ -147,7 +162,8 @@ def strip_heredocs(source):
             code.append("\n")
             continue
         found = list(heredocs(line))
-        code.append(_mask_spans(line, [span for *_, span in found]))
+        mask = [span for *_, span in found if _frame_depth(line, span[0]) > 0]
+        code.append(_mask_spans(line, mask))
         pending.extend((delimiter, strip_tabs, quoted) for delimiter, strip_tabs, quoted, span in found)
     if pending: raise GuardError("unterminated heredoc")
     return "".join(code), nested
