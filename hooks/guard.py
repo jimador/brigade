@@ -24,6 +24,30 @@ def substitutions(source, single_quotes_are_data=True, comments_are_data=False):
     if "$(" in residue or "`" in residue: raise GuardError("ambiguous command substitution")
     for match in matches:
         yield match.group(1) if match.group(1) is not None else match.group(2)
+def neutralize_arithmetic(source):
+    # $(( expr )) is arithmetic, not a command substitution: its interior is numbers,
+    # operators and variable names, never a command. Blank each balanced arithmetic span
+    # so substitutions() doesn't misread the $( as a command sub and heredocs() doesn't
+    # misread a << as a heredoc. A span whose interior itself contains a command
+    # substitution ($( or a backtick) is NOT arithmetic-safe — leave it for the normal,
+    # fail-closed pipeline. An unbalanced $(( is left untouched (never raise here; a
+    # single-quoted literal $(( must not become a hard error).
+    out, i, n = [], 0, len(source)
+    while i < n:
+        if source[i:i + 3] == "$((":
+            depth, j = 2, i + 3
+            while j < n and depth > 0:
+                depth += 1 if source[j] == "(" else -1 if source[j] == ")" else 0
+                j += 1
+            if depth == 0:
+                interior = source[i + 3:j]
+                if "$(" not in interior and "`" not in interior:
+                    out.append(" " * (j - i))
+                    i = j
+                    continue
+        out.append(source[i])
+        i += 1
+    return "".join(out)
 def heredocs(line):
     if "<<" not in line: return
     lexer = shlex.shlex(line, posix=False, punctuation_chars="<")
@@ -320,6 +344,7 @@ def git_command(tokens, index):
     return None if index >= len(tokens) else (tokens[index], tokens[index + 1:])
 def inspect(source, depth=0):
     if depth > 8: raise GuardError("nested inspection limit exceeded")
+    source = neutralize_arithmetic(source)
     code, heredoc_nested = strip_heredocs(source)
     for nested in [*heredoc_nested, *substitutions(code)]:
         violation = inspect(nested, depth + 1)

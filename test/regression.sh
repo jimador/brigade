@@ -848,9 +848,24 @@ EOF
   fi
 }
 
+test_guard_arithmetic() {
+  # $(( )) arithmetic is inert data, not a command substitution or a heredoc.
+  assert_guard_allows 'git commit -m "$((1+1))"'
+  assert_guard_allows 'echo "$((1<<2))"'
+  assert_guard_allows 'x=$((1<<2))'
+  assert_guard_allows 'echo $((2*3))'
+  assert_guard_allows 'git commit -m "$(( (1+2)*3 ))"'
+  assert_guard_allows "grep '\$(('"
+  # SECURITY: a real command substitution nested in arithmetic is still denied
+  # (the nested $( keeps the span un-neutralized; substitutions() refuses it as
+  # ambiguous rather than reaching ALLOW — a deny either way, never a bypass).
+  assert_guard_blocks 'echo "$(( $(git add -A) ))"'
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
+test_guard_arithmetic
 test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
