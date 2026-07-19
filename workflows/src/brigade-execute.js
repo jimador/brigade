@@ -57,6 +57,8 @@ Attempt: ${attemptIndex + 1} of this item's ladder
 Stamp for report frontmatter (created:): ${A.now}
 
 Write your cook report to: ${reportPath}
+That file MUST exist on disk with doc: report frontmatter before you return —
+returning a path you did not actually write is a failed attempt.
 An Inspector will read that report and write its verdict to: ${verdictPath}
 
 Verification gate — run every command, paste the real output as evidence:
@@ -84,6 +86,9 @@ THE PACKET the cook worked against:
 ${item.packet}
 
 Cook's report: ${reportPath}
+FIRST verify that report file exists with doc: report frontmatter (head -3 it).
+Missing file or wrong doc type = automatic FAIL with a blocking finding (id A0,
+location: the missing path) — inspect nothing else first.
 Write your verdict to: ${verdictPath}
 
 Verification gate the cook should have run — check the evidence is real, not paraphrased:
@@ -113,7 +118,7 @@ You never run git add or git commit, never touch any file outside .brigade/, and
 never push. Return the result per the steward schema.
 `
 
-const stewardLandPrompt = (worktreePath, branch) => `
+const stewardLandPrompt = (worktreePath, branch, verdictPath) => `
 You are the Steward landing ONE finished, passed work item. Follow these steps in
 order and stop at the first failure.
 
@@ -122,6 +127,12 @@ order and stop at the first failure.
    Any modified or untracked file OUTSIDE .brigade/ is contamination. If you see
    one, do NOT land: return ok: false, contamination: true, and describe what you
    found in detail.
+
+1b. Artifact check — run: head -3 ${verdictPath} — it must exist and its
+   frontmatter must start doc: verdict. If it is missing or the doc type is wrong,
+   treat that as the artifact-missing outcome: do NOT land, return ok: false with
+   detail naming the missing artifact (never treat the failing head as a shell error
+   to retry).
 
 2. Rebase the item branch onto the delivery branch:
      git -C ${worktreePath} rebase ${A.deliveryBranch}
@@ -360,7 +371,7 @@ async function runItem(item, promises) {
     findingsHistory.push({ agentType, attempt: i, findings: verdictResult.findings || [] })
     blog('inspector', `verdict PASS for ${item.slug} attempt ${i + 1}${verdictResult.trivialOnly ? ' (trivial findings only)' : ''}; landing`)
 
-    const landResult = await withLandLock(() => agent(stewardLandPrompt(worktreePath, branch), {
+    const landResult = await withLandLock(() => agent(stewardLandPrompt(worktreePath, branch, verdictPath), {
       label: `steward-land:${item.slug}`,
       phase: 'Land',
       schema: SCHEMA_STEWARD_RETURN,

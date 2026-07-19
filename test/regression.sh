@@ -209,6 +209,39 @@ PY
   fi
 }
 
+assert_guard_heredoc_unquoted_banned_sub() {
+  stderr_file="$TMP_ROOT/guard.stderr"
+  payload="$(python3 - <<'PY'
+import json
+# Unquoted-delimiter shared-line heredoc with banned command substitution
+print(json.dumps({"tool_input": {"command": "cat <<EOF\n$(git add -A)\nEOF"}}))
+PY
+)"
+  if run_guard_payload "$payload"; then
+    fail "guard allowed unquoted heredoc with banned substitution"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 2 ] ||
+    fail "guard returned $status instead of 2 for unquoted heredoc banned substitution"
+  grep -Fq "brigade guard: no indiscriminate staging" "$stderr_file" ||
+    fail "guard gave wrong message for unquoted heredoc banned substitution, got: $(cat "$stderr_file")"
+}
+
+assert_guard_blocks_with_exact_message() {
+  command="$1"
+  expected_message="$2"
+  if run_guard "$command"; then
+    fail "guard allowed: $command"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 2 ] ||
+    fail "guard returned $status instead of 2 for: $command"
+  grep -Fq "brigade guard: $expected_message" "$stderr_file" ||
+    fail "guard gave wrong message for: $command, expected 'brigade guard: $expected_message', got: $(cat "$stderr_file")"
+}
+
 test_guard_staging_policy() {
   mkdir -p "$TMP_ROOT/guard-repo/.brigade"
 
@@ -321,6 +354,25 @@ still quoted text'"
   assert_guard_parser_failure_blocks
   assert_guard_heredoc_payload_blocks
   assert_guard_heredoc_python_direct
+
+  # Benign shared-line heredoc with quoted delimiter and clean terminator — should allow
+  assert_guard_allows "cat <<'EOF'
+benign shared-line body
+EOF"
+
+  # Shared-line heredoc followed by broad-staging command via && — should block with exact message
+  assert_guard_blocks_with_exact_message "cat <<'EOF'
+benign
+EOF
+&& git add -A" "no indiscriminate staging"
+
+  # gh pr create with shared-line heredoc body — should allow (not a git command)
+  assert_guard_allows "gh pr create --body <<'EOF'
+Pull request description text
+EOF"
+
+  # Unquoted-delimiter shared-line heredoc containing banned command substitution — should block with exact message
+  assert_guard_heredoc_unquoted_banned_sub
 }
 
 config_run() { # brigade-config against a fixture repo and a fake home
@@ -557,6 +609,27 @@ PY
     fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger fence rendering is broken"
 }
 
+test_execute_artifact_verification() {
+  # Check presence of "returning a path you did not actually write" in brigade-execute.js.
+  count="$(grep -c 'returning a path you did not actually write' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated 'returning a path you did not actually write' (found $count, expected 1)"
+
+  # Check presence of "automatic FAIL with a blocking finding" in brigade-execute.js.
+  count="$(grep -c 'automatic FAIL with a blocking finding' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated 'automatic FAIL with a blocking finding' (found $count, expected 1)"
+
+  # Check presence of "Artifact check" in brigade-execute.js.
+  count="$(grep -c 'Artifact check' "$ROOT/workflows/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js missing or duplicated 'Artifact check' (found $count, expected 1)"
+
+  # Check steward-land prompt's artifact-check step references the verdict path in source.
+  grep -q 'Artifact check — run: head -3 ${verdictPath}' "$ROOT/workflows/src/brigade-execute.js" ||
+    fail "brigade-execute.js source missing artifact-check step referencing verdictPath"
+}
+
 test_schema_examples_validate() {
   fixture="$TMP_ROOT/schema-examples"
   mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
@@ -701,5 +774,6 @@ test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_validate_ledger_artifacts
 test_execute_ledger_wiring
+test_execute_artifact_verification
 test_schema_examples_validate
 echo "PASS: brigade operational regressions"
