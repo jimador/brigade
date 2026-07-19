@@ -128,7 +128,7 @@ role: scout
 model: haiku
 created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
-confidence: high                  # high|medium|low
+confidence: high                   # high|medium|low
 sources:                          # authority: the code itself, nothing else
   - src/auth/session.ts:10-48
   - package.json:12
@@ -154,8 +154,8 @@ item: auth
 role: scout
 model: haiku
 created: 2026-07-04T03:10:00Z
-depth: light                      # light|medium|heavy
-confidence: high                  # high|medium|low
+depth: light                       # light|medium|heavy
+confidence: high                   # high|medium|low
 sources:                          # repo claims: the code itself
   - src/auth/session.ts:10-48
 urls:                             # every external claim cites a full URL
@@ -192,7 +192,7 @@ item: auth
 role: cook
 model: haiku
 created: 2026-07-04T03:10:00Z
-status: done                      # done|blocked
+status: done                       # done|blocked
 attempt: 1                        # 2+ = rework pass
 branch: wip/<delivery-slug>/<item-slug>
 files_changed:                    # must be ⊆ the packet's file list
@@ -222,7 +222,7 @@ item: auth
 role: inspector
 model: haiku
 created: 2026-07-04T03:10:00Z
-verdict: PASS                     # PASS|FAIL
+verdict: PASS                      # PASS|FAIL
 attempt_reviewed: 1
 reran_gate: true                  # false requires a reason in the body
 findings:
