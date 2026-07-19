@@ -341,7 +341,12 @@ API signature, a "mirror this test" precedent, a resolver/lookup behavior, an ex
 wire shape — is read at source level before dispatch: quote the signature, the precedent's
 actual calls, the query builder's WHERE/label clause, or the primary doc. An unanchored
 scout claim is an inference to re-derive, not a fact to paste. Dry-run every distinct gate
-command and self-check grep on the base branch before dispatch.
+command and self-check grep on the base branch before dispatch. Two claim classes get
+extra teeth: an exhaustiveness list ("all call sites", "all files with X") is re-derived
+by your own grep at packet-write time, never copied from a brief or review (every copied
+list so far has been short); and a parity claim ("matches today's behavior") is verified
+against the base branch itself — sibling artifacts written alongside the change (docs,
+tests, comments) validate each other circularly and prove nothing.
 
 **Disjointness is the spine.** Two work items in the same wave must not touch the same
 files. Anything that genuinely overlaps is sequenced with a dependency edge, not
@@ -350,7 +355,15 @@ parallelized. A merge conflict later means the decomposition was wrong — recor
 
 **Shared contracts own their blast radius.** A work item that edits a shared type, schema,
 or interface owns every consumer that must compile against it — name those consumers in its
-scope, and put it first in the DAG so dependents branch from the merged contract.
+scope, and put it first in the DAG so dependents branch from the merged contract. The same
+ownership runs along call chains: an item adding a leaf API, callback, or config flag names
+every hop of the chain the real consumer traverses (leaf → panel → section → host; producer
+→ resolver → policy) and verifies through the consumer end, not the producer in isolation —
+"the mechanism exists" is not "callers actually traverse it", so a scout question must cover
+invocation topology (who mounts this, how do the existing tests mount it) whenever behavior
+routes through a central handler, middleware, or DI. And a shared facade/re-export that ≥2
+sibling items import is created by the producing item's own files list — never left for the
+first downstream cook to discover missing.
 
 **The haiku bar** (the bar every first-attempt packet must clear, whatever model cooks
 it). Every work item must satisfy ALL of:
@@ -368,8 +381,10 @@ it). Every work item must satisfy ALL of:
 An item that can't meet the bar gets **split further**. If it's irreducible and still hard
 (cross-cutting, concurrency, security, data correctness, subtle contracts — plus the
 proven cheap-model failure classes: comparisons across two serialization/hash domains,
-soundness/under-approximation proofs, and packets pasting verbatim external
-signatures/citations), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
+soundness/under-approximation proofs, packets pasting verbatim external
+signatures/citations, and precision-text work demanding literal placeholder text,
+byte-faithful extraction/mirroring, or exact alignment — cheap cooks went 0/4 on that
+class and same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
 Heavy items should be the exception; if more than ~1 in 5 items is heavy, your
 decomposition is too coarse.
 

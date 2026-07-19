@@ -116,6 +116,13 @@ each finding was resolved.
   needing one is a BLOCKED report, not an edit. **Deleting or moving files outside the list
   is absolutely forbidden**, however misplaced they look — report them, never remove them
   (2026-07-13 incident: a resumed cook `rm`'d a repo-root file it judged to be debris).
+- **Every path resolves against YOUR worktree, as an absolute path.** The repo root named
+  in your dispatch is a different checkout on a different branch — never edit, grep, or
+  run anything there; a "missing" file or string that exists in your worktree is not
+  missing. Relative paths inherited from a drifting cwd are the same defect (three
+  incidents: a rework cook edited the main checkout and froze three landings; a cook
+  grepped main instead of its worktree and false-blocked; a heredoc failed on a relative
+  path).
 - **Done means done.** Once your report is written and your commit made, the item is
   closed; if resumed afterwards, do exactly what the resuming message asks and nothing
   more — no cleanup sweeps, no housekeeping, no initiative beyond the message's text.
