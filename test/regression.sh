@@ -228,6 +228,20 @@ PY
     fail "guard gave wrong message for unquoted heredoc banned substitution, got: $(cat "$stderr_file")"
 }
 
+assert_guard_blocks_with_exact_message() {
+  command="$1"
+  expected_message="$2"
+  if run_guard "$command"; then
+    fail "guard allowed: $command"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 2 ] ||
+    fail "guard returned $status instead of 2 for: $command"
+  grep -Fq "brigade guard: $expected_message" "$stderr_file" ||
+    fail "guard gave wrong message for: $command, expected 'brigade guard: $expected_message', got: $(cat "$stderr_file")"
+}
+
 test_guard_staging_policy() {
   mkdir -p "$TMP_ROOT/guard-repo/.brigade"
 
@@ -346,11 +360,11 @@ still quoted text'"
 benign shared-line body
 EOF"
 
-  # Shared-line heredoc followed by broad-staging command via && — should block
-  assert_guard_blocks "cat <<'EOF'
+  # Shared-line heredoc followed by broad-staging command via && — should block with exact message
+  assert_guard_blocks_with_exact_message "cat <<'EOF'
 benign
 EOF
-&& git add ."
+&& git add -A" "no indiscriminate staging"
 
   # gh pr create with shared-line heredoc body — should allow (not a git command)
   assert_guard_allows "gh pr create --body <<'EOF'
