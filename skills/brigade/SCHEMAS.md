@@ -72,7 +72,7 @@ Producer: Planner. Consumers: Planner (resume), Inspector (plan check), Analyst.
 ```yaml
 doc: plan
 schema: 1
-dish: cookbook
+dish: <dish-slug>
 role: planner
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -122,8 +122,8 @@ Producer: scout. Consumers: Planner (packet-writing), Inspector (plan check).
 ```yaml
 doc: brief
 schema: 1
-dish: cookbook
-item: auth
+dish: <dish-slug>
+item: <item-slug>
 role: scout
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -149,8 +149,8 @@ a research work item: a decision-grade report on one question, candidate, or sur
 ```yaml
 doc: research
 schema: 1
-dish: cookbook
-item: auth
+dish: <dish-slug>
+item: <item-slug>
 role: scout
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -187,8 +187,8 @@ Producer: cook / cook-heavy. Consumers: Planner (triage), Inspector (review).
 ```yaml
 doc: report
 schema: 1
-dish: cookbook
-item: auth
+dish: <dish-slug>
+item: <item-slug>
 role: cook
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -217,8 +217,8 @@ Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 ```yaml
 doc: verdict
 schema: 1
-dish: cookbook
-item: auth
+dish: <dish-slug>
+item: <item-slug>
 role: inspector
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -244,7 +244,7 @@ Producer: inspector (plan check mode). Consumer: Planner.
 ```yaml
 doc: plan_check
 schema: 1
-dish: cookbook
+dish: <dish-slug>
 role: inspector
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -263,7 +263,7 @@ Producer: analyst. Consumers: Planner, the user, future brain-upgrade passes.
 ```yaml
 doc: analyst
 schema: 1
-dish: cookbook
+dish: <dish-slug>
 role: analyst
 model: haiku
 created: 2026-07-04T03:10:00Z
@@ -291,7 +291,7 @@ Planner when the ticket is promoted. **Not** a substitute for cook packets.
 doc: design_swag
 schema: 1
 role: design
-dish: cookbook
+dish: <dish-slug>
 model: haiku
 created: 2026-07-04T03:10:00Z
 ticket: <source ticket id>
