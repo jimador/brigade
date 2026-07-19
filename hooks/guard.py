@@ -28,7 +28,10 @@ def heredocs(line):
     if "<<" not in line: return
     lexer = shlex.shlex(line, posix=False, punctuation_chars="<")
     lexer.commenters, lexer.whitespace_split = "#", True
-    tokens = list(lexer)
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        raise GuardError("unbalanced quoting around a heredoc")
     for token, raw in zip(tokens, tokens[1:]):
         if token == "<<":
             strip_tabs, raw = raw.startswith("-"), raw.lstrip("-")
@@ -244,6 +247,8 @@ def main():
         violation = inspect(command)
     except GuardError as error:
         print(f"could not safely inspect command: {error}"); return
+    except Exception:
+        print("could not safely inspect command: internal inspection error"); return
     if violation: print(violation)
 if __name__ == "__main__":
     main()
