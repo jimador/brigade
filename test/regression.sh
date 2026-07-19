@@ -765,6 +765,89 @@ NODE
   done
 }
 
+test_validate_retro_readiness() {
+  fixture="$TMP_ROOT/validate-retro"
+  mkdir -p "$fixture/.brigade/dishes/sample/reports"
+
+  # Create a PLAN.md with full envelope and all required body sections, one done item (slug: a), no verdict file.
+  cat >"$fixture/.brigade/dishes/sample/PLAN.md" <<'EOF'
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-07-19T19:45:00Z
+ticket: TEST-1
+source: local
+items:
+  - slug: a
+    status: done
+    depends_on: []
+    attempts: [{ model: haiku, trigger: initial, result: done }]
+---
+
+## Dish
+Retro readiness test fixture demonstrating verdict-missing warning.
+
+## Waves
+- Wave 1: item a
+
+## Packet: a
+Sample work packet for retro readiness.
+EOF
+
+  # Test without verdict file — should warn about missing verdict.
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/PLAN.md" 2>&1)"
+  printf '%s\n' "$output" | grep -Fq "has no reports/a-verdict.md" ||
+    fail "brigade-validate did not warn about missing verdict: $output"
+
+  # Verify exit code is still 0 (warn, not FAIL).
+  if ! CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/PLAN.md" >/dev/null 2>&1; then
+    fail "brigade-validate exited non-zero on retro-readiness warn (should be 0)"
+  fi
+
+  # Create a valid verdict file with full envelope and all required body sections.
+  cat >"$fixture/.brigade/dishes/sample/reports/a-verdict.md" <<'EOF'
+---
+doc: verdict
+schema: 1
+dish: sample
+item: a
+role: inspector
+model: haiku
+created: 2026-07-19T19:45:00Z
+verdict: PASS
+attempt_reviewed: 1
+reran_gate: true
+findings: []
+---
+
+## Verdict
+Retro readiness check passed.
+
+## Findings
+No findings.
+
+## Evidence check
+Verification gate completed successfully.
+EOF
+
+  # Test with verdict file — warn should be gone.
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/PLAN.md" 2>&1)"
+  printf '%s\n' "$output" | grep -Fq "has no reports/a-verdict.md" &&
+    fail "brigade-validate still warns about missing verdict after adding file: $output"
+
+  # Verify exit code is still 0 with no warnings.
+  if ! CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/PLAN.md" >/dev/null 2>&1; then
+    fail "brigade-validate exited non-zero with valid verdict (should be 0)"
+  fi
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
@@ -773,6 +856,7 @@ test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_validate_ledger_artifacts
+test_validate_retro_readiness
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_schema_examples_validate

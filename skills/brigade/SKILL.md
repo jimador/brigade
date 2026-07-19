@@ -382,9 +382,12 @@ An item that can't meet the bar gets **split further**. If it's irreducible and 
 (cross-cutting, concurrency, security, data correctness, subtle contracts — plus the
 proven cheap-model failure classes: comparisons across two serialization/hash domains,
 soundness/under-approximation proofs, packets pasting verbatim external
-signatures/citations, and precision-text work demanding literal placeholder text,
-byte-faithful extraction/mirroring, or exact alignment — cheap cooks went 0/4 on that
-class and same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
+signatures/citations, precision-text work demanding literal placeholder text,
+byte-faithful extraction/mirroring, or exact alignment, and any packet that must NAME a
+specific data-structure alignment / ordering / drop-semantics hazard and require the cook
+to hold it in mind rather than a gate that mechanically enforces it — a named-but-self-
+enforced hazard is the cheap-model failure class, cheap cooks went 0/4 across it, and
+same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
 Heavy items should be the exception; if more than ~1 in 5 items is heavy, your
 decomposition is too coarse.
 
@@ -395,7 +398,12 @@ the user the plan, dispatch
 `brigade-inspector` in **plan check mode**: it first sketches its own decomposition from the
 ticket + scout briefs *without reading your plan* (blind, to break groupthink), then reads
 `PLAN.md` and writes a comparison — coverage differences, per-divergence which version is
-stronger and why, and concrete merge recommendations. You fold in what's right (you own the
+stronger and why, and concrete merge recommendations. It **executes** the packet's pasted
+Verify commands and premise-probes against the real tree — never just reads them; every
+executing plan check this fleet has run caught a defect a reading pass would have shipped
+(an invalid-JSON repro payload, a second latent bug under the stated one, a hard-FAIL that
+would brick a complete historical dish, a Verify command that dies on this environment's
+own shell shims). You fold in what's right (you own the
 plan; the check is information, not instruction). A bad decomposition costs far more than
 one sonnet pass, but not every dish can afford the pass — that trade is what the tier
 already decided.

@@ -4,3 +4,6 @@
 # Local brigade state: board, dishes, worktrees, personal config layer.
 .brigade/
 
+# Python bytecode cache (hooks/guard.py leaves this when executed)
+__pycache__/
+*.pyc

@@ -192,6 +192,26 @@ function validateFile(file) {
             problems.push(`plan missing packet section for item: ${s}`)
           }
         }
+        const entries = listEntries(fm, 'items')
+        const slugPattern = new RegExp(`(?:^|[\\s{,])slug:\\s*(\\[[^\\]]*\\]|"[^"]*"|[^,}\\s]+)`)
+        const statusPattern = new RegExp(`(?:^|[\\s{,])status:\\s*(\\[[^\\]]*\\]|"[^"]*"|[^,}\\s]+)`)
+        for (const entry of entries) {
+          const slugMatch = entry.match(slugPattern)
+          const statusMatch = entry.match(statusPattern)
+          if (slugMatch && statusMatch) {
+            const slug = slugMatch[1].trim()
+            const status = statusMatch[1].trim()
+            if (status === 'done') {
+              const vpath = path.join(path.dirname(file), 'reports', slug + '-verdict.md')
+              if (!fs.existsSync(vpath)) {
+                warnings.push(`done item '${slug}' has no reports/${slug}-verdict.md`)
+              }
+              if (!entry.includes('attempts:')) {
+                warnings.push(`done item '${slug}' has no attempts record`)
+              }
+            }
+          }
+        }
       }
       break
     }
