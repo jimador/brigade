@@ -40,6 +40,11 @@ each quoted contract, every Verify command, every named invariant/hazard. ≤ 20
 units (`C1.` …). If reality contradicts a Canon unit, that is a packet defect: report
 BLOCKED with the contradiction as evidence. Never "fix" Canon to match what you built.
 
+Nothing you learn while working belongs in Canon — not even prior-attempt inspector
+findings. Those are verified facts about the world, so they go in World state as
+`[RELIABLE]` units (anti-example from the ledger's first live dish: a rework cook wrote
+findings F1/F2 into Canon; the Inspector's audit flagged it).
+
 ### World state — maintained by the cook
 
 Numbered units (`W1.` …), each tagged:

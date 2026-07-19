@@ -73,7 +73,21 @@ Only when they apply — omit the section if neither does:
   is wired.
 - **Bug-fix self-falsification.** A packet fixing a bug requires the Cook to reintroduce the
   bug, paste the red run, restore the fix, and paste the green run — a fix whose test never
-  goes red on the broken code is tautological.
+  goes red on the broken code is tautological. The same red-to-green requirement applies to
+  any packet whose hazard class is async/ordering/hang or stale-reference, heavy-flagged or
+  not: every falsified item across two dishes passed inspection first-attempt; every one
+  without a falsify step failed at least once.
+- **Banned pattern.** A packet that forbids a specific code pattern includes a mechanical
+  gate in its Verify (`git diff <base>...HEAD | grep -c '<pattern>'` expected 0) AND pastes
+  the literal correct replacement in the Implement step — a prose-only ban does not change
+  what the Cook writes (the same cast defect recurred 5 times across two dishes despite an
+  explicit per-packet ban).
+- **Git/filesystem choreography.** When acceptance hinges on a git or filesystem side-effect
+  recipe (branch delete, rebase-then-merge, worktree teardown), the Verify runs the actual
+  recipe against a scratch repo — token/shape greps let a topology bug survive two FAIL
+  rounds. And an assertion that a side-effect did NOT happen pins the exact location and
+  the ACTUAL command that would produce it (the spawned process's cwd, each route's real
+  mutating command) — a blanket check at the wrong location passes through real regressions.
 
 ### Steps
 
