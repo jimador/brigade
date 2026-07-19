@@ -71,6 +71,11 @@ Producer: Planner. Consumers: Planner (resume), Inspector (plan check), Analyst.
 
 ```yaml
 doc: plan
+schema: 1
+dish: <dish-slug>
+role: planner
+model: haiku
+created: 2026-07-04T03:10:00Z
 ticket: <source ticket id>         # verbatim, copy-pasteable
 ticket_url: <url|null>
 delivery_branch: feat/<slug>       # delivery-named (repo's own convention); becomes the PR — never brigade/*
@@ -116,8 +121,14 @@ Producer: scout. Consumers: Planner (packet-writing), Inspector (plan check).
 
 ```yaml
 doc: brief
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: scout
+model: haiku
+created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
-confidence: high|medium|low
+confidence: high                   # high|medium|low
 sources:                          # authority: the code itself, nothing else
   - src/auth/session.ts:10-48
   - package.json:12
@@ -137,9 +148,14 @@ a research work item: a decision-grade report on one question, candidate, or sur
 
 ```yaml
 doc: research
-item: <the research ticket slug>
-depth: light|medium|heavy         # set per item at plan time
-confidence: high|medium|low
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: scout
+model: haiku
+created: 2026-07-04T03:10:00Z
+depth: light                       # light|medium|heavy
+confidence: high                   # high|medium|low
 sources:                          # repo claims: the code itself
   - src/auth/session.ts:10-48
 urls:                             # every external claim cites a full URL
@@ -170,7 +186,13 @@ Producer: cook / cook-heavy. Consumers: Planner (triage), Inspector (review).
 
 ```yaml
 doc: report
-status: done|blocked
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: cook
+model: haiku
+created: 2026-07-04T03:10:00Z
+status: done                       # done|blocked
 attempt: 1                        # 2+ = rework pass
 branch: wip/<delivery-slug>/<item-slug>
 files_changed:                    # must be ⊆ the packet's file list
@@ -194,7 +216,13 @@ Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 
 ```yaml
 doc: verdict
-verdict: PASS|FAIL
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: inspector
+model: haiku
+created: 2026-07-04T03:10:00Z
+verdict: PASS                      # PASS|FAIL
 attempt_reviewed: 1
 reran_gate: true                  # false requires a reason in the body
 findings:
@@ -215,6 +243,11 @@ Producer: inspector (plan check mode). Consumer: Planner.
 
 ```yaml
 doc: plan_check
+schema: 1
+dish: <dish-slug>
+role: inspector
+model: haiku
+created: 2026-07-04T03:10:00Z
 blind_sketch_first: true          # sworn: sketch written before reading PLAN.md
 blocking: []                      # list of must-settle-before-dispatch items
 ```
@@ -229,6 +262,11 @@ Producer: analyst. Consumers: Planner, the user, future brain-upgrade passes.
 
 ```yaml
 doc: analyst
+schema: 1
+dish: <dish-slug>
+role: analyst
+model: haiku
+created: 2026-07-04T03:10:00Z
 items_total: 8
 items_reworked: 2
 escalations: 1
@@ -253,6 +291,9 @@ Planner when the ticket is promoted. **Not** a substitute for cook packets.
 doc: design_swag
 schema: 1
 role: design
+dish: <dish-slug>
+model: haiku
+created: 2026-07-04T03:10:00Z
 ticket: <source ticket id>
 ticket_url: <url|null>
 source: obsidian                   # adapter id

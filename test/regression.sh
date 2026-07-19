@@ -510,6 +510,141 @@ PY
     fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger fence rendering is broken"
 }
 
+test_schema_examples_validate() {
+  fixture="$TMP_ROOT/schema-examples"
+  mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
+           "$fixture/.brigade/dishes/sample/reports" \
+           "$fixture/.brigade/dishes/sample/state"
+
+  # Extract schema examples from MD_SCHEMA_BLOCKS and instantiate them as validated fixtures.
+  node - "$fixture" "$ROOT/workflows/config.js" <<'NODE' || fail "failed to extract and validate schema examples"
+const fs = require('fs');
+const fixture = process.argv[2];
+const configPath = process.argv[3];
+const src = fs.readFileSync(configPath, 'utf8');
+const blocks = new Function(src + '; return MD_SCHEMA_BLOCKS')();
+
+// Helper to clean YAML: strip trailing "# comment" annotations and blank lines.
+// Array/object example content (sources:, files_changed:, findings:, etc.) is left
+// intact and instantiated for real — that's the whole point of this test: it has to
+// actually run the pasted examples' array entries (including the pipe-enum inside
+// findings) through the validator, not discard them.
+function cleanYaml(yamlText) {
+  return yamlText
+    .split('\n')
+    .map((line) => line.replace(/\s+#.*$/, ''))
+    .filter((line) => line.trim() !== '')
+    .join('\n');
+}
+
+// For each schema type, extract and clean the YAML envelope from MD_SCHEMA_BLOCKS.
+const specs = {};
+for (const type of ['brief', 'report', 'verdict', 'ledger']) {
+  const block = blocks[type];
+  if (!block) {
+    throw new Error(`MD_SCHEMA_BLOCKS.${type} not found`);
+  }
+
+  // Extract the YAML fence from the block.
+  const match = block.match(/\`\`\`yaml\n([\s\S]*?)\n\`\`\`/);
+  if (!match) {
+    throw new Error(`No YAML fence found in MD_SCHEMA_BLOCKS.${type}`);
+  }
+
+  // Check that schema: 1 is present.
+  let yamlText = match[1];
+  if (!/^schema:\s*1/m.test(yamlText)) {
+    throw new Error(`schema: 1 not found in MD_SCHEMA_BLOCKS.${type}`);
+  }
+
+  // Clean the YAML: strip trailing comments and blank lines. Arrays/objects
+  // (sources, files_changed, findings, ...) survive intact.
+  yamlText = cleanYaml(yamlText);
+
+  // Replace <placeholder> markers with the literal string 'sample'.
+  let envelope = yamlText.replace(/<[^>]*>/g, 'sample');
+
+  // Some fields document their enum inline as a bare `key: alt1|alt2|alt3` value
+  // (not a `<placeholder>`, not a trailing comment) — e.g. findings' `severity:
+  // blocking|high|medium|low`. Resolve those down to their first alternative so
+  // the instantiated example carries one concrete, real value the validator
+  // actually checks (a dropped or corrupted alternative here breaks the test).
+  envelope = envelope.replace(
+    /(:\s*)([A-Za-z][\w-]*(?:\|[A-Za-z][\w-]*)+)/g,
+    (_m, prefix, alts) => prefix + alts.split('|')[0]
+  );
+
+  // Store the extracted envelope and set up the fixture spec.
+  specs[type] = { envelope };
+}
+
+// Define fixture paths and required body sections for each type.
+const fixtures = {
+  brief: {
+    dir: 'briefs',
+    file: '1-sample.md',
+    envelope: specs.brief.envelope,
+    body: '## Answer\n\nSample answer.'
+  },
+  report: {
+    dir: 'reports',
+    file: 'sample-cook.md',
+    envelope: specs.report.envelope,
+    body: '## Summary\n\nSample summary.\n\n## Evidence\n\nSample evidence.'
+  },
+  verdict: {
+    dir: 'reports',
+    file: 'sample-verdict.md',
+    envelope: specs.verdict.envelope,
+    body: '## Verdict\n\nSample verdict.\n\n## Findings\n\nNo findings.\n\n## Evidence check\n\nValidator test.'
+  },
+  ledger: {
+    dir: 'state',
+    file: 'sample.md',
+    envelope: specs.ledger.envelope,
+    body: '## Canon\n\nC1. Sample canonical unit.\n\n## World state\n\nW1. [RELIABLE] Sample state.'
+  }
+};
+
+// Write each fixture as a markdown file with YAML frontmatter + body.
+for (const [type, spec] of Object.entries(fixtures)) {
+  const frontmatter = `---\n${spec.envelope}\n---\n\n${spec.body}`;
+  const dir = `${fixture}/.brigade/dishes/sample/${spec.dir}`;
+  const filePath = `${dir}/${spec.file}`;
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  fs.writeFileSync(filePath, frontmatter);
+  console.log(`Created ${filePath}`);
+}
+NODE
+
+  # Run brigade-validate on each extracted example and assert clean ok line.
+  for type in brief report verdict ledger; do
+    case "$type" in
+      brief)
+        file="$fixture/.brigade/dishes/sample/briefs/1-sample.md"
+        ;;
+      report)
+        file="$fixture/.brigade/dishes/sample/reports/sample-cook.md"
+        ;;
+      verdict)
+        file="$fixture/.brigade/dishes/sample/reports/sample-verdict.md"
+        ;;
+      ledger)
+        file="$fixture/.brigade/dishes/sample/state/sample.md"
+        ;;
+    esac
+
+    output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)"
+    printf '%s\n' "$output" | grep -Fq "ok" &&
+      printf '%s\n' "$output" | grep -Fq "($type)" ||
+      fail "brigade-validate did not report ok for $type example: $output"
+  done
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
@@ -519,4 +654,5 @@ test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_validate_ledger_artifacts
 test_execute_ledger_wiring
+test_schema_examples_validate
 echo "PASS: brigade operational regressions"

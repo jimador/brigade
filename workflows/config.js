@@ -91,8 +91,14 @@ const MD_SCHEMA_BLOCKS = {
 
 \`\`\`yaml
 doc: brief
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: scout
+model: haiku
+created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
-confidence: high|medium|low
+confidence: high                   # high|medium|low
 sources:                          # authority: the code itself, nothing else
   - src/auth/session.ts:10-48
   - package.json:12
@@ -107,7 +113,13 @@ Budget: ≤ 150 lines. Everything pasted is verbatim from the working tree.`,
 
 \`\`\`yaml
 doc: report
-status: done|blocked
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: cook
+model: haiku
+created: 2026-07-04T03:10:00Z
+status: done                       # done|blocked
 attempt: 1                        # 2+ = rework pass
 branch: wip/<delivery-slug>/<item-slug>
 files_changed:                    # must be ⊆ the packet's file list
@@ -150,7 +162,13 @@ final update, quote the live World state in Evidence, set ledger: in the frontma
 
 \`\`\`yaml
 doc: verdict
-verdict: PASS|FAIL
+schema: 1
+dish: <dish-slug>
+item: <item-slug>
+role: inspector
+model: haiku
+created: 2026-07-04T03:10:00Z
+verdict: PASS                      # PASS|FAIL
 attempt_reviewed: 1
 reran_gate: true                  # false requires a reason in the body
 findings:
