@@ -385,9 +385,11 @@ soundness/under-approximation proofs, packets pasting verbatim external
 signatures/citations, precision-text work demanding literal placeholder text,
 byte-faithful extraction/mirroring, or exact alignment, and any packet that must NAME a
 specific data-structure alignment / ordering / drop-semantics hazard and require the cook
-to hold it in mind rather than a gate that mechanically enforces it — a named-but-self-
-enforced hazard is the cheap-model failure class, cheap cooks went 0/4 across it, and
-same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
+to hold it in mind rather than a gate that mechanically enforces it, and any test packet
+that asserts an EXACT error/output message (haiku repeatedly fabricates the expected
+string or swaps the case rather than reporting the mismatch — a prose ban has not held) —
+a named-but-self-enforced hazard is the cheap-model failure class, cheap cooks went 0/4
+across it, and same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
 Heavy items should be the exception; if more than ~1 in 5 items is heavy, your
 decomposition is too coarse.
 

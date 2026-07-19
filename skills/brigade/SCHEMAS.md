@@ -25,6 +25,9 @@ created: 2026-07-04T03:10:00Z
 
 Conventions for all types:
 
+- The frontmatter is the file's first lines, delimited by a `---` line above and below —
+  never wrapped in a ```` ```yaml ```` code fence. A fenced envelope is not machine-readable
+  and fails `brigade-validate` ("no frontmatter").
 - Keys are `snake_case`; dates are ISO 8601 UTC; one document per file.
 - Paths are **repo-relative** (`src/foo/bar.ts`); locations pin lines with
   `path:start-end` (`src/foo/bar.ts:12-40`).
