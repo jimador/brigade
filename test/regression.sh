@@ -769,11 +769,15 @@ test_validate_retro_readiness() {
   fixture="$TMP_ROOT/validate-retro"
   mkdir -p "$fixture/.brigade/dishes/sample/reports"
 
-  # Create a PLAN.md with one done item (slug: a) and no verdict file.
+  # Create a PLAN.md with full envelope and all required body sections, one done item (slug: a), no verdict file.
   cat >"$fixture/.brigade/dishes/sample/PLAN.md" <<'EOF'
 ---
 doc: plan
 schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-07-19T19:45:00Z
 ticket: TEST-1
 source: local
 items:
@@ -784,10 +788,13 @@ items:
 ---
 
 ## Dish
-Retro readiness fixture.
+Retro readiness test fixture demonstrating verdict-missing warning.
+
+## Waves
+- Wave 1: item a
 
 ## Packet: a
-Sample packet.
+Sample work packet for retro readiness.
 EOF
 
   # Test without verdict file — should warn about missing verdict.
@@ -802,11 +809,16 @@ EOF
     fail "brigade-validate exited non-zero on retro-readiness warn (should be 0)"
   fi
 
-  # Create a valid verdict file.
+  # Create a valid verdict file with full envelope and all required body sections.
   cat >"$fixture/.brigade/dishes/sample/reports/a-verdict.md" <<'EOF'
 ---
 doc: verdict
 schema: 1
+dish: sample
+item: a
+role: inspector
+model: haiku
+created: 2026-07-19T19:45:00Z
 verdict: PASS
 attempt_reviewed: 1
 reran_gate: true
@@ -814,13 +826,13 @@ findings: []
 ---
 
 ## Verdict
-All checks passed.
+Retro readiness check passed.
 
 ## Findings
 No findings.
 
 ## Evidence check
-Verification successful.
+Verification gate completed successfully.
 EOF
 
   # Test with verdict file — warn should be gone.
