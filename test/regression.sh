@@ -675,6 +675,116 @@ test_execute_artifact_verification() {
     fail "brigade-execute.js source missing artifact-check step referencing verdictPath"
 }
 
+test_execute_verdict_scribe() {
+  # Pin the landing steward's self-heal behavior by EXECUTING the real prompt-builder
+  # functions out of the GENERATED workflow, the same header-slice `new Function` way
+  # test_review_policy_binding pulls buildDispatchGroups out of brigade-review.js —
+  # not by grepping for the presence of some string. stewardLandPrompt and the two
+  # reconstruction builders are all top-level consts here (no IIFE to slice into), so
+  # the same header slice that already works for resolvePolicy in test_review_config
+  # covers them too.
+  ROOT="$ROOT" node <<'NODE' || fail "execute verdict-scribe self-heal pin failed"
+const fs = require('fs')
+const assert = require('assert')
+const path = process.env.ROOT + '/workflows/brigade-execute.js'
+const src = fs.readFileSync(path, 'utf8')
+
+const marker = '\nreturn runAll(A.items)'
+const idx = src.indexOf(marker)
+assert.ok(idx !== -1, 'runtime return marker not found in brigade-execute.js')
+const header = `${src.slice(0, idx).replace('export const meta', 'const meta')}\n`
+
+const minimalArgs = JSON.stringify({
+  tier: 'two-star',
+  overrides: {},
+  gate: ['npm test'],
+  dishDir: '.brigade/dishes/sample',
+  now: '2026-07-20T00:00:00Z',
+  repoRoot: '/tmp/sample-repo',
+  deliveryBranch: 'main',
+  deliverySlug: 'sample',
+  maxParallel: 2,
+  promptOverrides: {},
+})
+const { stewardLandPrompt, reportReconstructionBlock, verdictReconstructionBlock } =
+  new Function('args', `${header}; return { stewardLandPrompt, reportReconstructionBlock, verdictReconstructionBlock }`)(minimalArgs)
+for (const fn of [stewardLandPrompt, reportReconstructionBlock, verdictReconstructionBlock]) {
+  assert.strictEqual(typeof fn, 'function', 'expected function not found at top level of brigade-execute.js')
+}
+
+// The prose bodies wrap at ~80 columns, so a literal attribution sentence can carry an
+// embedded newline where it wraps — normalize whitespace before substring-matching so
+// this pin isn't coupled to exactly where a line happens to break.
+const flatten = (s) => s.replace(/\s+/g, ' ')
+
+const item = { slug: 'sample-item' }
+const worktreePath = '/tmp/sample-repo/.brigade/worktrees/sample--sample-item'
+const branch = 'wip/sample/sample-item'
+const reportPath = '.brigade/dishes/sample/reports/sample-item-cook.md'
+const verdictPath = '.brigade/dishes/sample/reports/sample-item-verdict.md'
+
+// A synthetic inspector verdict return — the exact shape SCHEMA_VERDICT_RETURN allows —
+// carrying one finding whose id must survive into the reconstructed frontmatter.
+const syntheticVerdict = {
+  verdict: 'PASS',
+  verdictPath,
+  trivialOnly: false,
+  findings: [{ id: 'F1', severity: 'medium', location: 'src/foo.ts:12', summary: 'a synthetic finding' }],
+}
+// A synthetic cook return — the exact shape SCHEMA_COOK_RETURN allows.
+const syntheticCook = {
+  status: 'done',
+  attempt: 1,
+  branch,
+  reportPath,
+  filesChanged: ['src/foo.ts'],
+  summary: 'a synthetic cook summary',
+}
+
+// Absent-data path: no structured return at all -> refuse exactly as today (null block).
+assert.strictEqual(reportReconstructionBlock(item, branch, null), null, 'report reconstruction should be null with no cook data')
+assert.strictEqual(verdictReconstructionBlock(item, 1, null), null, 'verdict reconstruction should be null with no verdict data')
+
+// Missing-artifact path: structured data present -> a reconstruction block is built.
+const verdictBlock = verdictReconstructionBlock(item, 3, syntheticVerdict)
+assert.ok(verdictBlock, 'verdict reconstruction should be built from a real verdict return')
+assert.ok(verdictBlock.includes('id: F1'), 'reconstructed verdict frontmatter dropped the synthetic finding id')
+assert.ok(verdictBlock.includes('attempt_reviewed: 3'), 'reconstructed verdict frontmatter dropped the attempt number')
+assert.ok(
+  flatten(verdictBlock).includes('the inspector returned this verdict without writing the file'),
+  'reconstructed verdict body missing the literal reconstruction attribution',
+)
+
+const reportBlock = reportReconstructionBlock(item, branch, syntheticCook)
+assert.ok(reportBlock, 'report reconstruction should be built from a real cook return')
+assert.ok(reportBlock.includes('src/foo.ts'), 'reconstructed report frontmatter dropped the synthetic filesChanged entry')
+assert.ok(
+  flatten(reportBlock).includes('the cook returned this report without writing the file'),
+  'reconstructed report body missing the literal reconstruction attribution',
+)
+
+// The steward-land prompt itself: with both reconstructions in hand it must instruct
+// a self-heal write (not a refusal) and must embed the reconstructed text verbatim —
+// this is the actual write-if-missing instruction the steward acts on.
+const healingPrompt = stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportBlock, verdictBlock)
+assert.ok(healingPrompt.includes(`write the block below verbatim to ${verdictPath}`), 'steward-land prompt missing the verdict write-if-missing instruction')
+assert.ok(healingPrompt.includes(`write the block below verbatim to ${reportPath}`), 'steward-land prompt missing the report write-if-missing instruction')
+assert.ok(healingPrompt.includes('id: F1'), 'steward-land prompt did not embed the synthetic finding id from the verdict reconstruction')
+assert.ok(
+  flatten(healingPrompt).includes('the inspector returned this verdict without writing the file'),
+  'steward-land prompt missing the literal reconstruction attribution line',
+)
+
+// Absent-data path at the prompt level: null reconstructions -> the steward is told to
+// refuse exactly as before, never told to write anything.
+const refusingPrompt = stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, null, null)
+assert.ok(!refusingPrompt.includes('write the block below verbatim'), 'refusing prompt should carry no self-heal write instruction')
+assert.ok(refusingPrompt.includes('do NOT land, return ok: false'), 'refusing prompt lost the artifact-missing refusal')
+
+console.log('EXECUTE VERDICT-SCRIBE SELF-HEAL PIN OK')
+NODE
+}
+
 test_schema_examples_validate() {
   fixture="$TMP_ROOT/schema-examples"
   mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
@@ -1203,6 +1313,7 @@ test_validate_retro_readiness
 test_validate_analyst_modes
 test_execute_ledger_wiring
 test_execute_artifact_verification
+test_execute_verdict_scribe
 test_schema_examples_validate
 test_review_config
 test_review_policy_binding
