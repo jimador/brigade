@@ -8,6 +8,9 @@ export const meta = {
 // The harness sometimes hands us args as a JSON string instead of an object — normalize once, up front.
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
+// Text an operator's config layers add to every inspector dispatch (Review + Verify).
+const PROMPT_EXTRAS = A.promptOverrides || {}
+
 // Everything below runs inside a single async IIFE (rather than top-level await) so this file
 // stays valid under a plain CommonJS-style syntax check as well as the Workflow runtime.
 return (async () => {
@@ -339,14 +342,262 @@ Return the steward result: ok, detail.`,
     return { contextTier, digest, digestPath }
   }
 
-  async function reviewPhase() {
-    blog('inspector', 'Review stub: dimension dispatch is not implemented yet.')
-    return { findings: [] }
+  // ---- Review: dispatch dimension lenses per REVIEW_POLICY[tier].dispatch (D1) ----
+  //
+  // Dispatch shape only ever branches on POLICY.dispatch/POLICY.groups/POLICY.product —
+  // never on A.tier directly, so a config layer that retunes REVIEW_POLICY (or the
+  // dimension set, via resolveReviewDimensions) is honored without touching this file.
+
+  // Schema forced on each Review dispatch: just the `findings` slice of the shared
+  // SCHEMA_REVIEW_RETURN (config.js) — a single dispatch never knows the whole
+  // review's contextTier or reportPath, only the findings its lens(es) turned up.
+  const SCHEMA_REVIEW_FINDINGS_RETURN = { type: 'object', required: ['findings'], properties: { findings: SCHEMA_REVIEW_RETURN.properties.findings } }
+
+  const SCHEMA_VERIFY_VOTE_RETURN = { type: 'object', required: ['refuted'], properties: { refuted: { type: 'boolean' }, note: { type: 'string' } } }
+
+  // Batch non-product dimensions into dispatch groups per POLICY.dispatch:
+  //   'per-dimension' -> one dispatch per resolved dimension (custom/added dimensions
+  //     fall out of this for free, since it just maps over whatever resolveReviewDimensions
+  //     returned).
+  //   'merged'        -> a single dispatch carrying every resolved dimension's lens.
+  //   'grouped'       -> POLICY.groups' id lists, filtered down to dimensions still
+  //     active after config overrides; any dimension a config layer added that isn't
+  //     named in any built-in group gets its own extra group rather than being dropped.
+  function buildDispatchGroups(nonProductDims, dispatch, policyGroups) {
+    if (dispatch === 'per-dimension') return nonProductDims.map((d) => [d])
+    if (dispatch === 'merged') return nonProductDims.length ? [nonProductDims] : []
+
+    const byId = new Map(nonProductDims.map((d) => [d.id, d]))
+    const mentioned = new Set()
+    const groups = []
+    for (const idList of policyGroups) {
+      const objs = []
+      for (const id of idList) {
+        if (id === 'product' || !byId.has(id)) continue
+        mentioned.add(id)
+        objs.push(byId.get(id))
+      }
+      if (objs.length) groups.push(objs)
+    }
+    for (const d of nonProductDims) {
+      if (!mentioned.has(d.id)) groups.push([d])
+    }
+    return groups
   }
 
-  async function verifyPhase(reviewResult) {
-    blog('inspector', 'Verify stub: refute-pass verification is not implemented yet.')
-    return reviewResult
+  // D1's product gating: 'always' runs unconditionally (three-star), 'with-source'
+  // only when a requirements source actually exists (tracked ticket or a non-empty PR
+  // body), 'never' never runs.
+  function productShouldRun(policyProduct, contextTier, prBody) {
+    if (policyProduct === 'always') return true
+    if (policyProduct === 'with-source') return contextTier === 'tracked' || !!(prBody && prBody.trim())
+    return false
+  }
+
+  // The no-requirements caveat only fires for 'always' tiers reviewing without a real
+  // source — 'with-source' tiers never dispatch product without one, so they never need it.
+  function productCaveatNeeded(policyProduct, contextTier, prBody) {
+    return policyProduct === 'always' && contextTier !== 'tracked' && !(prBody && prBody.trim())
+  }
+
+  function mode3Prompt(dimsGroup, range, digest, productCaveat) {
+    const lensBlock = dimsGroup
+      .map((d) => `### ${d.title} (dimension id: "${d.id}")\n\n${d.lens}`)
+      .join('\n\n')
+    const caveatBlock = productCaveat
+      ? `\nNo requirements source was found for this review (no tracked ticket, no PR body). Open your product-dimension findings with an explicit "no requirements source" note — you are reviewing against the PR/commit's stated intent instead of a spec, and the reader needs to know the bar was inferred, not given.\n`
+      : ''
+    return `You are the Inspector running Mode 3 (standalone diff review — advisory, no
+packet, no PASS/FAIL) for an automated code review.
+
+Worktree (read-only — never write, never run a command that writes): ${worktreePath}
+Range: ${range}
+
+Read the full diff first, every changed file, not a sample:
+  git -C ${worktreePath} diff ${range}
+
+Context digest gathered for this review (docs, ticket text, KB heuristics) — use it
+for intent where the diff alone is ambiguous, but it is not a substitute for reading
+the actual diff:
+
+${digest}
+
+Review against ${dimsGroup.length > 1 ? 'EACH of the following dimension lenses' : 'this dimension lens'} — hunt only what it covers:
+
+${lensBlock}
+${caveatBlock}
+Report findings, not a verdict. Each finding: id (short string, unique within your
+return), severity (blocking|high|medium|low), location ("file:line"), summary (one
+line), dimension (the exact dimension id above that produced it — never a group
+label), fix (a concrete fix direction phrased as acceptance criteria, e.g. "X must
+do Y"), verify (how a cook would confirm the fix landed). Specific and falsifiable —
+no "consider improving". Return findings: [] if a lens turns up nothing.
+
+Return per the schema you were given: { findings: [...] }.`
+  }
+
+  const SEVERITY_RANK = { blocking: 4, high: 3, medium: 2, low: 1 }
+
+  // Merge findings that land on the same location: keep the highest severity's
+  // summary/fix/verify, union the dimension list into one comma-joined string.
+  function dedupFindings(findings) {
+    const byLocation = new Map()
+    const order = []
+    for (const f of findings) {
+      if (!f || !f.location) continue
+      const existing = byLocation.get(f.location)
+      if (!existing) {
+        byLocation.set(f.location, { ...f })
+        order.push(f.location)
+        continue
+      }
+      const merged = { ...existing }
+      if ((SEVERITY_RANK[f.severity] || 0) > (SEVERITY_RANK[existing.severity] || 0)) {
+        merged.severity = f.severity
+        merged.summary = f.summary
+        merged.fix = f.fix
+        merged.verify = f.verify
+      }
+      const dims = new Set(String(existing.dimension || '').split(',').map((s) => s.trim()).filter(Boolean))
+      if (f.dimension) dims.add(f.dimension)
+      merged.dimension = Array.from(dims).join(', ')
+      byLocation.set(f.location, merged)
+    }
+    return order.map((loc) => byLocation.get(loc))
+  }
+
+  async function reviewPhase(resolveResult, probeResult) {
+    // Always go through resolveReviewDimensions(A.overrides) here, never read the
+    // built-in REVIEW_DIMENSIONS array directly — a config layer may retune a lens,
+    // disable a dimension, or add a custom one (config.js's B2 foldin), and only the
+    // resolver folds that in.
+    const dimensions = resolveReviewDimensions(A.overrides)
+    const nonProductDims = dimensions.filter((d) => d.id !== 'product')
+    const productDim = dimensions.find((d) => d.id === 'product')
+
+    const groups = buildDispatchGroups(nonProductDims, POLICY.dispatch, POLICY.groups)
+
+    const runProduct = !!productDim && productShouldRun(POLICY.product, probeResult.contextTier, resolveResult.prBody)
+    const caveatNeeded = runProduct && productCaveatNeeded(POLICY.product, probeResult.contextTier, resolveResult.prBody)
+
+    if (runProduct) {
+      // 'merged' folds product's lens into the same single dispatch (B1 foldin);
+      // per-dimension/grouped give it its own dispatch (D1's conditional 5th group).
+      if (POLICY.dispatch === 'merged' && groups.length) {
+        groups[groups.length - 1] = [...groups[groups.length - 1], productDim]
+      } else {
+        groups.push([productDim])
+      }
+    }
+
+    if (!groups.length) {
+      blog('inspector', 'Review: no active dimensions to dispatch (all disabled by config).')
+      return { findings: [] }
+    }
+
+    const dispatchResults = await parallel(
+      groups.map((group) => async () => agent(
+        withPromptOverrides(
+          mode3Prompt(group, resolveResult.range, probeResult.digest, caveatNeeded && group.some((d) => d.id === 'product')),
+          PROMPT_EXTRAS.inspector,
+        ),
+        {
+          label: `review:${group.map((d) => d.id).join('+')}`,
+          phase: 'Review',
+          schema: SCHEMA_REVIEW_FINDINGS_RETURN,
+          agentType: POLICY.agents.inspector,
+        },
+      )),
+    )
+
+    const rawFindings = []
+    for (const [i, r] of dispatchResults.entries()) {
+      if (r && r.findings) rawFindings.push(...r.findings)
+      else blog('inspector', `Review dispatch for [${groups[i].map((d) => d.id).join('+')}] returned no result — treated as zero findings.`)
+    }
+
+    return { findings: dedupFindings(rawFindings) }
+  }
+
+  // ---- Verify: adversarial refute pass per REVIEW_POLICY[tier].verify (D1) ----
+  //
+  // Every eligible finding gets `votes` independent inspectors trying to REFUTE it —
+  // default refuted when the evidence doesn't hold. A finding dies only when every
+  // vote refutes it; surviving with at least one (but not all) refute is reported
+  // 'unconfirmed' (confirmed: false) rather than dropped or silently trusted.
+  function refutePrompt(finding, range) {
+    return `You are the Inspector running a Verify pass on ONE finding from an
+automated code review (Mode 3 continuation — still advisory, no packet). Your job
+is to try to REFUTE this finding against the actual worktree. Default to refuted
+when the evidence does not hold up — only return refuted: false when you
+independently confirm the defect is real.
+
+Worktree (read-only): ${worktreePath}
+Range: ${range}
+
+Finding to check:
+  id: ${finding.id}
+  dimension: ${finding.dimension}
+  severity: ${finding.severity}
+  location: ${finding.location}
+  summary: ${finding.summary}
+  fix: ${finding.fix || '(none provided)'}
+
+Read the actual code at that location in the worktree — not just the summary
+above — and decide whether the described defect genuinely holds. Return refuted
+(boolean) and a one-line note explaining your call.`
+  }
+
+  async function verifyPhase(reviewResult, resolveResult) {
+    const { severities, votes } = POLICY.verify
+    const findings = reviewResult.findings || []
+
+    if (votes === 0 || !severities.length) {
+      blog('inspector', `Verify: this tier's policy runs no refute pass (votes: ${votes}) — all findings stay unconfirmed.`)
+      return { findings: findings.map((f) => ({ ...f, confirmed: null })) }
+    }
+
+    const eligible = findings.filter((f) => severities.includes(f.severity))
+    const ineligible = findings.filter((f) => !severities.includes(f.severity))
+
+    const tasks = []
+    for (const f of eligible) {
+      for (let v = 0; v < votes; v += 1) tasks.push({ finding: f, voteIndex: v })
+    }
+
+    const voteResults = await parallel(
+      tasks.map((t) => async () => agent(
+        withPromptOverrides(refutePrompt(t.finding, resolveResult.range), PROMPT_EXTRAS.inspector),
+        {
+          label: `verify:${t.finding.id}:${t.voteIndex + 1}`,
+          phase: 'Verify',
+          schema: SCHEMA_VERIFY_VOTE_RETURN,
+          agentType: POLICY.agents.inspector,
+        },
+      )),
+    )
+
+    const refuteFlagsById = new Map()
+    tasks.forEach((t, i) => {
+      const r = voteResults[i]
+      if (!r) blog('inspector', `Verify: vote ${t.voteIndex + 1} for finding ${t.finding.id} returned no result — treated as non-refuting.`)
+      const list = refuteFlagsById.get(t.finding.id) || []
+      list.push(!!(r && r.refuted))
+      refuteFlagsById.set(t.finding.id, list)
+    })
+
+    const survivors = []
+    for (const f of eligible) {
+      const flags = refuteFlagsById.get(f.id) || []
+      const refuteCount = flags.filter(Boolean).length
+      if (refuteCount >= votes) {
+        blog('inspector', `Verify: finding ${f.id} refuted by all ${votes} vote(s) — dropped.`)
+        continue
+      }
+      survivors.push({ ...f, confirmed: refuteCount === 0 })
+    }
+
+    return { findings: [...survivors, ...ineligible.map((f) => ({ ...f, confirmed: null }))] }
   }
 
   async function reportPhase(verifyResult, probeResult) {
@@ -375,9 +626,9 @@ Return the steward result: ok, detail.`,
     phase('Probe')
     const probeResult = await probePhase(resolveResult)
     phase('Review')
-    const reviewResult = await reviewPhase()
+    const reviewResult = await reviewPhase(resolveResult, probeResult)
     phase('Verify')
-    const verifyResult = await verifyPhase(reviewResult)
+    const verifyResult = await verifyPhase(reviewResult, resolveResult)
     phase('Report')
     return await reportPhase(verifyResult, probeResult)
   } finally {
