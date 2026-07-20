@@ -270,20 +270,25 @@ dish: <dish-slug>
 role: analyst
 model: haiku
 created: 2026-07-04T03:10:00Z
+mode: standard         # standard|intensive — intensive is the ★★★ end-of-dish retro
 items_total: 8
 items_reworked: 2
 escalations: 1
 conflicts: 0
 proposals:
-  - { id: P1, destination: learnings|heuristic|installed-brain,
+  - { id: P1, destination: learnings|heuristic|installed-brain|tooling,
       change: <one line>, evidence: <artifact path or file:line> }
 ```
 
 Body sections, in order: `## Scorecard` (one line per axis: metric, number, worst
-offender), `## Patterns`, `## Proposals` (per proposal: the change, motivating evidence,
-and for `heuristic` destinations the ready-to-ingest one-liner), `## Kept` (one thing that
-worked). Authority: only artifacts the dish produced (plan, briefs, reports, verdicts,
-git log). Budget: ≤ 120 lines.
+offender), `## Proposal ledger` (intensive only — one line per prior-retro proposal:
+ruling applied/ignored/dead, proof), `## Patterns`, `## Proposals` (per proposal: the
+change, motivating evidence, and for `heuristic` destinations the ready-to-ingest
+one-liner), `## Kept` (one thing that worked). Authority: artifacts the dish produced
+(plan, briefs, reports, verdicts, git log); intensive additionally reads prior analyst
+reports, the brigade-status efficiency aggregate, the live heuristic set, and the web
+for tooling research. Proposals: ≤ 3 standard, ≤ 5 intensive; `tooling` is
+intensive-only. Budget: ≤ 120 lines standard, ≤ 200 intensive.
 
 ### `design_swag` — one-shot Design pass (`.brigade/dishes/<slug>/DESIGN.md`)
 

@@ -99,7 +99,7 @@ Pick how much model you buy per dish.
 | first-attempt cook | heavy cook (sonnet) | cook (haiku) | cook (haiku) |
 | scouts per dish | ≤ 6 | ≤ 4 | ≤ 2 |
 | plan check | always | on triggers | never |
-| analyst retro | every dish + every 10 items | every dish | every 3rd dish |
+| analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish |
 
 Say `brigade heavy` or `brigade light` for one dish; set `tier` in config for the repo.
 Any single row can be decoupled from its tier — see [docs/tiers.md](docs/tiers.md).

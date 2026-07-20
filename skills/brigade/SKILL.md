@@ -341,7 +341,9 @@ API signature, a "mirror this test" precedent, a resolver/lookup behavior, an ex
 wire shape — is read at source level before dispatch: quote the signature, the precedent's
 actual calls, the query builder's WHERE/label clause, or the primary doc. An unanchored
 scout claim is an inference to re-derive, not a fact to paste. Dry-run every distinct gate
-command and self-check grep on the base branch before dispatch. Two claim classes get
+command and self-check grep on the base branch before dispatch — and prove the full-suite
+command actually enumerates every workspace package (a suite that silently skips a
+package's tests exits 0 too). Two claim classes get
 extra teeth: an exhaustiveness list ("all call sites", "all files with X") is re-derived
 by your own grep at packet-write time, never copied from a brief or review (every copied
 list so far has been short); and a parity claim ("matches today's behavior") is verified
@@ -349,9 +351,11 @@ against the base branch itself — sibling artifacts written alongside the chang
 tests, comments) validate each other circularly and prove nothing.
 
 **Disjointness is the spine.** Two work items in the same wave must not touch the same
-files. Anything that genuinely overlaps is sequenced with a dependency edge, not
-parallelized. A merge conflict later means the decomposition was wrong — record it in
-`LEARNINGS.md` and sequence such work next time.
+files — doc files included. Anything that genuinely overlaps is sequenced with a
+dependency edge, not parallelized. A merge conflict later means the decomposition was
+wrong — record it in `LEARNINGS.md` and sequence such work next time. And any rewrite of
+a file that already carries an inspector PASS invalidates that verdict: the rewriting
+item needs a re-verdict covering the new content before merge.
 
 **Shared contracts own their blast radius.** A work item that edits a shared type, schema,
 or interface owns every consumer that must compile against it — name those consumers in its
@@ -390,6 +394,9 @@ that asserts an EXACT error/output message (haiku repeatedly fabricates the expe
 string or swaps the case rather than reporting the mismatch — a prose ban has not held) —
 a named-but-self-enforced hazard is the cheap-model failure class, cheap cooks went 0/4
 across it, and same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
+Plain verbatim insertion at an exact quoted anchor is NOT in this class — cheap cooks
+paste-at-anchor cleanly (proven first-attempt clean where reformatting went 0/4); leave
+those `heavy: false`.
 Heavy items should be the exception; if more than ~1 in 5 items is heavy, your
 decomposition is too coarse.
 
@@ -405,7 +412,11 @@ Verify commands and premise-probes against the real tree — never just reads th
 executing plan check this fleet has run caught a defect a reading pass would have shipped
 (an invalid-JSON repro payload, a second latent bug under the stated one, a hard-FAIL that
 would brick a complete historical dish, a Verify command that dies on this environment's
-own shell shims). You fold in what's right (you own the
+own shell shims). When two sibling packets assert the same runtime string or output, or a
+packet embeds a payload from a scout brief, the plan check executes that shared case once
+and pastes the literal captured output into every packet that asserts it — packet authors
+never re-derive or analogize it (an analogized deny message burned a full escalation
+ladder). You fold in what's right (you own the
 plan; the check is information, not instruction). A bad decomposition costs far more than
 one sonnet pass, but not every dish can afford the pass — that trade is what the tier
 already decided.
@@ -577,6 +588,19 @@ path `.brigade/dishes/<dish-slug>/analyst.md`. It scores the run (rework rate, e
 use, blocked packets, conflicts, review yield) and returns 1–3 concrete proposals. Apply
 what's repo-local yourself by appending to `.brigade/LEARNINGS.md` — the fleet's working
 memory, re-read at every dish start.
+
+**At ★★★ the end-of-dish retro is intensive** (mid-dish 10-item checkpoints stay
+standard). Dispatch the same agent with model override `opus`, say `mode: intensive` in
+the prompt, and add the cross-dish inputs: every prior `.brigade/dishes/*/analyst.md`,
+the efficiency block from `brigade-status`, and the live heuristic set (the configured KB
+search command when `kb.enabled`, else `.brigade/LEARNINGS.md` `## Heuristics` and the
+committed heuristics file). The intensive report adds a proposal ledger — every past
+proposal ruled applied/ignored/dead with proof — cross-dish trend scoring, and up to 5
+proposals including researched `tooling` recommendations (a tool, lint rule, CI step, or
+hook that would eliminate a recurring failure class). When it lands: apply learnings as
+usual, retire ledger-dead proposals (KB amend or heuristics-file status), surface ignored
+ones to the user, and treat `tooling` proposals as operator decisions — never
+auto-install anything.
 
 **Layer 2 — the heuristic store (accumulates across repos and dishes).** Proposals the
 Analyst marks as **generalizable heuristics** — rules about decomposition, packet writing,

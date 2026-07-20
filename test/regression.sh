@@ -522,6 +522,51 @@ PY
     fail "brigade-config doctor rejected a repo with no config layers"
 }
 
+test_config_override_consumer_path() {
+  # Intensive-retro P1 (dish arc-mem-cook-memory): both per-item reviews passed while
+  # resolvePolicy silently dropped every override, because it read the resolve --json
+  # envelope at the wrong level. Pin the full consumer path — config file ->
+  # brigade-config resolve --json -> resolvePolicy -> the policy dispatch actually uses —
+  # so any envelope-shape drift fails the gate, for every config key.
+  fixture="$TMP_ROOT/config-consumer-path"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "tier": "one-star",
+  "maxParallel": 2,
+  "workingMemory": false,
+  "policy": { "scoutCap": 5, "planCheck": "always", "retro": "every-dish" },
+  "models": { "cook": "custom:my-cook", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector" },
+  "circuitBreaker": { "maxTotalFails": 9 } }
+EOF
+
+  json="$(config_run "$fixture" resolve --json)"
+  RESOLVED_JSON="$json" ROOT="$ROOT" node <<'NODE' || fail "config override lost between resolve --json and resolvePolicy"
+const fs = require('fs')
+const assert = require('assert')
+const src = fs.readFileSync(process.env.ROOT + '/workflows/config.js', 'utf8')
+const resolvePolicy = new Function(src + '; return resolvePolicy')()
+const envelope = JSON.parse(process.env.RESOLVED_JSON)
+
+// The workflow hands resolvePolicy the whole envelope as args.overrides; it must
+// resolve identically to the bare config object, or every override silently dies.
+const viaEnvelope = resolvePolicy('one-star', envelope)
+const viaConfig = resolvePolicy('one-star', envelope.config)
+assert.deepStrictEqual(viaEnvelope, viaConfig, 'envelope and unwrapped config resolve differently')
+
+const p = viaEnvelope
+assert.strictEqual(p.scoutCap, 5, 'policy.scoutCap override lost')
+assert.strictEqual(p.planCheck, 'always', 'policy.planCheck override lost')
+assert.strictEqual(p.retro, 'every-dish', 'policy.retro override lost')
+assert.strictEqual(p.maxParallel, 2, 'maxParallel override lost')
+assert.strictEqual(p.workingMemory, false, 'workingMemory override lost')
+assert.strictEqual(p.circuitBreaker.maxTotalFails, 9, 'circuitBreaker override lost')
+assert.strictEqual(p.agents.inspector, 'custom:my-inspector', 'models.inspector override lost')
+assert.ok(p.attempts.includes('custom:my-cook'), 'models.cook override missing from attempt ladder')
+assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHeavy override missing from heavy ladder')
+NODE
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -848,6 +893,72 @@ EOF
   fi
 }
 
+test_validate_analyst_modes() {
+  # Analyst budgets are mode-keyed: 120 lines standard, 200 intensive; intensive
+  # additionally requires a "## Proposal ledger" section.
+  fixture="$TMP_ROOT/validate-analyst-modes"
+  mkdir -p "$fixture/.brigade/dishes/sample"
+  file="$fixture/.brigade/dishes/sample/analyst.md"
+
+  write_analyst() { # $1 = extra frontmatter line (or empty), $2 = extra body section (or empty)
+    {
+      cat <<EOF
+---
+doc: analyst
+schema: 1
+dish: sample
+role: analyst
+model: sonnet
+created: 2026-07-19T19:45:00Z
+${1:+$1
+}items_total: 8
+items_reworked: 2
+escalations: 1
+conflicts: 0
+proposals:
+  - { id: P1, destination: learnings, change: sample, evidence: reports/a-cook.md }
+---
+
+## Scorecard
+Rework 2/8.
+${2:+
+$2
+}
+## Patterns
+Sample pattern.
+
+## Proposals
+P1: sample.
+EOF
+      # Pad past the 120-line standard budget but under the 200-line intensive one.
+      for i in $(seq 1 140); do echo "- filler line $i"; done
+    } >"$file"
+  }
+
+  write_analyst "" ""
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" &&
+    fail "standard analyst over 120 lines validated clean: $output"
+  printf '%s\n' "$output" | grep -Fq "standard analyst budget of 120" ||
+    fail "no standard-budget violation reported: $output"
+
+  write_analyst "mode: intensive" "## Proposal ledger
+P0: applied — LEARNINGS.md line 3."
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" ||
+    fail "intensive analyst under 200 lines with ledger failed validation: $output"
+
+  write_analyst "mode: intensive" ""
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" &&
+    fail "intensive analyst without ledger validated clean: $output"
+  printf '%s\n' "$output" | grep -Fq 'missing "## Proposal ledger"' ||
+    fail "no missing-ledger violation reported: $output"
+
+  write_analyst "mode: exhaustive" ""
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" &&
+    fail "unknown analyst mode validated clean: $output"
+  printf '%s\n' "$output" | grep -Fq "invalid analyst mode: exhaustive" ||
+    fail "no invalid-mode violation reported: $output"
+}
+
 test_guard_arithmetic() {
   # $(( )) arithmetic is inert data, not a command substitution or a heredoc.
   assert_guard_allows 'git commit -m "$((1+1))"'
@@ -870,8 +981,10 @@ test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
+test_config_override_consumer_path
 test_validate_ledger_artifacts
 test_validate_retro_readiness
+test_validate_analyst_modes
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_schema_examples_validate

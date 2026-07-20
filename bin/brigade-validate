@@ -22,6 +22,7 @@ const SEVERITIES = ['blocking', 'high', 'medium', 'low']
 const ATTEMPT_TRIGGERS = ['initial', 'fail-retry', 'escalation']
 const TIERS = ['three-star', 'two-star', 'one-star']
 const RESEARCH_BUDGETS = { light: 150, medium: 250, heavy: 400 }
+const ANALYST_BUDGETS = { standard: 120, intensive: 200 }
 
 // Per-type contract: required frontmatter keys, enum checks, body line budget.
 const TYPES = {
@@ -30,7 +31,7 @@ const TYPES = {
   report: { keys: ['status', 'attempt', 'branch', 'files_changed', 'commands'], budget: 120 },
   verdict: { keys: ['verdict', 'attempt_reviewed', 'reran_gate', 'findings'], budget: 150 },
   plan_check: { keys: ['blind_sketch_first'], budget: 150 },
-  analyst: { keys: ['items_total', 'proposals'], budget: 120 },
+  analyst: { keys: ['items_total', 'proposals'], budget: null }, // budget comes from mode
   research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
   design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 100 },
   ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
@@ -211,6 +212,21 @@ function validateFile(file) {
               }
             }
           }
+        }
+      }
+      break
+    }
+    case 'analyst': {
+      const mode = fmValue(fm, 'mode') || 'standard' // older reports predate the mode key
+      if (!ANALYST_BUDGETS[mode]) {
+        problems.push(`invalid analyst mode: ${mode} (allowed: ${Object.keys(ANALYST_BUDGETS).join('|')})`)
+      } else {
+        const bodyLines = body.filter((l) => l.trim() !== '').length
+        if (bodyLines > ANALYST_BUDGETS[mode]) {
+          problems.push(`body ${bodyLines} non-empty lines exceeds ${mode} analyst budget of ${ANALYST_BUDGETS[mode]}`)
+        }
+        if (mode === 'intensive' && !body.some((l) => l.startsWith('## Proposal ledger'))) {
+          problems.push('intensive analyst missing "## Proposal ledger" section')
         }
       }
       break

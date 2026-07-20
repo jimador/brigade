@@ -101,6 +101,11 @@ lives. Order is mandatory:
      behaviors; heavy flags that are missing or gratuitous.
    - **Packet quality** — spot-check the riskiest packets against the plan's own quality
      bar: pasted contracts, unambiguous steps, a Verify that can actually fail.
+   - **Shared assertions** — when two sibling packets assert the same runtime string or
+     output, or a packet embeds a payload from a scout brief, execute the shared case
+     yourself and paste the literal captured output into your recommendations so both
+     packets carry it verbatim. A value re-derived or analogized by a packet author is a
+     defect even if it looks plausible.
 3. **Per material divergence:** which version is stronger and **why** — and name where the
    Planner's version is stronger, not only where yours wins. End with concrete, per-item
    merge recommendations and any Blocking issue that must be settled before dispatch.
