@@ -21,6 +21,7 @@ const STATUSES = ['todo', 'dispatched', 'in_review', 'rework', 'done', 'blocked'
 const SEVERITIES = ['blocking', 'high', 'medium', 'low']
 const ATTEMPT_TRIGGERS = ['initial', 'fail-retry', 'escalation']
 const TIERS = ['three-star', 'two-star', 'one-star']
+const CONTEXT_TIERS = ['bare', 'documented', 'tracked']
 const RESEARCH_BUDGETS = { light: 150, medium: 250, heavy: 400 }
 const ANALYST_BUDGETS = { standard: 120, intensive: 200 }
 
@@ -35,6 +36,7 @@ const TYPES = {
   research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
   design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 100 },
   ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
+  review_report: { keys: ['input', 'context_tier', 'tier', 'findings'], budget: 250 },
 }
 const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
 const RECOMMENDED = ['role', 'model', 'created']
@@ -146,6 +148,7 @@ function validateFile(file) {
     brief: ['## Answer'],
     plan_check: ['## Blind sketch', '## Comparison', '## Recommendations'],
     ledger: ['## Canon', '## World state'],
+    review_report: ['## Scope', '## Findings', '## Context disclosure', '## Evidence'],
   }
   const required = REQUIRED_SECTIONS[doc]
   if (required) {
@@ -299,6 +302,17 @@ function validateFile(file) {
         if (!body.some((l) => l.startsWith(section))) {
           problems.push(`design_swag missing "${section}" section`)
         }
+      }
+      break
+    }
+    case 'review_report': {
+      const contextTier = fmValue(fm, 'context_tier')
+      if (contextTier && !CONTEXT_TIERS.includes(contextTier)) {
+        problems.push(`invalid context_tier: ${contextTier} (allowed: ${CONTEXT_TIERS.join('|')})`)
+      }
+      const tier = fmValue(fm, 'tier')
+      if (tier && !TIERS.includes(tier)) {
+        problems.push(`invalid tier: ${tier} (allowed: ${TIERS.join('|')})`)
       }
       break
     }
