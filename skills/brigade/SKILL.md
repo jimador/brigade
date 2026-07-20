@@ -542,7 +542,10 @@ When all items are merged:
    heavy data-correctness item, also run a whole-feature adversarial review scoped to the
    assembled behavior — per-item reviews are structurally blind to properties that span
    sibling diffs (proven twice: a cross-context leak and a data-corruption blocker each
-   passed every per-item inspection).
+   passed every per-item inspection). A dish where one config or data value is written by
+   one item and consumed by a different item runs the whole-feature review regardless of
+   tier — per-item inspection cannot see the boundary (proven twice more: a silent
+   override drop and an every-tier crash each PASSed all their per-item reviews).
 2. **The pass — verify on a real stage before the PR** (when the repo deploys per-developer
    stages). Build an acceptance checklist — one row per acceptance criterion across all
    items, plus ticket-level success criteria — then deploy the integration branch to your

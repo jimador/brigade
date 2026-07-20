@@ -100,7 +100,9 @@ lives. Order is mandatory:
    - **Granularity** — items that will blow the stated size bar or hide multiple
      behaviors; heavy flags that are missing or gratuitous.
    - **Packet quality** — spot-check the riskiest packets against the plan's own quality
-     bar: pasted contracts, unambiguous steps, a Verify that can actually fail.
+     bar: pasted contracts, unambiguous steps, a Verify that can actually fail. A Verify
+     that merely greps for an identifier's presence is a defect — comments satisfy it;
+     logic criteria need executed behavior.
    - **Shared assertions** — when two sibling packets assert the same runtime string or
      output, or a packet embeds a payload from a scout brief, execute the shared case
      yourself and paste the literal captured output into your recommendations so both
