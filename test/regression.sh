@@ -675,6 +675,191 @@ test_execute_artifact_verification() {
     fail "brigade-execute.js source missing artifact-check step referencing verdictPath"
 }
 
+test_execute_verdict_scribe() {
+  # Pin the landing steward's self-heal behavior by EXECUTING the real prompt-builder
+  # functions out of the GENERATED workflow, the same header-slice `new Function` way
+  # test_review_policy_binding pulls buildDispatchGroups out of brigade-review.js —
+  # not by grepping for the presence of some string. stewardLandPrompt and the two
+  # reconstruction builders are all top-level consts here (no IIFE to slice into), so
+  # the same header slice that already works for resolvePolicy in test_review_config
+  # covers them too.
+  ROOT="$ROOT" node <<'NODE' || fail "execute verdict-scribe self-heal pin failed"
+const fs = require('fs')
+const assert = require('assert')
+const path = process.env.ROOT + '/workflows/brigade-execute.js'
+const src = fs.readFileSync(path, 'utf8')
+
+const marker = '\nreturn runAll(A.items)'
+const idx = src.indexOf(marker)
+assert.ok(idx !== -1, 'runtime return marker not found in brigade-execute.js')
+const header = `${src.slice(0, idx).replace('export const meta', 'const meta')}\n`
+
+const minimalArgs = JSON.stringify({
+  tier: 'two-star',
+  overrides: {},
+  gate: ['npm test'],
+  dishDir: '.brigade/dishes/sample',
+  now: '2026-07-20T00:00:00Z',
+  repoRoot: '/tmp/sample-repo',
+  deliveryBranch: 'main',
+  deliverySlug: 'sample',
+  maxParallel: 2,
+  promptOverrides: {},
+})
+const { stewardLandPrompt, reportReconstructionBlock, verdictReconstructionBlock } =
+  new Function('args', `${header}; return { stewardLandPrompt, reportReconstructionBlock, verdictReconstructionBlock }`)(minimalArgs)
+for (const fn of [stewardLandPrompt, reportReconstructionBlock, verdictReconstructionBlock]) {
+  assert.strictEqual(typeof fn, 'function', 'expected function not found at top level of brigade-execute.js')
+}
+
+// The prose bodies wrap at ~80 columns, so a literal attribution sentence can carry an
+// embedded newline where it wraps — normalize whitespace before substring-matching so
+// this pin isn't coupled to exactly where a line happens to break.
+const flatten = (s) => s.replace(/\s+/g, ' ')
+
+const item = { slug: 'sample-item' }
+const worktreePath = '/tmp/sample-repo/.brigade/worktrees/sample--sample-item'
+const branch = 'wip/sample/sample-item'
+const reportPath = '.brigade/dishes/sample/reports/sample-item-cook.md'
+const verdictPath = '.brigade/dishes/sample/reports/sample-item-verdict.md'
+
+// A synthetic inspector verdict return — the exact shape SCHEMA_VERDICT_RETURN allows —
+// carrying one finding whose id must survive into the reconstructed frontmatter.
+const syntheticVerdict = {
+  verdict: 'PASS',
+  verdictPath,
+  trivialOnly: false,
+  findings: [{ id: 'F1', severity: 'medium', location: 'src/foo.ts:12', summary: 'a synthetic finding' }],
+}
+// A synthetic cook return — the exact shape SCHEMA_COOK_RETURN allows.
+const syntheticCook = {
+  status: 'done',
+  attempt: 1,
+  branch,
+  reportPath,
+  filesChanged: ['src/foo.ts'],
+  summary: 'a synthetic cook summary',
+}
+
+// Absent-data path: no structured return at all -> refuse exactly as today (null block).
+assert.strictEqual(reportReconstructionBlock(item, branch, null), null, 'report reconstruction should be null with no cook data')
+assert.strictEqual(verdictReconstructionBlock(item, 1, null), null, 'verdict reconstruction should be null with no verdict data')
+
+// Missing-artifact path: structured data present -> a reconstruction block is built.
+const verdictBlock = verdictReconstructionBlock(item, 3, syntheticVerdict)
+assert.ok(verdictBlock, 'verdict reconstruction should be built from a real verdict return')
+assert.ok(verdictBlock.includes('id: "F1"'), 'reconstructed verdict frontmatter dropped the synthetic finding id')
+assert.ok(verdictBlock.includes('attempt_reviewed: 3'), 'reconstructed verdict frontmatter dropped the attempt number')
+assert.ok(
+  flatten(verdictBlock).includes('the inspector returned this verdict without writing the file'),
+  'reconstructed verdict body missing the literal reconstruction attribution',
+)
+
+const reportBlock = reportReconstructionBlock(item, branch, syntheticCook)
+assert.ok(reportBlock, 'report reconstruction should be built from a real cook return')
+assert.ok(reportBlock.includes('src/foo.ts'), 'reconstructed report frontmatter dropped the synthetic filesChanged entry')
+assert.ok(
+  flatten(reportBlock).includes('the cook returned this report without writing the file'),
+  'reconstructed report body missing the literal reconstruction attribution',
+)
+
+// The steward-land prompt itself: with both reconstructions in hand it must instruct
+// a self-heal write (not a refusal) and must embed the reconstructed text verbatim —
+// this is the actual write-if-missing instruction the steward acts on.
+const healingPrompt = stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportBlock, verdictBlock)
+assert.ok(healingPrompt.includes(`write the block below verbatim to ${verdictPath}`), 'steward-land prompt missing the verdict write-if-missing instruction')
+assert.ok(healingPrompt.includes(`write the block below verbatim to ${reportPath}`), 'steward-land prompt missing the report write-if-missing instruction')
+assert.ok(healingPrompt.includes('id: "F1"'), 'steward-land prompt did not embed the synthetic finding id from the verdict reconstruction')
+assert.ok(
+  flatten(healingPrompt).includes('the inspector returned this verdict without writing the file'),
+  'steward-land prompt missing the literal reconstruction attribution line',
+)
+
+// Absent-data path at the prompt level: null reconstructions -> the steward is told to
+// refuse exactly as before, never told to write anything.
+const refusingPrompt = stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, null, null)
+assert.ok(!refusingPrompt.includes('write the block below verbatim'), 'refusing prompt should carry no self-heal write instruction')
+assert.ok(refusingPrompt.includes('do NOT land, return ok: false'), 'refusing prompt lost the artifact-missing refusal')
+
+console.log('EXECUTE VERDICT-SCRIBE SELF-HEAL PIN OK')
+
+// --- Hostile input (rework F1): a real inspector describing a frontmatter defect is a
+// very plausible source of a summary containing a literal '---' line plus quotes and
+// colons — exactly the class of input the escalation finding used to corrupt the
+// reconstruction's own frontmatter delimiter (a fake '---' swallows the real one and
+// the following keys, e.g. trivial_only, into body text). Every free-text field is now
+// routed through yamlQuote (JSON.stringify) inside both builders, so prove the hostile
+// text can never surface as a raw line in the file — parse the result back with the
+// SAME rule bin/brigade-validate's splitFrontmatter uses (frontmatter ends at the next
+// line that is EXACTLY '---'), not a re-implementation that could itself paper over
+// the bug, and separately feed it to the real validator binary.
+const nodePath = require('path')
+const os = require('os')
+const { execFileSync } = require('child_process')
+
+const hostileSummary = 'Reported bug:\n---\nverdict: FAIL\nid: "F9", location: \'nowhere\', note: "quoted: colon"'
+const hostileVerdict = {
+  verdict: 'FAIL',
+  verdictPath,
+  trivialOnly: false,
+  findings: [{ id: 'F1', severity: 'blocking', location: 'src/foo.ts:12', summary: hostileSummary }],
+}
+const hostileVerdictBlock = verdictReconstructionBlock(item, 7, hostileVerdict)
+assert.ok(hostileVerdictBlock, 'hostile verdict reconstruction should still build a block')
+
+const hostileBranch = 'wip/thing: "odd"\n---\nstatus: blocked'
+const hostileCook = { status: 'done', attempt: 2, branch: hostileBranch, reportPath, filesChanged: ['src/foo.ts'], summary: 'fine' }
+const hostileReportBlock = reportReconstructionBlock(item, branch, hostileCook)
+assert.ok(hostileReportBlock, 'hostile report reconstruction should still build a block')
+
+// lastFmLine is the literal last key line the builder emits right before its closing
+// '---' (see the source: 'trivial_only: ...' / 'ledger: null'). Asserting it is the
+// LAST element of the parsed fm slice — not merely present somewhere — proves
+// splitFrontmatter's indexOf('---', 1) landed on the REAL closing delimiter and not
+// on some earlier line a hostile field managed to inject; a body-side '---' (e.g. from
+// the deliberately-unescaped, human-readable findings-body list further down) is
+// harmless and expected, since it can only ever appear after this real boundary.
+function assertIntactFrontmatter(block, requiredFmLines, lastFmLine, requiredBodyStart) {
+  const lines = block.split('\n')
+  assert.strictEqual(lines[0], '---', 'reconstruction must open with a bare --- line')
+  const end = lines.indexOf('---', 1)
+  assert.notStrictEqual(end, -1, 'reconstruction frontmatter never terminates')
+  const fm = lines.slice(1, end)
+  const body = lines.slice(end + 1)
+  for (const needle of requiredFmLines) {
+    assert.ok(fm.some((l) => l.trim() === needle), `frontmatter key "${needle}" did not survive intact`)
+  }
+  assert.strictEqual(fm[fm.length - 1].trim(), lastFmLine, 'frontmatter closed before its real last key — a hostile field cut it short')
+  assert.ok(body.some((l) => l.startsWith(requiredBodyStart)), `required body section "${requiredBodyStart}" missing`)
+  return { fm, body }
+}
+
+const { fm: verdictFm } = assertIntactFrontmatter(
+  hostileVerdictBlock, ['attempt_reviewed: 7'], 'trivial_only: false', '## Verdict',
+)
+const hostileFindingLine = verdictFm.find((l) => l.includes('id: "F1"'))
+assert.ok(hostileFindingLine, 'quoted finding id not found in hostile verdict frontmatter')
+assert.ok(hostileFindingLine.includes('\\n---\\n'), 'hostile summary should survive escaped (not raw) inside its quoted scalar')
+
+assertIntactFrontmatter(hostileReportBlock, ['status: done', 'attempt: 2'], 'ledger: null', '## Summary')
+
+// Feed both to the actual validator binary the fleet runs, not a re-implementation.
+for (const [label, block] of [['verdict', hostileVerdictBlock], ['report', hostileReportBlock]]) {
+  const tmpFixture = nodePath.join(os.tmpdir(), `hostile-${label}-${process.pid}-${Date.now()}.md`)
+  fs.writeFileSync(tmpFixture, block)
+  let out
+  try {
+    out = execFileSync('node', [nodePath.join(process.env.ROOT, 'bin/brigade-validate'), tmpFixture], { encoding: 'utf8' })
+  } finally {
+    fs.unlinkSync(tmpFixture)
+  }
+  assert.ok(/1 checked, 0 nonconforming/.test(out), `hostile ${label} reconstruction failed brigade-validate: ${out}`)
+}
+
+console.log('EXECUTE VERDICT-SCRIBE HOSTILE INPUT PIN OK')
+NODE
+}
+
 test_schema_examples_validate() {
   fixture="$TMP_ROOT/schema-examples"
   mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
@@ -1189,6 +1374,154 @@ test_validate_review_report() {
   fi
 }
 
+test_workflow_smoke() {
+  # Retro-P1 (dish workflow-code-review): `node --check` only parses a generated
+  # workflow — it never RUNS one, so two deterministic runtime crashes (an
+  # undefined-policy iteration in brigade-review.js's dispatch builder, and a
+  # worktree-add failure shape in brigade-execute.js) passed the whole syntax-only
+  # gate this dish. This is the missing smoke run: execute each generated workflow's
+  # real body to completion with the runtime hooks stubbed (phase/log no-ops,
+  # parallel/pipeline as real fan-out/pipe helpers with no agent underneath, agent()
+  # returning a kitchen-sink canned object satisfying every schema any of the three
+  # workflows dispatches against) and assert it resolves to a non-null object without
+  # throwing.
+  ROOT="$ROOT" node <<'NODE' || fail "workflow smoke harness failed (see output above)"
+const fs = require('fs')
+const path = require('path')
+
+const ROOT = process.env.ROOT
+
+// One object carrying a plausible value for every field ANY of the three workflows'
+// agent() schemas requires. Fields whose required TYPE actually differs across
+// schemas (e.g. probe 'found': an array in the docs-probe schema, a boolean in the
+// ticket/kb-probe schemas) are deliberately left OUT here and derived per call below,
+// from that call's own schema.properties — picking one type up front would just be
+// wrong for whichever schema didn't ask for it.
+const KITCHEN_SINK = {
+  ok: true, contamination: false, detail: 'stub', landedRange: 'a..b', reconstructed: [],
+  attempt: 1, status: 'done', branch: 'wip/x', reportPath: '/tmp/r.md', verdictPath: '/tmp/v.md',
+  filesChanged: [], commands: [], summary: 's', verdict: 'PASS', trivialOnly: true, findings: [],
+  answer: 'a', confidence: 'high', briefPath: '/tmp/b.md', notVerified: '', base: 'a', head: 'b',
+  range: 'a..b', worktreePath: '/tmp/w', prTitle: '', prBody: '', contextTier: 'documented',
+  digest: 'd', digestPath: '/tmp/d.md', refuted: false, error: null,
+}
+
+function typeDefault(propSchema) {
+  if (propSchema && propSchema.enum) return propSchema.enum[0]
+  const type = propSchema && propSchema.type
+  if (type === 'array') return []
+  if (type === 'boolean') return true
+  if (type === 'integer' || type === 'number') return 1
+  if (type === 'object') return {}
+  return 'stub'
+}
+
+// The runtime hooks every generated workflow calls, stubbed just enough to run a real
+// dispatch DAG without ever spinning up an actual agent.
+function phaseStub() {}
+function logStub() {}
+
+async function agentStub(prompt, opts) {
+  const result = { ...KITCHEN_SINK }
+  const schema = (opts && opts.schema) || {}
+  const required = schema.required || []
+  const props = schema.properties || {}
+  for (const key of required) {
+    if (result[key] === undefined) result[key] = typeDefault(props[key])
+  }
+  return result
+}
+
+async function parallelStub(thunks) {
+  return Promise.all(thunks.map((fn) => fn()))
+}
+
+async function pipelineStub(items, ...stages) {
+  const out = []
+  for (const item of items) {
+    let value = item
+    for (const stage of stages) value = await stage(value)
+    out.push(value)
+  }
+  return out
+}
+
+const WORKFLOWS = [
+  {
+    name: 'brigade-research.js (two-star)',
+    file: 'workflows/brigade-research.js',
+    args: {
+      dishDir: '/tmp/d', repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'two-star',
+      questions: [{ n: 1, topic: 't', question: 'q', why: 'w', allowWeb: false }],
+      overrides: {}, promptOverrides: {},
+    },
+  },
+  {
+    name: 'brigade-execute.js (two-star)',
+    file: 'workflows/brigade-execute.js',
+    args: {
+      dishDir: '/tmp/d', repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'two-star',
+      deliverySlug: 's', deliveryBranch: 'feat/s', gate: [], maxParallel: 2,
+      overrides: {}, promptOverrides: {},
+      items: [{ slug: 'a', status: 'todo', dependsOn: [], heavy: false, packet: 'P' }],
+    },
+  },
+  {
+    // one tier is a sample, not coverage — the historical crash lived in a
+    // tier-conditional branch, so the merged (one-star) AND per-dimension +
+    // verify (three-star) dispatch paths both have to run here.
+    name: 'brigade-review.js (one-star — merged dispatch path)',
+    file: 'workflows/brigade-review.js',
+    args: {
+      repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'one-star', mainLine: 'main',
+      reviewSlug: 'smoke-one', input: { kind: 'branch', ref: 'feat/x' }, boardConfigured: false,
+      overrides: {}, promptOverrides: {},
+    },
+  },
+  {
+    name: 'brigade-review.js (three-star — per-dimension + verify path)',
+    file: 'workflows/brigade-review.js',
+    args: {
+      repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'three-star', mainLine: 'main',
+      reviewSlug: 'smoke-three', input: { kind: 'branch', ref: 'feat/x' }, boardConfigured: false,
+      overrides: {}, promptOverrides: {},
+    },
+  },
+]
+
+async function runOne(wf) {
+  const src = fs.readFileSync(path.join(ROOT, wf.file), 'utf8').replace('export const meta', 'const meta')
+  const fn = new Function('args', 'phase', 'log', 'agent', 'parallel', 'pipeline', 'workflow', src)
+  const result = await fn(wf.args, phaseStub, logStub, agentStub, parallelStub, pipelineStub, undefined)
+  if (result === null || typeof result !== 'object') {
+    throw new Error(`expected a non-null object return, got: ${JSON.stringify(result)}`)
+  }
+  return result
+}
+
+async function main() {
+  let failed = false
+  for (const wf of WORKFLOWS) {
+    try {
+      const result = await runOne(wf)
+      console.log(`OK   ${wf.name} -> ${JSON.stringify(Object.keys(result))}`)
+    } catch (err) {
+      failed = true
+      console.error(`FAIL ${wf.name}`)
+      console.error(err && err.stack ? err.stack : String(err))
+    }
+  }
+  if (failed) {
+    console.error('WORKFLOW SMOKE: at least one workflow threw or returned a non-object — see above')
+    process.exit(1)
+  }
+  console.log('WORKFLOW SMOKE OK')
+}
+
+main()
+NODE
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
@@ -1203,6 +1536,7 @@ test_validate_retro_readiness
 test_validate_analyst_modes
 test_execute_ledger_wiring
 test_execute_artifact_verification
+test_execute_verdict_scribe
 test_schema_examples_validate
 test_review_config
 test_review_policy_binding
@@ -1210,4 +1544,5 @@ test_review_verify_tally
 test_review_bundle
 test_inspector_modes
 test_validate_review_report
+test_workflow_smoke
 echo "PASS: brigade operational regressions"

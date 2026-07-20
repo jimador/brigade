@@ -381,6 +381,111 @@ Verdict schema — follow this shape exactly:
 ${MD_SCHEMA_BLOCKS.verdict}
 `
 
+// The dish directory is always .brigade/dishes/<dish-slug> — pull the slug back out
+// for the two reconstruction blocks below, which need it in their frontmatter.
+const dishSlug = () => (A.dishDir || '').split('/').filter(Boolean).pop() || 'unknown-dish'
+
+// Any free-text field from a subagent's structured return (a branch name, a file
+// path, a finding's summary) can contain quotes, colons, newlines, or even a literal
+// '---' line — and the two reconstruction blocks below paste such fields straight
+// into YAML frontmatter. JSON.stringify turns any string into a single-line,
+// double-quoted YAML scalar with every special character escaped, so no interpolated
+// value can ever start a new line or be mistaken for the frontmatter delimiter.
+// Same helper as brigade-review.js's yamlQuote — kept local here since the two
+// scripts don't share a module.
+const yamlQuote = (value) => JSON.stringify(String(value == null ? '' : value))
+
+// Two subagent returns can each go missing their file on disk — a cook's report, an
+// inspector's verdict — even though the workflow already holds everything the return
+// promised. These build the exact markdown the landing steward writes when that
+// happens: the content is computed deterministically here in the script (the only
+// part of the fleet that already has both structured returns in hand), and the
+// steward — which has no filesystem access of its own outside its own tool calls —
+// is handed the finished text and told only to paste it to disk. Each returns null
+// when the structured data itself is missing, which keeps the caller's refuse-as-today
+// path intact.
+const reportReconstructionBlock = (item, branch, cookResult) => {
+  if (!cookResult || !cookResult.status) return null
+  const files = (cookResult.filesChanged && cookResult.filesChanged.length)
+    ? cookResult.filesChanged.map((p) => `  - { path: ${yamlQuote(p)}, change: reconstructed — original change note not preserved }`).join('\n')
+    : '  - { path: unknown, change: reconstructed — no files_changed recorded in the return }'
+  const commands = (A.gate || []).map((cmd) => `  - ${cmd}`).join('\n') || '  []'
+  return `---
+doc: report
+schema: 1
+dish: ${dishSlug()}
+item: ${item.slug}
+role: cook
+model: "reconstruction: ledger"
+created: ${A.now}
+status: ${cookResult.status}
+attempt: ${cookResult.attempt != null ? cookResult.attempt : 1}
+branch: ${yamlQuote(cookResult.branch || branch)}
+files_changed:
+${files}
+commands:
+${commands}
+findings_addressed: []
+ledger: null
+---
+
+## Summary
+Reconstructed by the landing steward from the run ledger — the cook returned this
+report without writing the file. Cook's own summary: ${cookResult.summary || '(none recorded)'}
+
+## Evidence
+Per-command evidence was not preserved anywhere the workflow can recover it — this
+reconstruction only has the structured return, not a transcript. The verification gate
+this attempt was required to run, in order:
+${commands}
+
+## Decisions
+None recoverable — the cook's structured return carries no decisions field.
+
+## Out of scope
+None recoverable — the cook's structured return carries no out-of-scope field.`
+}
+
+const verdictReconstructionBlock = (item, attemptReviewed, verdictResult) => {
+  if (!verdictResult || !verdictResult.verdict) return null
+  // id/location/summary are free text straight from the inspector's own return —
+  // quoted through yamlQuote so nothing in them can break out of this flow mapping
+  // or masquerade as the frontmatter delimiter. severity is schema-enums-only
+  // ('blocking'|'high'|'medium'|'low'), so it's left bare like elsewhere in the repo.
+  const findings = (verdictResult.findings && verdictResult.findings.length)
+    ? verdictResult.findings.map((f) => `  - { id: ${yamlQuote(f.id)}, severity: ${f.severity}, location: ${yamlQuote(f.location)}, summary: ${yamlQuote(f.summary)} }`).join('\n')
+    : '  []'
+  const findingsBody = (verdictResult.findings && verdictResult.findings.length)
+    ? verdictResult.findings.map((f) => `- [${f.severity}] ${f.id} (${f.location}): ${f.summary}`).join('\n')
+    : '(no findings recorded)'
+  return `---
+doc: verdict
+schema: 1
+dish: ${dishSlug()}
+item: ${item.slug}
+role: inspector
+model: "reconstruction: ledger"
+created: ${A.now}
+verdict: ${verdictResult.verdict}
+attempt_reviewed: ${attemptReviewed}
+reran_gate: false
+findings:
+${findings}
+trivial_only: ${!!verdictResult.trivialOnly}
+---
+
+## Verdict
+Reconstructed by the landing steward from the run ledger — the inspector returned this
+verdict without writing the file.
+
+## Findings
+${findingsBody}
+
+## Evidence check
+Not available — reran_gate is false because this reconstruction has no record of the
+inspector's own command re-run, only the verdict it returned.`
+}
+
 const stewardCreatePrompt = (worktreePath, branch) => `
 You are the Steward preparing a worktree for one work item, before any cook runs.
 
@@ -396,7 +501,7 @@ You never run git add or git commit, never touch any file outside .brigade/, and
 never push. Return the result per the steward schema.
 `
 
-const stewardLandPrompt = (worktreePath, branch, verdictPath) => `
+const stewardLandPrompt = (worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction) => `
 You are the Steward landing ONE finished, passed work item. Follow these steps in
 order and stop at the first failure.
 
@@ -407,10 +512,19 @@ order and stop at the first failure.
    found in detail.
 
 1b. Artifact check — run: head -3 ${verdictPath} — it must exist and its
-   frontmatter must start doc: verdict. If it is missing or the doc type is wrong,
-   treat that as the artifact-missing outcome: do NOT land, return ok: false with
-   detail naming the missing artifact (never treat the failing head as a shell error
-   to retry).
+   frontmatter must start doc: verdict. Then run: head -3 ${reportPath} — it must
+   exist and its frontmatter must start doc: report. Handle each independently, self-
+   healing instead of refusing when the workflow has handed you a reconstruction:
+   - Verdict missing or wrong doc type: ${verdictReconstruction
+       ? `write the block below verbatim to ${verdictPath} — the inspector returned this verdict but never wrote the file — then continue.\n\nVERDICT RECONSTRUCTION (write this exact text if the check above failed):\n${verdictReconstruction}`
+       : `no structured verdict data was handed to you for self-healing — treat that as the artifact-missing outcome: do NOT land, return ok: false with detail naming the missing artifact (never treat the failing head as a shell error to retry).`}
+   - Report missing or wrong doc type: ${reportReconstruction
+       ? `write the block below verbatim to ${reportPath} — the cook returned this report but never wrote the file — then continue.\n\nREPORT RECONSTRUCTION (write this exact text if the check above failed):\n${reportReconstruction}`
+       : `no structured cook data was handed to you for self-healing — treat that as the artifact-missing outcome: do NOT land, return ok: false with detail naming the missing artifact.`}
+   If either check already passed (file present, correct doc type), skip its write —
+   never overwrite a real artifact with a reconstruction. If you wrote either
+   reconstruction this run, name the path(s) you wrote in reconstructed (an array)
+   in your return; otherwise return reconstructed: [] or omit it.
 
 2. Rebase the item branch onto the delivery branch:
      git -C ${worktreePath} rebase ${A.deliveryBranch}
@@ -522,6 +636,7 @@ const emptyLedgerEntry = (slug, status, blockedReason) => ({
   verdictPath: null,
   findings: [],
   blockedReason: blockedReason || null,
+  reconstructed: [],
 })
 
 async function runItem(item, promises) {
@@ -567,6 +682,7 @@ async function runItem(item, promises) {
   let landedRange = null
   let status = null
   let blockedReason = null
+  let reconstructed = []
 
   for (let i = 0; i < ladder.length; i += 1) {
     if (i === 0) {
@@ -649,19 +765,33 @@ async function runItem(item, promises) {
     findingsHistory.push({ agentType, attempt: i, findings: verdictResult.findings || [] })
     blog('inspector', `verdict PASS for ${item.slug} attempt ${i + 1}${verdictResult.trivialOnly ? ' (trivial findings only)' : ''}; landing`)
 
-    const landResult = await withLandLock(() => agent(stewardLandPrompt(worktreePath, branch, verdictPath), {
-      label: `steward-land:${item.slug}`,
-      phase: 'Land',
-      schema: SCHEMA_STEWARD_RETURN,
-      agentType: POLICY.agents.steward,
-      effort: STEWARD.effort,
-    }))
+    // Both structured returns this dish's retro found going missing on disk are
+    // already sitting right here — cookResult from the cook call above, verdictResult
+    // from the inspector call just above — so build the self-heal text for each now,
+    // before the steward is even dispatched, and hand both through.
+    const reportReconstruction = reportReconstructionBlock(item, branch, cookResult)
+    const verdictReconstruction = verdictReconstructionBlock(item, i + 1, verdictResult)
+    const landResult = await withLandLock(() => agent(
+      stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction),
+      {
+        label: `steward-land:${item.slug}`,
+        phase: 'Land',
+        schema: SCHEMA_STEWARD_RETURN,
+        agentType: POLICY.agents.steward,
+        effort: STEWARD.effort,
+      },
+    ))
 
     if (!landResult || !landResult.ok) {
       status = 'rework-needed'
       blockedReason = landResult ? landResult.detail : 'steward-land returned no result'
       blog('steward', `landing failed for ${item.slug}: ${blockedReason}`)
       break
+    }
+
+    reconstructed = landResult.reconstructed || []
+    if (reconstructed.length) {
+      blog('steward', `self-healed missing artifact(s) for ${item.slug}: ${reconstructed.join(', ')}`)
     }
 
     status = 'done'
@@ -685,6 +815,7 @@ async function runItem(item, promises) {
     verdictPath,
     findings: findingsHistory.flatMap((round) => round.findings),
     blockedReason,
+    reconstructed,
   }
 }
 
