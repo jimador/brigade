@@ -11,6 +11,127 @@ const A = typeof args === 'string' ? JSON.parse(args) : args
 // Text an operator's config layers add to every inspector dispatch (Review + Verify).
 const PROMPT_EXTRAS = A.promptOverrides || {}
 
+// ---- Report assembly (pure, top-level — extractable via
+// `new Function(src + '; return buildReviewReportMarkdown')()`, the same pattern
+// test/regression.sh already uses on config.js's pure functions) so a cook or test can
+// exercise it directly against a synthetic findings fixture, without spinning up an agent. ----
+
+const REPORT_SEVERITY_RANK = { blocking: 4, high: 3, medium: 2, low: 1 }
+
+// A finding's free-text fields travel through YAML flow-mapping as JSON-style quoted
+// strings — valid YAML, and it sidesteps colons/quotes in a summary breaking the parse.
+function yamlQuote(value) {
+  return JSON.stringify(String(value == null ? '' : value))
+}
+
+function findingFrontmatterLine(f) {
+  const file = f.location ? String(f.location).split(':')[0] : ''
+  const confirmed = f.confirmed === true ? 'true' : f.confirmed === false ? 'false' : 'null'
+  return `  - { id: ${f.id}, dimension: ${yamlQuote(f.dimension)}, severity: ${f.severity}, location: ${yamlQuote(f.location)}, summary: ${yamlQuote(f.summary)}, files: [${file}], fix: ${yamlQuote(f.fix || '')}, verify_hint: ${yamlQuote(f.verify || '')}, confirmed: ${confirmed} }`
+}
+
+function reportCounts(findings) {
+  const counts = { blocking: 0, high: 0, medium: 0, low: 0 }
+  for (const f of findings) if (counts[f.severity] != null) counts[f.severity] += 1
+  return counts
+}
+
+// Groups by dimension (a finding can carry more than one, comma-joined, after Review's
+// dedup) in first-seen order, severity descending within each group — "grouped by
+// severity within dimension" per the packet.
+function groupFindingsByDimension(findings) {
+  const order = []
+  const byDim = new Map()
+  for (const f of findings) {
+    const key = f.dimension || 'unspecified'
+    if (!byDim.has(key)) {
+      byDim.set(key, [])
+      order.push(key)
+    }
+    byDim.get(key).push(f)
+  }
+  for (const key of order) byDim.get(key).sort((a, b) => (REPORT_SEVERITY_RANK[b.severity] || 0) - (REPORT_SEVERITY_RANK[a.severity] || 0))
+  return order.map((dimension) => ({ dimension, findings: byDim.get(dimension) }))
+}
+
+// What this context tier could and couldn't see — the packet's three fixed disclosures.
+const CONTEXT_DISCLOSURE = {
+  bare: 'No repo conventions/documentation and no requirements source were found for this review — findings rely on generic engineering judgment only, with no repo-specific convention check and no acceptance-criteria check.',
+  documented: "Repo conventions/documentation were available for this review, but no requirements source (tracked ticket or PR body) was found — any product-dimension findings are judged against the PR/commit's inferred intent, not a stated requirement.",
+  tracked: "Full context was available for this review: repo conventions/documentation and a tracked requirements source — findings, including product-dimension ones, are judged against that source's stated acceptance criteria.",
+}
+
+// Keeps the report's BODY (frontmatter is exempt) under brigade-validate's review_report
+// budget even on an unusually finding-heavy review — truncate, don't silently overflow.
+function capBodyLines(lines, max) {
+  let nonEmpty = 0
+  const out = []
+  for (const line of lines) {
+    if (line.trim() !== '') nonEmpty += 1
+    if (nonEmpty > max) {
+      out.push('...(truncated — see the full findings set in the workflow run)')
+      break
+    }
+    out.push(line)
+  }
+  return out
+}
+
+function buildReviewReportMarkdown(params) {
+  const {
+    reviewSlug, tier, model, now, input, range, contextTier, findings, productCaveatFired, evidence,
+  } = params
+  const counts = reportCounts(findings)
+  const groups = groupFindingsByDimension(findings)
+
+  const fm = [
+    '---',
+    'doc: review_report',
+    'schema: 1',
+    'role: inspector',
+    `model: ${model}`,
+    `created: ${now}`,
+    `input: { kind: ${input.kind}, ref: ${yamlQuote(input.ref)} }`,
+    `range: ${range}`,
+    `context_tier: ${contextTier}`,
+    `tier: ${tier}`,
+    `counts: { blocking: ${counts.blocking}, high: ${counts.high}, medium: ${counts.medium}, low: ${counts.low} }`,
+    'findings:',
+    ...(findings.length ? findings.map(findingFrontmatterLine) : ['  []']),
+    '---',
+  ]
+
+  const body = []
+  body.push(
+    '## Scope',
+    '',
+    `Reviewed ${input.kind} input "${input.ref}" (range ${range}), review slug \`${reviewSlug}\`, tier ${tier}. Context tier: ${contextTier}.`,
+    '',
+    '## Findings',
+    '',
+  )
+  if (!groups.length) {
+    body.push('No findings surfaced by this review.', '')
+  } else {
+    for (const g of groups) {
+      body.push(`### ${g.dimension}`, '')
+      for (const f of g.findings) {
+        const confirmedNote = f.confirmed === true ? 'confirmed' : f.confirmed === false ? 'unconfirmed — one refute vote survived' : 'unverified — no verify pass at this tier'
+        body.push(`- **[${f.severity}]** ${f.id} — \`${f.location}\` — ${f.summary} (${confirmedNote})`)
+      }
+      body.push('')
+    }
+  }
+  body.push('## Context disclosure', '', CONTEXT_DISCLOSURE[contextTier] || CONTEXT_DISCLOSURE.bare, '')
+  if (productCaveatFired) {
+    body.push("No requirements source was found — any product-dimension findings above were judged against the PR/commit's stated intent, not a spec.", '')
+  }
+  body.push('## Evidence', '')
+  for (const line of evidence) body.push(`- ${line}`)
+
+  return `${fm.join('\n')}\n\n${capBodyLines(body, 220).join('\n')}\n`
+}
+
 // Everything below runs inside a single async IIFE (rather than top-level await) so this file
 // stays valid under a plain CommonJS-style syntax check as well as the Workflow runtime.
 return (async () => {
@@ -165,7 +286,7 @@ steward schema.`
   // in Resolve) rather than added to config.js's shared SCHEMA_* set — nothing else needs
   // to validate against them.
   const SCHEMA_DOCS_PROBE_RETURN = { type: 'object', required: ['found', 'digest'], properties: { found: { type: 'array', items: { type: 'string' } }, digest: { type: 'string' } } }
-  const SCHEMA_TICKET_PROBE_RETURN = { type: 'object', required: ['found', 'digest'], properties: { found: { type: 'boolean' }, digest: { type: 'string' } } }
+  const SCHEMA_TICKET_PROBE_RETURN = { type: 'object', required: ['found', 'digest'], properties: { found: { type: 'boolean' }, digest: { type: 'string' }, ticketId: { type: 'string' } } }
   const SCHEMA_KB_PROBE_RETURN = { type: 'object', required: ['found', 'digest'], properties: { found: { type: 'boolean' }, digest: { type: 'string' } } }
   const SCHEMA_CONTEXT_SCOUT_RETURN = { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } }
 
@@ -217,8 +338,10 @@ Soft-fail absolutely: no board wiring, no plausible candidate, or an unreadable 
 all mean return found: false with a one-line reason in 'digest' — never throw, never
 block the review over this.
 
-Return: found (boolean), digest (markdown, <= 40 lines: ticket id/title, key acceptance
-criteria, relevant Activity — empty string when found is false).`
+Return: found (boolean), ticketId (the exact ticket id/key you resolved, e.g.
+"BOARD-123" — empty string when found is false; the Report phase needs this exact id to
+mirror a comment back to the same ticket), digest (markdown, <= 40 lines: ticket id/title,
+key acceptance criteria, relevant Activity — empty string when found is false).`
   }
 
   function kbProbePrompt(cfg) {
@@ -256,6 +379,7 @@ return the answer.`
     const level = POLICY.probe // 'full' | 'docs+ticket' | 'docs'
     const sections = []
     let contextTier = 'bare'
+    let ticketId = null
 
     // Docs probe: every probe level runs this one.
     const docsResult = await agent(docsProbePrompt(), {
@@ -284,6 +408,7 @@ return the answer.`
       if (ticketResult && ticketResult.found) {
         contextTier = 'tracked'
         if (ticketResult.digest) sections.push(`## Ticket\n\n${ticketResult.digest}`)
+        if (ticketResult.ticketId) ticketId = ticketResult.ticketId
       } else {
         blog('inspector', `Probe: no tracked ticket found (${ticketResult ? ticketResult.digest || 'no reason given' : 'steward returned no result'}) — staying at the docs tier.`)
       }
@@ -339,7 +464,7 @@ Return the steward result: ok, detail.`,
       blog('inspector', `Probe: failed to write context digest to ${digestPath}: ${writeResult ? writeResult.detail : 'no result from steward'}`)
     }
 
-    return { contextTier, digest, digestPath }
+    return { contextTier, digest, digestPath, ticketId }
   }
 
   // ---- Review: dispatch dimension lenses per REVIEW_POLICY[tier].dispatch (D1) ----
@@ -516,7 +641,8 @@ Return per the schema you were given: { findings: [...] }.`
       else blog('inspector', `Review dispatch for [${groups[i].map((d) => d.id).join('+')}] returned no result — treated as zero findings.`)
     }
 
-    return { findings: dedupFindings(rawFindings) }
+    const deduped = dedupFindings(rawFindings)
+    return { findings: deduped, rawCount: rawFindings.length, dedupCount: deduped.length }
   }
 
   // ---- Verify: adversarial refute pass per REVIEW_POLICY[tier].verify (D1) ----
@@ -554,7 +680,7 @@ above — and decide whether the described defect genuinely holds. Return refute
 
     if (votes === 0 || !severities.length) {
       blog('inspector', `Verify: this tier's policy runs no refute pass (votes: ${votes}) — all findings stay unconfirmed.`)
-      return { findings: findings.map((f) => ({ ...f, confirmed: null })) }
+      return { findings: findings.map((f) => ({ ...f, confirmed: null })), dropped: [] }
     }
 
     const eligible = findings.filter((f) => severities.includes(f.severity))
@@ -594,22 +720,122 @@ above — and decide whether the described defect genuinely holds. Return refute
     })
 
     const survivors = []
+    const dropped = []
     for (const f of eligible) {
       const flags = refuteFlagsByFinding.get(f) || []
       const refuteCount = flags.filter(Boolean).length
       if (refuteCount >= votes) {
         blog('inspector', `Verify: finding ${f.id} refuted by all ${votes} vote(s) — dropped.`)
+        dropped.push({ ...f, confirmed: false })
         continue
       }
       survivors.push({ ...f, confirmed: refuteCount === 0 })
     }
 
-    return { findings: [...survivors, ...ineligible.map((f) => ({ ...f, confirmed: null }))] }
+    return { findings: [...survivors, ...ineligible.map((f) => ({ ...f, confirmed: null }))], dropped }
   }
 
-  async function reportPhase(verifyResult, probeResult) {
-    blog('inspector', 'Report stub: review_report assembly is not implemented yet.')
-    return { findings: verifyResult.findings, contextTier: probeResult.contextTier, reportPath: null }
+  // ---- Report: assemble + write review_report, mirror to the board when a ticket was
+  // resolved, return the workflow ledger (D2/D1's final phase) ----
+
+  function boardMirrorPrompt(ticketId, countsLine) {
+    return `You are the Steward posting a short review-complete comment to a tracked
+ticket after an automated code review. Working directory: ${A.repoRoot} (board wiring is
+repo-level state, not part of the reviewed worktree).
+
+Read .brigade/config.md for board wiring (source type, board id, identity). If it's
+missing or unreadable, soft-fail: return ok: false with a one-line reason in 'detail' —
+do not guess at a source, and never let this step fail the review itself.
+
+Otherwise post a comment to ticket "${ticketId}" using that source's adapter conventions
+(skills/brigade/sources/<source>.md Op 4 — Post a comment — or
+skills/brigade/sources/TEMPLATE.md if a source-specific doc doesn't exist). Post exactly
+this human-facing text, verbatim:
+
+"${countsLine} — review report available in the session."
+
+Never include a local filesystem path in the comment. Never post anything to a pull
+request — this is a ticket/board comment only, never a PR comment or PR review.
+
+Return the steward result: ok, detail.`
+  }
+
+  // Concrete resolve/probe/review/verify facts this review actually produced — the
+  // report's "commands run with key output lines," built from real return values rather
+  // than paraphrase.
+  function buildEvidenceLines(resolveResult, probeResult, reviewResult, verifyResult) {
+    const lines = []
+    if (A.input.kind === 'pr') {
+      lines.push(`gh pr view ${prNumber} --json number,title,body,headRefName,baseRefName; git fetch ${remote} pull/${prNumber}/head:${prReviewRef} -> resolved`)
+    } else if (A.input.kind === 'range') {
+      lines.push(`git rev-parse <both endpoints of "${A.input.ref}"> -> both resolved`)
+    } else {
+      lines.push(`git merge-base ${A.mainLine} ${A.input.ref} -> base ${resolveResult.base}`)
+    }
+    lines.push(`range resolved: ${resolveResult.range}`)
+    lines.push(`context probe (level: ${POLICY.probe}): tier=${probeResult.contextTier}, digest written to ${probeResult.digestPath}`)
+    lines.push(`review dispatch (${POLICY.dispatch}): ${reviewResult.rawCount} raw finding(s) -> ${reviewResult.dedupCount} after location dedup`)
+    lines.push(`verify pass (severities=${POLICY.verify.severities.join(', ') || 'none'}, votes=${POLICY.verify.votes}): ${verifyResult.findings.length} survived, ${(verifyResult.dropped || []).length} dropped (refuted by all votes)`)
+    return lines
+  }
+
+  async function reportPhase(verifyResult, probeResult, resolveResult, reviewResult) {
+    const contextTier = probeResult.contextTier
+    const findings = verifyResult.findings || []
+    const dropped = verifyResult.dropped || []
+    const unconfirmed = findings.filter((f) => f.confirmed === false)
+    const counts = reportCounts(findings)
+
+    const productCaveatFired = productCaveatNeeded(POLICY.product, contextTier, resolveResult.prBody)
+      && findings.some((f) => String(f.dimension || '').split(',').map((s) => s.trim()).includes('product'))
+
+    const evidence = buildEvidenceLines(resolveResult, probeResult, reviewResult, verifyResult)
+
+    const markdown = buildReviewReportMarkdown({
+      reviewSlug: A.reviewSlug,
+      tier: A.tier,
+      model: POLICY.agents.inspector,
+      now: A.now,
+      input: A.input,
+      range: resolveResult.range,
+      contextTier,
+      findings,
+      productCaveatFired,
+      evidence,
+    })
+
+    const reportPath = `${A.repoRoot}/.brigade/reviews/${A.reviewSlug}/report.md`
+    const writeResult = await agent(
+      `You are the Steward writing a finished review report to disk — do not change a
+single character of the content below, just write it verbatim.
+
+Write exactly this content to ${reportPath} (create parent directories as needed):
+
+---BEGIN CONTENT---
+${markdown}
+---END CONTENT---
+
+Return the steward result: ok, detail.`,
+      { label: 'report-write', phase: 'Report', schema: SCHEMA_STEWARD_RETURN, agentType: POLICY.agents.steward, effort: STEWARD.effort },
+    )
+    if (!writeResult || !writeResult.ok) {
+      blog('inspector', `Report: failed to write review report to ${reportPath}: ${writeResult ? writeResult.detail : 'no result from steward'}`)
+    }
+
+    // Board mirror only fires when the probe actually resolved a tracked ticket — never
+    // for bare/documented tiers, and never onto a PR.
+    if (A.boardConfigured && contextTier === 'tracked' && probeResult.ticketId) {
+      const countsLine = `Automated code review complete: ${counts.blocking} blocking, ${counts.high} high, ${counts.medium} medium, ${counts.low} low finding(s)`
+      const mirrorResult = await agent(
+        boardMirrorPrompt(probeResult.ticketId, countsLine),
+        { label: 'report-board-mirror', phase: 'Report', schema: SCHEMA_STEWARD_RETURN, agentType: POLICY.agents.steward, effort: STEWARD.effort },
+      )
+      if (!mirrorResult || !mirrorResult.ok) {
+        blog('inspector', `Report: board mirror comment failed (non-fatal, review still completed): ${mirrorResult ? mirrorResult.detail : 'no result from steward'}`)
+      }
+    }
+
+    return { reportPath, contextTier, counts, findings, unconfirmed, dropped }
   }
 
   try {
@@ -637,7 +863,7 @@ above — and decide whether the described defect genuinely holds. Return refute
     phase('Verify')
     const verifyResult = await verifyPhase(reviewResult, resolveResult)
     phase('Report')
-    return await reportPhase(verifyResult, probeResult)
+    return await reportPhase(verifyResult, probeResult, resolveResult, reviewResult)
   } finally {
     await cleanupWorktree()
   }
