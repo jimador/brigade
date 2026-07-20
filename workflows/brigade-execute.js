@@ -92,6 +92,8 @@ const SCHEMA_VERDICT_RETURN = { type: 'object', required: ['verdict', 'verdictPa
 
 const SCHEMA_STEWARD_RETURN = { type: 'object', required: ['ok', 'detail'], properties: { ok: { type: 'boolean' }, detail: { type: 'string' }, landedRange: { type: 'string' }, contamination: { type: 'boolean' } } }
 
+const SCHEMA_REVIEW_RETURN = { type: 'object', required: ['findings', 'contextTier', 'reportPath'], properties: { findings: { type: 'array', items: { type: 'object', required: ['id', 'severity', 'location', 'summary', 'dimension'], properties: { id: { type: 'string' }, severity: { enum: ['blocking', 'high', 'medium', 'low'] }, location: { type: 'string' }, summary: { type: 'string' }, dimension: { type: 'string' }, fix: { type: 'string' }, verify: { type: 'string' } } } }, contextTier: { enum: ['bare', 'documented', 'tracked'] }, reportPath: { type: 'string' } } }
+
 const MD_SCHEMA_BLOCKS = {
   brief: `Producer: scout. Consumers: Planner (packet-writing), Inspector (plan check).
 
@@ -188,6 +190,98 @@ wrong, why it matters, concrete fix direction — ids matching frontmatter), \`#
 check\` (what was re-run, verbatim result tail). Authority: the actual diff and the
 inspector's own command runs; the cook's report is a claim, not a source.
 Budget: ≤ 150 lines.`,
+  review_report: `Producer: review workflow (inspector Mode 3 findings, planner-assembled).
+Consumers: operator, later finding-to-packet dispatch. Advisory — no PASS/FAIL.
+
+---
+doc: review_report
+schema: 1
+role: inspector
+model: haiku
+created: 2026-07-04T03:10:00Z
+input: { kind: branch, ref: feat/x }        # kind: branch|range|pr; ref: as given
+range: <base>..<head>
+context_tier: documented                    # bare|documented|tracked
+tier: three-star                            # three-star|two-star|one-star
+counts: { blocking: 0, high: 0, medium: 0, low: 0 }
+findings:
+  - { id: F1, dimension: correctness, severity: blocking, location: "src/foo.ts:42",
+      summary: <one line>, files: [src/foo.ts], fix: <concrete fix direction>,
+      verify_hint: <how to confirm>, confirmed: true }
+---
+
+Body sections, in order: \`## Scope\` (what was reviewed, base/head, context tier and
+why), \`## Findings\` (grouped by severity within dimension; each finding packet-shaped),
+\`## Context disclosure\` (what the review could not see at this context tier —
+name the "no requirements source" caveat when it fires), \`## Evidence\` (commands run,
+verbatim key output). Budget: ≤ 250 lines. Authority: the diff, the worktree, probe
+artifacts; product findings cite the requirements source or carry the no-requirements
+caveat.`,
+}
+
+// The eight lenses a code review can look through. Each `lens` is the instruction an
+// inspector gets for that dimension — what to examine and what evidence a finding needs.
+const REVIEW_DIMENSIONS = [
+  { id: 'correctness', title: 'Correctness', lens: "Does the code do what it claims, including edge cases and error paths? Trace the actual control flow against the packet's acceptance criteria (or, absent one, the PR/commit intent) and flag any place behavior diverges from that, naming the specific input or state that triggers it." },
+  { id: 'tests', title: 'Tests', lens: 'Do the tests exercise the real behavior, not just the happy path, and would they actually fail if the logic broke? Flag missing coverage for the edge cases and error paths the change introduces, assertions on implementation details instead of behavior, and tests that would pass whether or not the fix works.' },
+  { id: 'architecture', title: 'Architecture', lens: "Does this change fit the existing module boundaries and data flow, or does it bolt on a shortcut that will make the next change harder? Look at where the logic lives relative to its callers and dependencies, and flag layering violations or responsibilities placed in the wrong module, naming the module that should own it instead." },
+  { id: 'maintainability', title: 'Maintainability', lens: "Will the next person who reads this code understand it without archaeology? Flag naming that misleads, control flow that's harder to follow than it needs to be, and missing context a future editor would need — cite the specific line, not a general impression." },
+  { id: 'reuse', title: 'Reuse', lens: "Before accepting any hand-rolled logic, prove the negative: search the app code and the frameworks/libraries already in use for an existing equivalent — a utility, a library function, a pattern used elsewhere in this repo — that the change should have used instead. A finding here needs the search that was run and what it turned up, not a guess that 'this probably exists somewhere.'" },
+  { id: 'duplication', title: 'Duplication', lens: 'Compare the diff against the rest of the repo for near-identical logic introduced instead of reused — this is a spot check against files the diff obviously touches or extends, not an exhaustive repo-wide scan. Flag copy-pasted blocks with only superficial variable renames, and name the other location.' },
+  { id: 'security', title: 'Security', lens: "Does this change introduce or widen an attack surface — unvalidated input, an authz gap, a secret handled unsafely, an injection vector? Trace the specific path an attacker would take and name the concrete exploit, not a generic 'this could be a security issue.'" },
+  { id: 'product', title: 'Product', lens: "With a requirements source (ticket, spec, or a PR description carrying explicit acceptance criteria), review the change against those criteria and flag any left unmet or silently reinterpreted. Without a requirements source, review against the PR/commit's stated intent instead, and open the report with the caveat 'no requirements source' so the reader knows the bar was inferred, not given." },
+]
+
+// Per-tier review depth, mirroring TIERS.md's code-review-depth row (D1). `dispatch`
+// picks how dimensions are batched into inspector calls; `groups` is the batching for
+// 'grouped'/'merged' (unused, but present, for 'per-dimension'); `product` gates whether
+// the product lens runs; `verify` sets which severities get a refute-framed second pass
+// and how many independent votes; `probe` sets how much context-gathering runs first.
+const REVIEW_POLICY = {
+  'three-star': {
+    dispatch: 'per-dimension',
+    groups: [['correctness'], ['tests'], ['architecture'], ['maintainability'], ['reuse'], ['duplication'], ['security'], ['product']],
+    product: 'always',
+    verify: { severities: ['blocking', 'high'], votes: 2 },
+    probe: 'full',
+  },
+  'two-star': {
+    dispatch: 'grouped',
+    groups: [['correctness', 'tests'], ['architecture', 'maintainability'], ['reuse', 'duplication'], ['security']],
+    product: 'with-source',
+    verify: { severities: ['blocking'], votes: 1 },
+    probe: 'docs+ticket',
+  },
+  'one-star': {
+    dispatch: 'merged',
+    groups: [['correctness', 'tests', 'architecture', 'maintainability', 'reuse', 'duplication', 'security']],
+    product: 'with-source',
+    verify: { severities: [], votes: 0 },
+    probe: 'docs',
+  },
+}
+
+// Fold a config layer's `review.dimensions` overrides (merge-by-id, like contextSources)
+// over the built-in REVIEW_DIMENSIONS. Later entries override fields on a matching id;
+// `enabled: false` drops that dimension from the resolved set; an id not in the
+// built-in set is appended as a custom dimension. Accepts either the wrapped
+// `resolve --json` envelope or a bare config object, same tolerance as resolvePolicy.
+function resolveReviewDimensions(overrides) {
+  const o = overrides && overrides.config ? overrides.config : overrides || {}
+  const patches = (o.review && o.review.dimensions) || []
+  const order = REVIEW_DIMENSIONS.map((d) => d.id)
+  const byId = new Map(REVIEW_DIMENSIONS.map((d) => [d.id, { ...d }]))
+  for (const patch of patches) {
+    if (!patch || !patch.id) continue
+    if (patch.enabled === false) {
+      byId.delete(patch.id)
+      continue
+    }
+    const { enabled, ...fields } = patch
+    byId.set(patch.id, { ...(byId.get(patch.id) || {}), ...fields })
+    if (!order.includes(patch.id)) order.push(patch.id)
+  }
+  return order.filter((id) => byId.has(id)).map((id) => byId.get(id))
 }
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
