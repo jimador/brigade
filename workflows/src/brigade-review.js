@@ -140,6 +140,12 @@ return (async () => {
   // Tier policy first, then the operator's config layers folded over it.
   const POLICY = resolvePolicy(A.tier, A.overrides)
 
+  // The review-specific policy (probe/dispatch/groups/product/verify) lives in a
+  // completely separate object — REVIEW_POLICY[tier], keyed the same way as
+  // BRIGADE_TIERS but with none of resolvePolicy()'s keys. Falls back to two-star
+  // if A.tier is somehow outside the three known tiers.
+  const RP = REVIEW_POLICY[A.tier] || REVIEW_POLICY['two-star']
+
   // Every review checks out its own throwaway worktree, kept in its own directory so it can
   // never collide with (or get torn down alongside) whatever cook/inspect worktrees this
   // dish's own pipeline happens to have in flight at the same time.
@@ -376,7 +382,7 @@ return the answer.`
   }
 
   async function probePhase(resolveResult) {
-    const level = POLICY.probe // 'full' | 'docs+ticket' | 'docs'
+    const level = RP.probe // 'full' | 'docs+ticket' | 'docs'
     const sections = []
     let contextTier = 'bare'
     let ticketId = null
@@ -469,7 +475,7 @@ Return the steward result: ok, detail.`,
 
   // ---- Review: dispatch dimension lenses per REVIEW_POLICY[tier].dispatch (D1) ----
   //
-  // Dispatch shape only ever branches on POLICY.dispatch/POLICY.groups/POLICY.product —
+  // Dispatch shape only ever branches on RP.dispatch/RP.groups/RP.product —
   // never on A.tier directly, so a config layer that retunes REVIEW_POLICY (or the
   // dimension set, via resolveReviewDimensions) is honored without touching this file.
 
@@ -480,12 +486,12 @@ Return the steward result: ok, detail.`,
 
   const SCHEMA_VERIFY_VOTE_RETURN = { type: 'object', required: ['refuted'], properties: { refuted: { type: 'boolean' }, note: { type: 'string' } } }
 
-  // Batch non-product dimensions into dispatch groups per POLICY.dispatch:
+  // Batch non-product dimensions into dispatch groups per RP.dispatch:
   //   'per-dimension' -> one dispatch per resolved dimension (custom/added dimensions
   //     fall out of this for free, since it just maps over whatever resolveReviewDimensions
   //     returned).
   //   'merged'        -> a single dispatch carrying every resolved dimension's lens.
-  //   'grouped'       -> POLICY.groups' id lists, filtered down to dimensions still
+  //   'grouped'       -> RP.groups' id lists, filtered down to dimensions still
   //     active after config overrides; any dimension a config layer added that isn't
   //     named in any built-in group gets its own extra group rather than being dropped.
   function buildDispatchGroups(nonProductDims, dispatch, policyGroups) {
@@ -600,15 +606,15 @@ Return per the schema you were given: { findings: [...] }.`
     const nonProductDims = dimensions.filter((d) => d.id !== 'product')
     const productDim = dimensions.find((d) => d.id === 'product')
 
-    const groups = buildDispatchGroups(nonProductDims, POLICY.dispatch, POLICY.groups)
+    const groups = buildDispatchGroups(nonProductDims, RP.dispatch, RP.groups)
 
-    const runProduct = !!productDim && productShouldRun(POLICY.product, probeResult.contextTier, resolveResult.prBody)
-    const caveatNeeded = runProduct && productCaveatNeeded(POLICY.product, probeResult.contextTier, resolveResult.prBody)
+    const runProduct = !!productDim && productShouldRun(RP.product, probeResult.contextTier, resolveResult.prBody)
+    const caveatNeeded = runProduct && productCaveatNeeded(RP.product, probeResult.contextTier, resolveResult.prBody)
 
     if (runProduct) {
       // 'merged' folds product's lens into the same single dispatch (B1 foldin);
       // per-dimension/grouped give it its own dispatch (D1's conditional 5th group).
-      if (POLICY.dispatch === 'merged' && groups.length) {
+      if (RP.dispatch === 'merged' && groups.length) {
         groups[groups.length - 1] = [...groups[groups.length - 1], productDim]
       } else {
         groups.push([productDim])
@@ -675,7 +681,7 @@ above — and decide whether the described defect genuinely holds. Return refute
   }
 
   async function verifyPhase(reviewResult, resolveResult) {
-    const { severities, votes } = POLICY.verify
+    const { severities, votes } = RP.verify
     const findings = reviewResult.findings || []
 
     if (votes === 0 || !severities.length) {
@@ -773,9 +779,9 @@ Return the steward result: ok, detail.`
       lines.push(`git merge-base ${A.mainLine} ${A.input.ref} -> base ${resolveResult.base}`)
     }
     lines.push(`range resolved: ${resolveResult.range}`)
-    lines.push(`context probe (level: ${POLICY.probe}): tier=${probeResult.contextTier}, digest written to ${probeResult.digestPath}`)
-    lines.push(`review dispatch (${POLICY.dispatch}): ${reviewResult.rawCount} raw finding(s) -> ${reviewResult.dedupCount} after location dedup`)
-    lines.push(`verify pass (severities=${POLICY.verify.severities.join(', ') || 'none'}, votes=${POLICY.verify.votes}): ${verifyResult.findings.length} survived, ${(verifyResult.dropped || []).length} dropped (refuted by all votes)`)
+    lines.push(`context probe (level: ${RP.probe}): tier=${probeResult.contextTier}, digest written to ${probeResult.digestPath}`)
+    lines.push(`review dispatch (${RP.dispatch}): ${reviewResult.rawCount} raw finding(s) -> ${reviewResult.dedupCount} after location dedup`)
+    lines.push(`verify pass (severities=${RP.verify.severities.join(', ') || 'none'}, votes=${RP.verify.votes}): ${verifyResult.findings.length} survived, ${(verifyResult.dropped || []).length} dropped (refuted by all votes)`)
     return lines
   }
 
@@ -786,7 +792,7 @@ Return the steward result: ok, detail.`
     const unconfirmed = findings.filter((f) => f.confirmed === false)
     const counts = reportCounts(findings)
 
-    const productCaveatFired = productCaveatNeeded(POLICY.product, contextTier, resolveResult.prBody)
+    const productCaveatFired = productCaveatNeeded(RP.product, contextTier, resolveResult.prBody)
       && findings.some((f) => String(f.dimension || '').split(',').map((s) => s.trim()).includes('product'))
 
     const evidence = buildEvidenceLines(resolveResult, probeResult, reviewResult, verifyResult)

@@ -1012,6 +1012,82 @@ console.log('REVIEW CONFIG PIN OK')
 NODE
 }
 
+test_review_policy_binding() {
+  # Pin the review workflow's tier policy binding: brigade-review.js must read its
+  # probe/dispatch/groups/product/verify knobs from REVIEW_POLICY[tier] (via the RP
+  # binding), never from POLICY (resolvePolicy()'s result — attempts/scoutCap/agents/...,
+  # no review keys at all). Live smoke evidence before the fix: a one-star run crashed
+  # in buildDispatchGroups ("policyGroups is not iterable") because POLICY.groups was
+  # undefined, and POLICY.probe was silently undefined at every tier.
+  ROOT="$ROOT" node <<'NODE' || fail "review policy binding pin failed"
+const fs = require('fs')
+const assert = require('assert')
+const path = process.env.ROOT + '/workflows/brigade-review.js'
+const src = fs.readFileSync(path, 'utf8')
+
+// Everything above the runtime IIFE is top-level consts/functions — REVIEW_POLICY and
+// REVIEW_DIMENSIONS among them, spliced in from config.js by the bundler — so slice the
+// file there and extract them the same `new Function` way test_review_config already
+// does against config.js directly. The slice point is the top-level `return (async () =>
+// {` line that starts the runtime body (a bare top-level return only parses at all
+// because new Function treats the whole source as a function body, same trick this file
+// already relies on). `args` is referenced by the header (A = JSON.parse(args)), so it
+// has to be supplied as a real param, not left to blow up as an undefined global.
+const marker = '\nreturn (async () => {'
+const idx = src.indexOf(marker)
+assert.ok(idx !== -1, 'runtime IIFE marker not found in brigade-review.js')
+// Strip the one `export` (on `meta`) — invalid inside a Function body — and add back
+// the newline the slice cut off (the header's last line is itself a `//` comment with
+// no trailing newline in the slice; without this, anything appended is swallowed into
+// that comment instead of executing).
+const header = `${src.slice(0, idx).replace('export const meta', 'const meta')}\n`
+const { REVIEW_POLICY, REVIEW_DIMENSIONS } = new Function('args', `${header}; return { REVIEW_POLICY, REVIEW_DIMENSIONS }`)('{}')
+
+// buildDispatchGroups is declared INSIDE the runtime IIFE, not at top level, so it isn't
+// reachable through the header extraction above. It has no free variables (only its own
+// params), so pull just its own function text out by brace-matching and build a
+// standalone Function from that alone.
+const fnStart = src.indexOf('function buildDispatchGroups(')
+assert.ok(fnStart !== -1, 'buildDispatchGroups not found in brigade-review.js')
+const braceStart = src.indexOf('{', fnStart)
+let depth = 0
+let fnEnd = -1
+for (let i = braceStart; i < src.length; i += 1) {
+  if (src[i] === '{') depth += 1
+  else if (src[i] === '}') {
+    depth -= 1
+    if (depth === 0) { fnEnd = i; break }
+  }
+}
+assert.ok(fnEnd !== -1, 'could not brace-match buildDispatchGroups')
+const buildDispatchGroups = new Function(`${src.slice(fnStart, fnEnd + 1)}; return buildDispatchGroups`)()
+
+// The functional pin: build each tier's dispatch groups straight out of its own
+// REVIEW_POLICY entry, over the real 7 non-product dimensions, and assert the group
+// counts the packet calls for. This fails the moment the policy values and the dispatch
+// builder drift apart again, independent of any grep.
+const dims = REVIEW_DIMENSIONS.filter((d) => d.id !== 'product')
+assert.strictEqual(dims.length, 7, `expected 7 non-product dimensions, got ${dims.length}`)
+
+const expectedGroupCounts = { 'three-star': 7, 'two-star': 4, 'one-star': 1 }
+for (const [tier, expected] of Object.entries(expectedGroupCounts)) {
+  const rp = REVIEW_POLICY[tier]
+  assert.ok(rp, `REVIEW_POLICY missing tier: ${tier}`)
+  const groups = buildDispatchGroups(dims, rp.dispatch, rp.groups)
+  assert.strictEqual(groups.length, expected, `${tier}: expected ${expected} dispatch group(s), got ${groups.length}`)
+}
+
+console.log('REVIEW POLICY BINDING PIN OK')
+NODE
+
+  # Belt-and-suspenders: no POLICY.(probe|dispatch|groups|product|verify) read should ever
+  # come back into the source file. `grep -c` exits 1 on zero matches, so `|| true` keeps
+  # that from killing the test before the count itself gets checked.
+  stray_count="$(grep -cE 'POLICY\.(probe|dispatch|groups|product|verify)' "$ROOT/workflows/src/brigade-review.js" || true)"
+  [ "$stray_count" -eq 0 ] ||
+    fail "workflows/src/brigade-review.js still reads POLICY.(probe|dispatch|groups|product|verify) directly ($stray_count occurrence(s)) — must read RP.* instead"
+}
+
 test_review_bundle() {
   # Capture the generated-file trailer count from an existing, known-good generated
   # workflow first, so the count asserted against brigade-review.js comes from a real
@@ -1094,6 +1170,7 @@ test_execute_ledger_wiring
 test_execute_artifact_verification
 test_schema_examples_validate
 test_review_config
+test_review_policy_binding
 test_review_bundle
 test_inspector_modes
 test_validate_review_report
