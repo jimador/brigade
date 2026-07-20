@@ -577,18 +577,25 @@ above — and decide whether the described defect genuinely holds. Return refute
       )),
     )
 
-    const refuteFlagsById = new Map()
+    // Keyed by the finding OBJECT itself (Map supports object identity as a key), never
+    // by finding.id — id strings are only unique within a single dispatch's own return
+    // (each of the parallel per-dimension/group/merged Review calls hands out its own
+    // "F1", "F2", ... independently), so two eligible findings from different dispatches
+    // can easily share an id. Keying by id would merge their vote tallies together and
+    // silently corrupt the votes=2/1/0 semantics; keying by the object reference can't
+    // collide, since `eligible` and `tasks` both point at the exact same finding objects.
+    const refuteFlagsByFinding = new Map()
     tasks.forEach((t, i) => {
       const r = voteResults[i]
       if (!r) blog('inspector', `Verify: vote ${t.voteIndex + 1} for finding ${t.finding.id} returned no result — treated as non-refuting.`)
-      const list = refuteFlagsById.get(t.finding.id) || []
+      const list = refuteFlagsByFinding.get(t.finding) || []
       list.push(!!(r && r.refuted))
-      refuteFlagsById.set(t.finding.id, list)
+      refuteFlagsByFinding.set(t.finding, list)
     })
 
     const survivors = []
     for (const f of eligible) {
-      const flags = refuteFlagsById.get(f.id) || []
+      const flags = refuteFlagsByFinding.get(f) || []
       const refuteCount = flags.filter(Boolean).length
       if (refuteCount >= votes) {
         blog('inspector', `Verify: finding ${f.id} refuted by all ${votes} vote(s) — dropped.`)
