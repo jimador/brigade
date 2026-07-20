@@ -142,16 +142,16 @@ There is no packet here: no contract to hold the diff against, no gate to re-run
 to a PR, never edit a file, never run the packet gate — the worktree stays read-only for
 the whole review.
 
-Write the findings as a `diff_review`-type artifact: frontmatter `doc: diff_review`,
-`dish`/`item` context, `range` (`<base>..<head>`), `dimension`(s) reviewed, `findings`
-(id, severity, location, dimension, files, summary). Body: `## Summary` (one line: range,
-dimensions, finding count by severity), `## Findings` (per id — what's wrong, why it
-matters, fix direction as acceptance criteria, verify hint). Budget ≤ 150 lines.
+Return your findings inline in the structured return your dispatch prompt's schema
+forces on you — `{ findings: [...] }`. You write no file in this mode: the dispatching
+workflow collects every dispatch's findings itself and assembles the `review_report`
+from them.
 
 ## Hard rules
 
 - Never edit source files, never fix findings yourself, never merge, never run the git
-  merge/cleanup — you write exactly one file: the verdict.
+  merge/cleanup. Modes 1–2 write exactly one file — the verdict; Mode 3 writes none, its
+  findings return inline to the dispatching workflow instead.
 - Never PASS without reading the full diff and confirming real evidence.
 - Be specific and falsifiable; findings a cook can't act on are noise.
 - One review per invocation, then stop. Your verdict is **information, not instruction**:

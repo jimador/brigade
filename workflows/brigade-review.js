@@ -355,6 +355,20 @@ function capBodyLines(lines, max) {
   return out
 }
 
+// The verify-vote tally, pulled out as its own pure function (same extractable-top-level
+// shape as buildReviewReportMarkdown above) so a test can pin the votes=0/1/2 decision
+// table directly, without spinning up an agent. `finding` isn't read here — it's part of
+// the signature so a caller (or a future tally rule keyed on severity) has it in hand —
+// the decision itself only depends on how many of the `votes` cast came back refuted:
+// votes=0 means this tier runs no refute pass at all, so the finding is never touched;
+// otherwise it dies only when EVERY vote refutes it, survives unconfirmed when at least
+// one (but not all) refutes, and survives confirmed when none do.
+function tallyVerifyVotes(finding, votes, refuteCount) {
+  if (votes === 0) return { keep: true, confirmed: null }
+  if (refuteCount >= votes) return { keep: false, confirmed: false }
+  return { keep: true, confirmed: refuteCount === 0 }
+}
+
 function buildReviewReportMarkdown(params) {
   const {
     reviewSlug, tier, model, now, input, range, contextTier, findings, productCaveatFired, evidence,
@@ -460,8 +474,10 @@ return (async () => {
   }
 
   function worktreeStep(checkoutRef) {
-    return `Then check out the review worktree (a detached checkout is fine — no branch needed):
-  git -C ${A.repoRoot} worktree add ${worktreePath} ${checkoutRef}
+    return `Then check out the review worktree, detached — this has to work even when
+${checkoutRef} is already checked out somewhere else (including this repo's own delivery
+worktree), so the checkout must never try to claim the branch itself:
+  git -C ${A.repoRoot} worktree add --detach ${worktreePath} ${checkoutRef}
 Set worktreePath to "${worktreePath}" in your return — every exit path from this review
 depends on that exact path to clean up after itself later.`
   }
@@ -1008,12 +1024,13 @@ above — and decide whether the described defect genuinely holds. Return refute
     for (const f of eligible) {
       const flags = refuteFlagsByFinding.get(f) || []
       const refuteCount = flags.filter(Boolean).length
-      if (refuteCount >= votes) {
+      const tally = tallyVerifyVotes(f, votes, refuteCount)
+      if (!tally.keep) {
         blog('inspector', `Verify: finding ${f.id} refuted by all ${votes} vote(s) — dropped.`)
-        dropped.push({ ...f, confirmed: false })
+        dropped.push({ ...f, confirmed: tally.confirmed })
         continue
       }
-      survivors.push({ ...f, confirmed: refuteCount === 0 })
+      survivors.push({ ...f, confirmed: tally.confirmed })
     }
 
     return { findings: [...survivors, ...ineligible.map((f) => ({ ...f, confirmed: null }))], dropped }

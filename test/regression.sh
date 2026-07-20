@@ -1088,6 +1088,41 @@ NODE
     fail "workflows/src/brigade-review.js still reads POLICY.(probe|dispatch|groups|product|verify) directly ($stray_count occurrence(s)) — must read RP.* instead"
 }
 
+test_review_verify_tally() {
+  # Pin verifyPhase's vote-tally decision table. tallyVerifyVotes(finding, votes,
+  # refuteCount) is a pure top-level function in brigade-review.js (same shape as
+  # buildReviewReportMarkdown, dedupFindings, etc.) — extract it out of the GENERATED
+  # workflow the same header-slice way test_review_policy_binding pulls REVIEW_POLICY/
+  # REVIEW_DIMENSIONS, then exercise every votes=0/1/2 branch directly, no agent needed.
+  ROOT="$ROOT" node <<'NODE' || fail "review verify-vote tally pin failed"
+const fs = require('fs')
+const assert = require('assert')
+const path = process.env.ROOT + '/workflows/brigade-review.js'
+const src = fs.readFileSync(path, 'utf8')
+
+const marker = '\nreturn (async () => {'
+const idx = src.indexOf(marker)
+assert.ok(idx !== -1, 'runtime IIFE marker not found in brigade-review.js')
+const header = `${src.slice(0, idx).replace('export const meta', 'const meta')}\n`
+const { tallyVerifyVotes } = new Function('args', `${header}; return { tallyVerifyVotes }`)('{}')
+assert.strictEqual(typeof tallyVerifyVotes, 'function', 'tallyVerifyVotes not found at top level of brigade-review.js')
+
+// votes=0: this tier runs no refute pass at all — always kept, never confirmed either way.
+assert.deepStrictEqual(tallyVerifyVotes({ id: 'f' }, 0, 0), { keep: true, confirmed: null })
+
+// votes=1: the lone vote refutes -> dropped; doesn't refute -> confirmed.
+assert.deepStrictEqual(tallyVerifyVotes({ id: 'f' }, 1, 1), { keep: false, confirmed: false })
+assert.deepStrictEqual(tallyVerifyVotes({ id: 'f' }, 1, 0), { keep: true, confirmed: true })
+
+// votes=2: both refute -> dropped; one refute -> survives unconfirmed; none -> confirmed.
+assert.deepStrictEqual(tallyVerifyVotes({ id: 'f' }, 2, 2), { keep: false, confirmed: false })
+assert.deepStrictEqual(tallyVerifyVotes({ id: 'f' }, 2, 1), { keep: true, confirmed: false })
+assert.deepStrictEqual(tallyVerifyVotes({ id: 'f' }, 2, 0), { keep: true, confirmed: true })
+
+console.log('REVIEW VERIFY TALLY PIN OK')
+NODE
+}
+
 test_review_bundle() {
   # Capture the generated-file trailer count from an existing, known-good generated
   # workflow first, so the count asserted against brigade-review.js comes from a real
@@ -1171,6 +1206,7 @@ test_execute_artifact_verification
 test_schema_examples_validate
 test_review_config
 test_review_policy_binding
+test_review_verify_tally
 test_review_bundle
 test_inspector_modes
 test_validate_review_report
