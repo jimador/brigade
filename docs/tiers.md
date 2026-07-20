@@ -12,7 +12,7 @@ same one a kitchen makes: how much craft goes into each plate.
 | first-attempt cook | heavy cook (sonnet) | cook (haiku) | cook (haiku) |
 | escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
 | plan check | always | on triggers | never |
-| analyst retro | every dish + every 10 items | every dish | every 3rd dish |
+| analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish |
 
 Two rules hold at every tier: the session **only plans**, and subagents do **all**
 token-heavy work. The tier changes how much you spend, never who does what.

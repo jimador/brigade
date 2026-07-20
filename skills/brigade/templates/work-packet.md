@@ -137,7 +137,14 @@ adjacent bugs to leave alone (report them instead).
 - 1–3 files, ≤ ~150 lines, one behavior, mechanically verifiable?
 - Does the Verify step actually prove the acceptance criteria, and can it fail? (Exit-code
   hygiene: never `cmd | tail; echo $?` — pipe status masks the build's code. Include the
-  repo's lint check scoped to the packet's files when one exists.)
+  repo's lint check scoped to the packet's files when one exists. A packet editing a file
+  that already has tests runs ALL of that file's existing test classes in Verify — find
+  them with `git grep -l <ClassUnderTest>` — not only the newly named ones.) Three proofs
+  of can-it-fail: a property/soundness test asserts its own non-vacuity (fail if the count
+  of cases exercising the property is zero); a code path that can fall back to a live
+  global binary gets a deterministic override plus a hermeticity canary (nonsense input,
+  known output); a "pre-existing failure" claim is verified only in a fully-installed real
+  checkout, never a symlinked or freshly-isolated worktree.
 - Is every stated premise verified against source, not memory: cited precedent tests read at
   line level (what calls they actually make), library/third-party contracts read from the
   actual sources, lookup/query behavior quoted from the query builder, external-API claims
@@ -146,6 +153,10 @@ adjacent bugs to leave alone (report them instead).
   grep.
 - Is every named hazard paired with a matching acceptance-criterion test? Guidance without a
   test leaves the regression path open.
+- Is every expected runtime string or output that another packet also asserts — or that came
+  from a scout brief — captured from a real execution and pasted verbatim into each packet
+  that uses it? Never re-derive or analogize a shared value per packet; run the case once
+  and paste what it printed.
 - If the module defends against an input hazard, or the packet came from a finding: is the
   hazard/premise named, the wrong shortcut forbidden, and a targeted adversarial test required
   (real infra for data-correctness)?

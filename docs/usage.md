@@ -39,7 +39,7 @@ set `tier` in config or run `/brigade:tier`.
 | `/brigade:config` | Resolved settings, which layer set each, prompt overrides, validation |
 | `/brigade:validate` | Schema conformance of every dish artifact |
 | `/brigade:tier` | Show or set the repo's default service tier |
-| `/brigade:retro` | Run the analyst pass on the current dish now |
+| `/brigade:retro` | Run the analyst pass on the current dish now (intensive at ★★★; `--standard`/`--intensive` to override) |
 | `/brigade:design` | Design swag for a ticket without claiming or cooking it |
 
 ## Shell commands
@@ -115,7 +115,11 @@ Retros compound in three layers:
 
 1. **Every dish (cadence set by tier)** — the analyst scores the run from its own
    artifacts and proposes 1–3 evidence-backed process changes. Repo-local ones land in
-   `.brigade/LEARNINGS.md`, re-read at every dish start.
+   `.brigade/LEARNINGS.md`, re-read at every dish start. At three-star the end-of-dish
+   retro is **intensive**: a stronger model with cross-dish inputs, a closure ledger over
+   past proposals (applied / ignored / dead), and web-backed tooling research — up to 5
+   proposals, which may include adopting a tool, lint rule, CI step, or hook. Tooling
+   proposals are yours to apply; nothing is ever auto-installed.
 2. **Across repos** — proposals that generalize go to your knowledge base (if you have one
    configured) or `skills/brigade/policies/heuristics.md` for teams.
 3. **Periodically** — a heavy-model pass folds accumulated heuristics into the plugin

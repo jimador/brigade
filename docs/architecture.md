@@ -42,7 +42,7 @@ rather than re-decided by a model on every turn.
 | Cook | `brigade-cook` | implements exactly one work packet in its own worktree |
 | Heavy cook | `brigade-cook-heavy` | same contract, for hard packets and escalation rework |
 | Inspector | `brigade-inspector` | adversarial PASS/FAIL diff review; optional blind plan check |
-| Analyst | `brigade-analyst` | retro over a dish's artifacts; 1–3 process proposals |
+| Analyst | `brigade-analyst` | retro over a dish's artifacts; 1–3 process proposals (★★★ end-of-dish: intensive — cross-dish trends, proposal closure ledger, researched tooling recommendations, up to 5) |
 | Steward | a general-purpose agent | worktree creation, rebase, landing, cleanup |
 
 Every one of these is swappable — see [configuration.md](configuration.md#agents-per-role).

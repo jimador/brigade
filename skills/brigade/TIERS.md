@@ -16,7 +16,7 @@ configured default (★★ out of the box), **brigade light** for ★.
 | first-attempt cook | brigade-cook-heavy (sonnet) | brigade-cook (haiku) | brigade-cook (haiku) |
 | escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
 | plan check | always | on triggers | never (self-check list only) |
-| analyst retro | every dish + every 10 items | every dish | every 3rd dish or on request |
+| analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish or on request |
 
 The machine-readable mirror of this table (cook attempt ladders, scout caps, plan-check
 policy, retro cadence) is `workflows/config.js` — the Workflow scripts are bundled
@@ -45,7 +45,12 @@ attempt, ending at the planner.
 ★★, never at ★ (self-check list only).
 
 **Analyst retro** is the retro cadence. Never skip a retro silently at any tier — at ★
-skipping a dish is the cadence, not an omission.
+skipping a dish is the cadence, not an omission. At ★★★ the end-of-dish retro runs the
+analyst's **intensive mode**: dispatched on opus with cross-dish inputs (all prior
+analyst reports, the brigade-status efficiency aggregate, the live heuristic set), a
+closure ledger over past proposals, and web-backed tooling research — it may recommend
+tools, CI steps, or process changes, up to 5 proposals. The mid-dish 10-item checkpoints
+stay standard so the loop stays cheap. Standard mode everywhere else.
 
 ## Difficult planning
 
