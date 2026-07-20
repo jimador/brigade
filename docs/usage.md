@@ -41,6 +41,7 @@ set `tier` in config or run `/brigade:tier`.
 | `/brigade:tier` | Show or set the repo's default service tier |
 | `/brigade:retro` | Run the analyst pass on the current dish now (intensive at ★★★; `--standard`/`--intensive` to override) |
 | `/brigade:design` | Design swag for a ticket without claiming or cooking it |
+| `/brigade:review` | Advisory, tier-scaled code review of a branch, PR, or commit range |
 
 ## Shell commands
 
@@ -99,6 +100,15 @@ attempt against a bad assumption.
 **6 — Handoff.** Full verification gate on the integration branch, an acceptance pass over
 every criterion, one PR, the ticket moved to in-review with a plain-language comment, and
 an analyst retro.
+
+## Reviewing code on demand
+
+`/brigade:review <branch|PR|range>` runs an advisory code review outside the six phases
+above — no packet, no PASS/FAIL gate, and it never posts to a pull request. It scales
+review depth to the tier (more dimensions and a stronger verify pass at ★★★, a single
+merged pass at ★) and returns findings that are already packet-shaped, so any of them can
+be handed to the execute pipeline later as a work item. See `skills/brigade/SKILL.md`'s
+"Reviewing code" section for the full contract.
 
 ## When something blocks
 

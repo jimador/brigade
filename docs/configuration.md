@@ -169,6 +169,12 @@ can retune or disable a source without restating the list.
 
 Every source soft-fails: an unreachable MCP server or a missing file is logged, not fatal.
 
+`review.dimensions` follows the same merge-by-`id` shape for `/brigade:review`'s eight
+review lenses (`correctness`, `tests`, `architecture`, `maintainability`, `reuse`,
+`duplication`, `security`, `product`): `{ "review": { "dimensions": [{ "id": "security",
+"enabled": false }] } }` disables a built-in dimension, patching other fields (`title`,
+`lens`) retunes it, and an `id` not in the built-in set is appended as a custom dimension.
+
 ### Prompt overrides
 
 Short additions inline; anything longer goes in a file. Both are covered in

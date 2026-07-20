@@ -152,12 +152,12 @@ and [docs/overrides.md](docs/overrides.md).
 | `skills/brigade/templates/` | per-repo board config, one example per settings layer, and the work-packet format |
 | `skills/groom/SKILL.md` | board-grooming session: cluster, split, merge, sharpen. Never cooks |
 | `agents/` | scout, cook, heavy cook, inspector, analyst, design |
-| `commands/` | `/brigade:status`, `/brigade:config`, `/brigade:validate`, `/brigade:tier`, `/brigade:retro`, `/brigade:design` |
+| `commands/` | `/brigade:status`, `/brigade:config`, `/brigade:validate`, `/brigade:tier`, `/brigade:retro`, `/brigade:design`, `/brigade:review` |
 | `bin/brigade-status` | zero-token dish-state summary; `--json` for tooling |
 | `bin/brigade-config` | resolves the config layers and prompt-override stacks; `doctor` validates |
 | `bin/brigade-validate` | zero-token schema conformance checker for dish artifacts |
 | `bin/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
-| `workflows/` | the two Workflow scripts and the policy consts spliced into them |
+| `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection and a PreToolUse git-hygiene guard |
 
 ## Requirements

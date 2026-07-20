@@ -316,6 +316,37 @@ Body sections, in order: `## What this seems to be`, `## Likely shape of work`,
 `## Original request`. Budget: ≤ 100 lines. Must **not** claim the ticket, set `worker`,
 create packets, or promote to `todo`.
 
+### `review_report` — standalone code review (`.brigade/reviews/<slug>/report.md`)
+
+Producer: review workflow (inspector Mode 3 findings, planner-assembled). Consumers:
+operator, later finding-to-packet dispatch. Advisory — no PASS/FAIL.
+
+```yaml
+---
+doc: review_report
+schema: 1
+role: inspector
+model: haiku
+created: 2026-07-04T03:10:00Z
+input: { kind: branch, ref: feat/x }        # kind: branch|range|pr; ref: as given
+range: <base>..<head>
+context_tier: documented                    # bare|documented|tracked
+tier: three-star                            # three-star|two-star|one-star
+counts: { blocking: 0, high: 0, medium: 0, low: 0 }
+findings:
+  - { id: F1, dimension: correctness, severity: blocking, location: "src/foo.ts:42",
+      summary: <one line>, files: [src/foo.ts], fix: <acceptance-criteria-shaped direction>,
+      verify_hint: <how to confirm>, confirmed: true }
+---
+```
+
+Body sections, in order: `## Scope` (what was reviewed, base/head, context tier and why),
+`## Findings` (grouped by severity within dimension; each finding packet-shaped),
+`## Context disclosure` (what the review could not see at this context tier), `## Evidence`
+(commands run, verbatim key output). Budget: ≤ 250 lines. Authority: the diff, the
+worktree, probe artifacts; product findings cite the requirements source or carry the
+no-requirements caveat.
+
 ### `ledger` — cook working memory (`.brigade/dishes/<dish>/state/<item>.md`)
 
 Producer: cook (heavy items and rework attempts — dispatches whose prompt carries a

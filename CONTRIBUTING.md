@@ -13,7 +13,7 @@ commands/           slash commands (thin wrappers over the bin/ scripts)
 bin/                brigade-status, brigade-config, brigade-validate, brigade-bundle
 hooks/              SessionStart state injection, PreToolUse git guard
 workflows/src/      hand-edited Workflow script sources
-workflows/config.js policy consts + config merging, spliced into both scripts
+workflows/config.js policy consts + config merging, spliced into all three scripts
 workflows/*.js      GENERATED — never hand-edit
 docs/               the documentation set
 test/regression.sh  operational regressions

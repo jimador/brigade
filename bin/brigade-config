@@ -69,6 +69,9 @@ const DEFAULTS = {
   worktreeRoot: null, // null = <repo>/.brigade/worktrees
   remotePr: true,
   contextSources: [],
+  review: {
+    dimensions: [], // empty = ship the workflow's built-in defaults; layers only override
+  },
   prompts: {}, // name -> { append: [...text] }
 }
 
@@ -119,6 +122,10 @@ function mergeLayer(target, provenance, source, layerName, prefix = '') {
       target[key] = mergeContextSources(target[key] || [], value, provenance, layerName)
       continue
     }
+    if (dotted === 'review.dimensions') {
+      target[key] = mergeReviewDimensions(target[key] || [], value, provenance, layerName)
+      continue
+    }
     if (isPlainObject(value)) {
       if (!isPlainObject(target[key])) target[key] = {}
       mergeLayer(target[key], provenance, value, layerName, dotted)
@@ -140,6 +147,20 @@ function mergeContextSources(current, incoming, provenance, layerName) {
     const existing = byId.get(source.id)
     byId.set(source.id, existing ? { ...existing, ...source } : source)
     provenance[`contextSources.${source.id}`] = layerName
+  }
+  return [...byId.values()]
+}
+
+// Review dimensions merge by id too: a repo can retune one dimension (turn it off,
+// swap its lens) without restating the whole set.
+function mergeReviewDimensions(current, incoming, provenance, layerName) {
+  if (!Array.isArray(incoming)) return current
+  const byId = new Map(current.map((d) => [d.id, d]))
+  for (const dim of incoming) {
+    if (!isPlainObject(dim) || !dim.id) continue
+    const existing = byId.get(dim.id)
+    byId.set(dim.id, existing ? { ...existing, ...dim } : dim)
+    provenance[`review.dimensions.${dim.id}`] = layerName
   }
   return [...byId.values()]
 }
@@ -265,6 +286,37 @@ function validate() {
     }
     if (source.type === 'static-file' && source.path && !fs.existsSync(path.resolve(repoRoot(), source.path))) {
       problems.push({ layer: 'merged', file: null, problem: `contextSources "${source.id}": path does not exist (${source.path})` })
+    }
+  }
+
+  // Same reasoning as contextSources above: duplicate ids within one layer are
+  // already invisible by the time the merge is done, so this has to run per layer.
+  for (const layer of layers) {
+    const dims = layer.data && layer.data.review && layer.data.review.dimensions
+    if (!Array.isArray(dims)) continue
+    const seenInLayer = new Set()
+    for (const dim of dims) {
+      if (!isPlainObject(dim) || !dim.id) continue
+      if (seenInLayer.has(dim.id)) {
+        problems.push({ layer: layer.name, file: layer.file, problem: `duplicate review.dimensions id "${dim.id}"` })
+      }
+      seenInLayer.add(dim.id)
+    }
+  }
+
+  for (const dim of (config.review && config.review.dimensions) || []) {
+    if (!isPlainObject(dim) || typeof dim.id !== 'string' || !dim.id) {
+      problems.push({ layer: 'merged', file: null, problem: 'every review.dimensions entry needs a string id' })
+      continue
+    }
+    if (dim.enabled != null && typeof dim.enabled !== 'boolean') {
+      problems.push({ layer: 'merged', file: null, problem: `review.dimensions "${dim.id}": enabled must be a boolean` })
+    }
+    if (dim.title != null && typeof dim.title !== 'string') {
+      problems.push({ layer: 'merged', file: null, problem: `review.dimensions "${dim.id}": title must be a string` })
+    }
+    if (dim.lens != null && typeof dim.lens !== 'string') {
+      problems.push({ layer: 'merged', file: null, problem: `review.dimensions "${dim.id}": lens must be a string` })
     }
   }
 

@@ -135,7 +135,10 @@ adjacent bugs to leave alone (report them instead).
 - Are all contracts/anchors **pasted**, not "see file X"?
 - Is every step unambiguous — no "appropriately", "as needed", "look around"?
 - 1–3 files, ≤ ~150 lines, one behavior, mechanically verifiable?
-- Does the Verify step actually prove the acceptance criteria, and can it fail? (Exit-code
+- Does the Verify step actually prove the acceptance criteria, and can it fail? A
+  `grep -q` for an identifier's PRESENCE proves nothing — comments and strings satisfy
+  it; any workflow-logic criterion is verified by executing the behavior (extract-and-run
+  the pure function, or a smoke harness), never by grep-of-presence. (Exit-code
   hygiene: never `cmd | tail; echo $?` — pipe status masks the build's code. Include the
   repo's lint check scoped to the packet's files when one exists. A packet editing a file
   that already has tests runs ALL of that file's existing test classes in Verify — find

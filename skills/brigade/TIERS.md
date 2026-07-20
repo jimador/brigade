@@ -17,6 +17,7 @@ configured default (★★ out of the box), **brigade light** for ★.
 | escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
 | plan check | always | on triggers | never (self-check list only) |
 | analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish or on request |
+| code review depth | 8 dimensions, verify blocking+high ×2 | 4 groups (+product with source), verify blocking ×1 | 1 merged pass, no verify |
 
 The machine-readable mirror of this table (cook attempt ladders, scout caps, plan-check
 policy, retro cadence) is `workflows/config.js` — the Workflow scripts are bundled
@@ -43,6 +44,14 @@ attempt, ending at the planner.
 
 **Plan check** gates the adversarial pre-dispatch review: always at ★★★, on triggers at
 ★★, never at ★ (self-check list only).
+
+**Code review depth** sets how `/brigade:review` splits up an ad hoc code review: at ★★★
+every dimension gets its own inspector dispatch plus a 2-vote refute-framed verify pass
+on every blocking/high finding; at ★★ dimensions batch into 4 groups with a single
+verify vote on blocking findings, and the product dimension only runs when a
+requirements source (ticket, spec, PR with explicit criteria) is found; at ★ everything
+runs as one merged pass with no verify pass, and the product lens still runs — folded
+into that merged pass — when a requirements source exists.
 
 **Analyst retro** is the retro cadence. Never skip a retro silently at any tier — at ★
 skipping a dish is the cadence, not an omission. At ★★★ the end-of-dish retro runs the

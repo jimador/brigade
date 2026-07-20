@@ -20,13 +20,18 @@ flowchart LR
     Retro -->|LEARNINGS + heuristics| Planner
 ```
 
-Two things drive the fleet, and neither is a model deciding what to do next:
+`/brigade:review <branch|PR|range>` runs alongside this pipeline rather than inside it —
+an on-demand advisory review, not a phase any dish passes through.
+
+Three things drive the fleet, and none of them is a model deciding what to do next:
 
 - **`workflows/brigade-research.js`** fans research questions out to scouts and collects
   structured briefs.
 - **`workflows/brigade-execute.js`** runs the whole item DAG: worktree creation, the
   escalation ladder, adversarial review, rebase-and-fast-forward landing, cleanup, and the
   circuit breaker.
+- **`workflows/brigade-review.js`** runs a standalone, tier-scaled advisory review of a
+  branch, PR, or commit range — findings only, never a PASS/FAIL gate, never a PR comment.
 
 The Planner supplies the plan; the scripts drive the pipeline. Control flow lives in
 JavaScript, so retries, ordering, and failure handling are deterministic and reproducible
