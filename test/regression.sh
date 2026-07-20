@@ -1374,6 +1374,154 @@ test_validate_review_report() {
   fi
 }
 
+test_workflow_smoke() {
+  # Retro-P1 (dish workflow-code-review): `node --check` only parses a generated
+  # workflow — it never RUNS one, so two deterministic runtime crashes (an
+  # undefined-policy iteration in brigade-review.js's dispatch builder, and a
+  # worktree-add failure shape in brigade-execute.js) passed the whole syntax-only
+  # gate this dish. This is the missing smoke run: execute each generated workflow's
+  # real body to completion with the runtime hooks stubbed (phase/log no-ops,
+  # parallel/pipeline as real fan-out/pipe helpers with no agent underneath, agent()
+  # returning a kitchen-sink canned object satisfying every schema any of the three
+  # workflows dispatches against) and assert it resolves to a non-null object without
+  # throwing.
+  ROOT="$ROOT" node <<'NODE' || fail "workflow smoke harness failed (see output above)"
+const fs = require('fs')
+const path = require('path')
+
+const ROOT = process.env.ROOT
+
+// One object carrying a plausible value for every field ANY of the three workflows'
+// agent() schemas requires. Fields whose required TYPE actually differs across
+// schemas (e.g. probe 'found': an array in the docs-probe schema, a boolean in the
+// ticket/kb-probe schemas) are deliberately left OUT here and derived per call below,
+// from that call's own schema.properties — picking one type up front would just be
+// wrong for whichever schema didn't ask for it.
+const KITCHEN_SINK = {
+  ok: true, contamination: false, detail: 'stub', landedRange: 'a..b', reconstructed: [],
+  attempt: 1, status: 'done', branch: 'wip/x', reportPath: '/tmp/r.md', verdictPath: '/tmp/v.md',
+  filesChanged: [], commands: [], summary: 's', verdict: 'PASS', trivialOnly: true, findings: [],
+  answer: 'a', confidence: 'high', briefPath: '/tmp/b.md', notVerified: '', base: 'a', head: 'b',
+  range: 'a..b', worktreePath: '/tmp/w', prTitle: '', prBody: '', contextTier: 'documented',
+  digest: 'd', digestPath: '/tmp/d.md', refuted: false, error: null,
+}
+
+function typeDefault(propSchema) {
+  if (propSchema && propSchema.enum) return propSchema.enum[0]
+  const type = propSchema && propSchema.type
+  if (type === 'array') return []
+  if (type === 'boolean') return true
+  if (type === 'integer' || type === 'number') return 1
+  if (type === 'object') return {}
+  return 'stub'
+}
+
+// The runtime hooks every generated workflow calls, stubbed just enough to run a real
+// dispatch DAG without ever spinning up an actual agent.
+function phaseStub() {}
+function logStub() {}
+
+async function agentStub(prompt, opts) {
+  const result = { ...KITCHEN_SINK }
+  const schema = (opts && opts.schema) || {}
+  const required = schema.required || []
+  const props = schema.properties || {}
+  for (const key of required) {
+    if (result[key] === undefined) result[key] = typeDefault(props[key])
+  }
+  return result
+}
+
+async function parallelStub(thunks) {
+  return Promise.all(thunks.map((fn) => fn()))
+}
+
+async function pipelineStub(items, ...stages) {
+  const out = []
+  for (const item of items) {
+    let value = item
+    for (const stage of stages) value = await stage(value)
+    out.push(value)
+  }
+  return out
+}
+
+const WORKFLOWS = [
+  {
+    name: 'brigade-research.js (two-star)',
+    file: 'workflows/brigade-research.js',
+    args: {
+      dishDir: '/tmp/d', repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'two-star',
+      questions: [{ n: 1, topic: 't', question: 'q', why: 'w', allowWeb: false }],
+      overrides: {}, promptOverrides: {},
+    },
+  },
+  {
+    name: 'brigade-execute.js (two-star)',
+    file: 'workflows/brigade-execute.js',
+    args: {
+      dishDir: '/tmp/d', repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'two-star',
+      deliverySlug: 's', deliveryBranch: 'feat/s', gate: [], maxParallel: 2,
+      overrides: {}, promptOverrides: {},
+      items: [{ slug: 'a', status: 'todo', dependsOn: [], heavy: false, packet: 'P' }],
+    },
+  },
+  {
+    // one tier is a sample, not coverage — the historical crash lived in a
+    // tier-conditional branch, so the merged (one-star) AND per-dimension +
+    // verify (three-star) dispatch paths both have to run here.
+    name: 'brigade-review.js (one-star — merged dispatch path)',
+    file: 'workflows/brigade-review.js',
+    args: {
+      repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'one-star', mainLine: 'main',
+      reviewSlug: 'smoke-one', input: { kind: 'branch', ref: 'feat/x' }, boardConfigured: false,
+      overrides: {}, promptOverrides: {},
+    },
+  },
+  {
+    name: 'brigade-review.js (three-star — per-dimension + verify path)',
+    file: 'workflows/brigade-review.js',
+    args: {
+      repoRoot: '/tmp/r', now: '2026-01-01T00:00:00Z', tier: 'three-star', mainLine: 'main',
+      reviewSlug: 'smoke-three', input: { kind: 'branch', ref: 'feat/x' }, boardConfigured: false,
+      overrides: {}, promptOverrides: {},
+    },
+  },
+]
+
+async function runOne(wf) {
+  const src = fs.readFileSync(path.join(ROOT, wf.file), 'utf8').replace('export const meta', 'const meta')
+  const fn = new Function('args', 'phase', 'log', 'agent', 'parallel', 'pipeline', 'workflow', src)
+  const result = await fn(wf.args, phaseStub, logStub, agentStub, parallelStub, pipelineStub, undefined)
+  if (result === null || typeof result !== 'object') {
+    throw new Error(`expected a non-null object return, got: ${JSON.stringify(result)}`)
+  }
+  return result
+}
+
+async function main() {
+  let failed = false
+  for (const wf of WORKFLOWS) {
+    try {
+      const result = await runOne(wf)
+      console.log(`OK   ${wf.name} -> ${JSON.stringify(Object.keys(result))}`)
+    } catch (err) {
+      failed = true
+      console.error(`FAIL ${wf.name}`)
+      console.error(err && err.stack ? err.stack : String(err))
+    }
+  }
+  if (failed) {
+    console.error('WORKFLOW SMOKE: at least one workflow threw or returned a non-object — see above')
+    process.exit(1)
+  }
+  console.log('WORKFLOW SMOKE OK')
+}
+
+main()
+NODE
+}
+
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
@@ -1396,4 +1544,5 @@ test_review_verify_tally
 test_review_bundle
 test_inspector_modes
 test_validate_review_report
+test_workflow_smoke
 echo "PASS: brigade operational regressions"
