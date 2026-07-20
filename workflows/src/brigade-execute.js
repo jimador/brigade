@@ -107,6 +107,16 @@ ${MD_SCHEMA_BLOCKS.verdict}
 // for the two reconstruction blocks below, which need it in their frontmatter.
 const dishSlug = () => (A.dishDir || '').split('/').filter(Boolean).pop() || 'unknown-dish'
 
+// Any free-text field from a subagent's structured return (a branch name, a file
+// path, a finding's summary) can contain quotes, colons, newlines, or even a literal
+// '---' line — and the two reconstruction blocks below paste such fields straight
+// into YAML frontmatter. JSON.stringify turns any string into a single-line,
+// double-quoted YAML scalar with every special character escaped, so no interpolated
+// value can ever start a new line or be mistaken for the frontmatter delimiter.
+// Same helper as brigade-review.js's yamlQuote — kept local here since the two
+// scripts don't share a module.
+const yamlQuote = (value) => JSON.stringify(String(value == null ? '' : value))
+
 // Two subagent returns can each go missing their file on disk — a cook's report, an
 // inspector's verdict — even though the workflow already holds everything the return
 // promised. These build the exact markdown the landing steward writes when that
@@ -119,7 +129,7 @@ const dishSlug = () => (A.dishDir || '').split('/').filter(Boolean).pop() || 'un
 const reportReconstructionBlock = (item, branch, cookResult) => {
   if (!cookResult || !cookResult.status) return null
   const files = (cookResult.filesChanged && cookResult.filesChanged.length)
-    ? cookResult.filesChanged.map((p) => `  - { path: ${p}, change: reconstructed — original change note not preserved }`).join('\n')
+    ? cookResult.filesChanged.map((p) => `  - { path: ${yamlQuote(p)}, change: reconstructed — original change note not preserved }`).join('\n')
     : '  - { path: unknown, change: reconstructed — no files_changed recorded in the return }'
   const commands = (A.gate || []).map((cmd) => `  - ${cmd}`).join('\n') || '  []'
   return `---
@@ -132,7 +142,7 @@ model: "reconstruction: ledger"
 created: ${A.now}
 status: ${cookResult.status}
 attempt: ${cookResult.attempt != null ? cookResult.attempt : 1}
-branch: ${cookResult.branch || branch}
+branch: ${yamlQuote(cookResult.branch || branch)}
 files_changed:
 ${files}
 commands:
@@ -160,8 +170,12 @@ None recoverable — the cook's structured return carries no out-of-scope field.
 
 const verdictReconstructionBlock = (item, attemptReviewed, verdictResult) => {
   if (!verdictResult || !verdictResult.verdict) return null
+  // id/location/summary are free text straight from the inspector's own return —
+  // quoted through yamlQuote so nothing in them can break out of this flow mapping
+  // or masquerade as the frontmatter delimiter. severity is schema-enums-only
+  // ('blocking'|'high'|'medium'|'low'), so it's left bare like elsewhere in the repo.
   const findings = (verdictResult.findings && verdictResult.findings.length)
-    ? verdictResult.findings.map((f) => `  - { id: ${f.id}, severity: ${f.severity}, location: "${f.location}", summary: ${f.summary} }`).join('\n')
+    ? verdictResult.findings.map((f) => `  - { id: ${yamlQuote(f.id)}, severity: ${f.severity}, location: ${yamlQuote(f.location)}, summary: ${yamlQuote(f.summary)} }`).join('\n')
     : '  []'
   const findingsBody = (verdictResult.findings && verdictResult.findings.length)
     ? verdictResult.findings.map((f) => `- [${f.severity}] ${f.id} (${f.location}): ${f.summary}`).join('\n')
