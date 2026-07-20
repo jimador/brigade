@@ -322,6 +322,7 @@ Producer: review workflow (inspector Mode 3 findings, planner-assembled). Consum
 operator, later finding-to-packet dispatch. Advisory — no PASS/FAIL.
 
 ```yaml
+---
 doc: review_report
 schema: 1
 role: inspector
@@ -336,6 +337,7 @@ findings:
   - { id: F1, dimension: correctness, severity: blocking, location: "src/foo.ts:42",
       summary: <one line>, files: [src/foo.ts], fix: <acceptance-criteria-shaped direction>,
       verify_hint: <how to confirm>, confirmed: true }
+---
 ```
 
 Body sections, in order: `## Scope` (what was reviewed, base/head, context tier and why),
