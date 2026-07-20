@@ -571,6 +571,62 @@ When all items are merged:
 6. The ticket reaches its done-equivalent status only when the human merges the PR. The
    integration branch is deleted only after that.
 
+## Reviewing code (`brigade-review` Workflow script)
+
+**What it is.** An advisory, tier-scaled standalone code review over a branch, PR, or
+commit range, invoked via `/brigade:review` — it runs outside the cook/inspect/land
+pipeline, on demand. It's the same Mode 3 (standalone diff review) contract an Inspector
+already uses when reviewing outside a packet: findings, never a PASS/FAIL verdict. It
+never posts to a pull request; the only write besides its own report is a plain-language
+ticket comment when a tracked ticket was found, and only ever to that ticket.
+
+**Invocation.** Resolve `scriptPath` the same two-path rule as research/execute: prefer
+`$CLAUDE_PLUGIN_ROOT/workflows/brigade-review.js` when that env is set, else
+`<skill-base>/../../workflows/brigade-review.js`. Build args (may arrive as a JSON
+string): `{ repoRoot, now, tier, mainLine, reviewSlug, input: { kind, ref },
+boardConfigured, overrides, promptOverrides }` — `overrides` is the `config` object from
+`brigade-config resolve --json` (passing the whole resolve output also works — the script
+unwraps `.config`), `promptOverrides` is `brigade-config prompts --json`. `boardConfigured`
+is true when `.brigade/config.md`'s `## Source` section has a `database_id` set, false
+otherwise.
+
+**Input contract (D2).** `branch` and `range` inputs resolve locally — `git merge-base
+<mainLine> <head>` for a branch, both endpoints checked with `git rev-parse` for a range —
+no `gh` needed. A `pr` input (a bare number, `#123`, or a URL) requires an authenticated
+`gh` and a remote: `gh pr view --json number,title,body,headRefName,baseRefName` plus
+`git fetch <remote> pull/<n>/head:<review-ref>`; the PR's title/body feed the product
+dimension as its intent source. `gh` missing/unauthenticated, or either command failing
+for any other reason, fails fast with a decision-ready message naming the equivalent
+branch/range invocation to retry with — never a guess. There is no raw-diff-file input:
+the context probe and every dimension review need a real checkout. Review worktrees live
+at `.brigade/review/<slug>` — deliberately not under `.brigade/worktrees/` (that location
+is execute's; review runs independently of the item DAG) — checked out and torn down by
+the script itself on every exit path.
+
+**Per-tier depth (D1).** Eight dimensions, id-keyed (`correctness`, `tests`,
+`architecture`, `maintainability`, `reuse`, `duplication`, `security`, `product`),
+configurable via the `review.dimensions` config key (merged by `id`, like
+`contextSources` — see [configuration.md](../../docs/configuration.md)):
+
+| | ★★★ | ★★ | ★ |
+| --- | --- | --- | --- |
+| dispatches | 8 — one per dimension | 4 groups: correctness+tests, architecture+maintainability, reuse+duplication, security; product as conditional 5th | 1 merged pass |
+| product dimension | always; degrades to PR/commit intent with explicit "no requirements source" caveat | only when a requirements source exists | only when a requirements source exists (folded into the merged pass) |
+| verify pass | every blocking+high finding, 2 independent refute-framed verifiers; finding dies if both refute, reported "unconfirmed" if one refutes | blocking findings, 1 verifier | none; findings labeled unverified |
+| context probe | docs + ticket + KB + ≤2 context scouts | docs + ticket | docs only |
+
+**Return shape.** On success: `{ reportPath, contextTier, counts, findings, unconfirmed,
+dropped }` — `contextTier` is `bare`/`documented`/`tracked` (what context the review
+actually had); `counts` is findings by severity; `findings` are the survivors, each
+packet-shaped (id, severity, location, summary, dimension, fix, verify); `unconfirmed` is
+the subset a refute vote couldn't kill outright but also couldn't confirm; `dropped` is
+what a full refute pass killed. On a Resolve failure: `{ findings: [], contextTier: 'bare',
+reportPath: null, error }` — present `error` verbatim and stop.
+
+**Follow-up.** Findings are already packet-shaped, so any of them can be handed to
+`brigade-execute` as a work item later. Automatically dispatching a finding straight into
+a cook packet is a future ticket, not something this script does today.
+
 ## Self-improvement (retro → heuristics → brain upgrade)
 
 A dish is a sprint: one ticket cooked to completion. Retrospectives run on the tier's
@@ -729,13 +785,14 @@ an optional batched progress comment on the parent, not a status thrash.
   (gt-driven landing/rework rebases, local-only) and `graphite_platform` (stacked-PR
   handoff via `gt submit`). Both off by default; read it only when the repo config
   enables one.
-- `../../workflows/` — the two generated Workflow scripts invoked in Phases 1 and 3–5,
-  `brigade-research.js` and `brigade-execute.js`, built from `workflows/src/*.js` by
-  `bin/brigade-bundle`. `workflows/config.js` mirrors the tier policy and schemas already
-  defined in `TIERS.md`/`SCHEMAS.md` for the scripts to read at runtime (they can't
-  import) — edit the `.md` files and rerun the bundle, never hand-edit `config.js` alone.
+- `../../workflows/` — the three generated Workflow scripts: `brigade-research.js`
+  (Phase 1), `brigade-execute.js` (Phases 3–5), and `brigade-review.js` (`/brigade:review`,
+  above) — all built from `workflows/src/*.js` by `bin/brigade-bundle`. `workflows/config.js`
+  mirrors the tier policy and schemas already defined in `TIERS.md`/`SCHEMAS.md` for the
+  scripts to read at runtime (they can't import) — edit the `.md` files and rerun the
+  bundle, never hand-edit `config.js` alone.
 - `../../commands/` — mechanical slash commands: status, config, tier, retro, validate,
-  design.
+  design, review.
 - `../../bin/brigade-config` — resolves the four config layers and the prompt-override
   stacks. Run it instead of reading config files.
 - `hooks/guard.sh` — PreToolUse git-hygiene guard.
