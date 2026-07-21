@@ -466,7 +466,13 @@ landing, cleanup, and a circuit breaker on repeated failure. It returns one ledg
 attempts: [{agentType, result}], landedRange, reportPath, verdictPath, findings,
 blockedReason}], stoppedEarly, reason }`.
 
-**Applying the ledger.** For each item: mirror `status` and `attempts` into PLAN.md; record
+**Applying the ledger.** The ledger is a subagent's claim about artifact state, not the
+state itself: any assertion the Planner writes into PLAN.md or a landing note about
+artifacts — verdict existence, who wrote a file, reconstruction counts, gate reruns —
+derives from an artifact scan (`brigade-validate`, `brigade-status`, or reading the file's
+own frontmatter), never from a workflow return value alone. Telemetry is provisional
+until disk-verified; where they disagree, the artifact wins and the discrepancy is
+itself a finding. For each item: mirror `status` and `attempts` into PLAN.md; record
 `landedRange` next to it when present; if the item is also a board ticket, transition it
 live per Status mapping below (in-progress → done, or → blocked) — never batched. Then run
 the retro-readiness check: every `done` item has a populated `attempts:` entry in PLAN.md
