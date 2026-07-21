@@ -137,32 +137,32 @@ function mergeLayer(target, provenance, source, layerName, prefix = '') {
   return target
 }
 
+// Shared shape behind both id-keyed array merges below: a later layer can add,
+// disable, or retune one entry by id without restating the whole list. Each
+// touched entry gets its own provenance key (`<keyPrefix>.<id>`) so `resolve`
+// and `get` can say which layer set it.
+function mergeArrayById(current, incoming, provenance, layerName, keyPrefix) {
+  if (!Array.isArray(incoming)) return current
+  const byId = new Map(current.map((item) => [item.id, item]))
+  for (const item of incoming) {
+    if (!isPlainObject(item) || !item.id) continue
+    const existing = byId.get(item.id)
+    byId.set(item.id, existing ? { ...existing, ...item } : item)
+    provenance[`${keyPrefix}.${item.id}`] = layerName
+  }
+  return [...byId.values()]
+}
+
 // Context sources merge by id rather than by position: a later layer can disable
 // or retune one source without restating the whole list.
 function mergeContextSources(current, incoming, provenance, layerName) {
-  if (!Array.isArray(incoming)) return current
-  const byId = new Map(current.map((s) => [s.id, s]))
-  for (const source of incoming) {
-    if (!isPlainObject(source) || !source.id) continue
-    const existing = byId.get(source.id)
-    byId.set(source.id, existing ? { ...existing, ...source } : source)
-    provenance[`contextSources.${source.id}`] = layerName
-  }
-  return [...byId.values()]
+  return mergeArrayById(current, incoming, provenance, layerName, 'contextSources')
 }
 
 // Review dimensions merge by id too: a repo can retune one dimension (turn it off,
 // swap its lens) without restating the whole set.
 function mergeReviewDimensions(current, incoming, provenance, layerName) {
-  if (!Array.isArray(incoming)) return current
-  const byId = new Map(current.map((d) => [d.id, d]))
-  for (const dim of incoming) {
-    if (!isPlainObject(dim) || !dim.id) continue
-    const existing = byId.get(dim.id)
-    byId.set(dim.id, existing ? { ...existing, ...dim } : dim)
-    provenance[`review.dimensions.${dim.id}`] = layerName
-  }
-  return [...byId.values()]
+  return mergeArrayById(current, incoming, provenance, layerName, 'review.dimensions')
 }
 
 function resolveConfig() {
