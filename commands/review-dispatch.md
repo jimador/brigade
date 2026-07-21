@@ -18,12 +18,16 @@ finding (id, severity, dimension, one-line summary) via **AskUserQuestion**, mul
 and continue only with the ids the user checks. There is no bulk mode — a finding never
 gets dispatched unless it was explicitly selected by argument or checkbox.
 
+Resolve `mainLine` once, up front, regardless of whether any selected finding needs a
+premise re-check — it anchors both the re-check worktree below and the delivery branch
+Execute cuts later: the same way `/brigade:review` does (`brigade-config resolve
+--json`'s `.config.mainBranch`, else `git symbolic-ref --short refs/remotes/origin/HEAD`
+stripped of `origin/`, else `main`).
+
 Premise re-check (unconfirmed findings only): for each selected finding whose `confirmed`
 is not `true`, its verify pass is stale or never ran — re-check it against the CURRENT
-main line, not the reviewed range, since findings age. Resolve `mainLine` the same way
-`/brigade:review` does (`brigade-config resolve --json`'s `.config.mainBranch`, else
-`git symbolic-ref --short refs/remotes/origin/HEAD` stripped of `origin/`, else `main`).
-Cut a detached, read-only worktree: `git worktree add --detach
+main line resolved above, not the reviewed range, since findings age. Cut a detached,
+read-only worktree: `git worktree add --detach
 .brigade/review/recheck-<review-slug> <mainLine>`. Dispatch `brigade-inspector` once per
 finding, pasting this recipe verbatim (never invent your own): tell it it is running a
 Verify pass trying to REFUTE the finding against the worktree above, default to refuted
@@ -43,8 +47,22 @@ item from the finding id plus a short stem (e.g. `f1-nil-guard`); `files:` comes
 from `finding.files`; the packet's Objective is the finding's summary and location, its
 acceptance criteria is the finding's `fix`, and its Verify is `verify_hint` hardened into
 exact, runnable commands — dry-run every one of them on the base branch before dispatch,
-per the normal plan rules; a hint is not a command. Two surviving findings that touch the
-same file get a dependency edge, never the same wave. Resolve tier the usual way
+per the normal plan rules; a hint is not a command. Every packet in this mini-dish derives
+from a review finding, so every one carries a `### Preconditions & hazards` section per the
+packet schema (`SCHEMAS.md`, `templates/work-packet.md`) — never omit it here. Its
+**Finding-derived premise** bullet names the exact command that reconfirms this specific
+finding at cook-time (the `git grep <symbol>`, file read, or command the finding's
+`location`/`summary` points at); if that command's output contradicts the premise, the
+packet instructs the Cook to report `status: done` with zero file changes and the
+command's output as evidence — a false premise resolves to a safe no-op, never a blind
+edit, even though the dispatch-level premise re-check above already ran (findings can go
+stale again between dispatch and cook). When the finding's `dimension` or `fix` implies a
+concurrency/exclusivity guarantee, add the matching **Guarantee-class claim** bullet and
+put the concurrent-caller test in the packet's own acceptance criteria; when the finding
+is a bug fix, add the **Bug-fix self-falsification** bullet requiring the Cook to
+reintroduce the bug, paste the red run, restore the fix, and paste the green run. Two
+surviving findings that touch the same file get a dependency edge, never the same wave.
+Resolve tier the usual way
 (`brigade-config get tier` or a trigger phrase); flag an item `heavy: true` under the same
 rules as any other plan — an item whose Verify must assert an exact error/output message
 is always heavy, on top of the usual cross-cutting/concurrency/security/data-correctness
