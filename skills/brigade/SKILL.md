@@ -626,9 +626,13 @@ the subset a refute vote couldn't kill outright but also couldn't confirm; `drop
 what a full refute pass killed. On a Resolve failure: `{ findings: [], contextTier: 'bare',
 reportPath: null, error }` — present `error` verbatim and stop.
 
-**Follow-up.** Findings are already packet-shaped, so any of them can be handed to
-`brigade-execute` as a work item later. Automatically dispatching a finding straight into
-a cook packet is a future ticket, not something this script does today.
+**Follow-up.** Findings are already packet-shaped, so `/brigade:review-dispatch
+<review-slug|report-path> [finding-id...]` turns selected ones into a cooked mini-dish.
+Selection is explicit (arguments or an `AskUserQuestion` multi-select — no bulk mode); any
+finding whose `confirmed` isn't `true` gets a premise re-check against current main before
+it's trusted. Surviving findings become `.brigade/dishes/review-fixes-<slug>/PLAN.md`, one
+item per finding, with no second planning pass since the findings already did the
+decomposition — then it runs through `brigade-execute` (Phases 3–5) like any other dish.
 
 ## Self-improvement (retro → heuristics → brain upgrade)
 
@@ -795,7 +799,7 @@ an optional batched progress comment on the parent, not a status thrash.
   scripts to read at runtime (they can't import) — edit the `.md` files and rerun the
   bundle, never hand-edit `config.js` alone.
 - `../../commands/` — mechanical slash commands: status, config, tier, retro, validate,
-  design, review.
+  design, review, review-dispatch.
 - `../../bin/brigade-config` — resolves the four config layers and the prompt-override
   stacks. Run it instead of reading config files.
 - `hooks/guard.sh` — PreToolUse git-hygiene guard.
