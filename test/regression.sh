@@ -1308,6 +1308,162 @@ console.log('REVIEW VERIFY TALLY PIN OK')
 NODE
 }
 
+test_review_pure_functions() {
+  # Pin the three previously-uncovered pure functions in the generated review workflow
+  # (dedupFindings, productShouldRun/productCaveatNeeded, buildReviewReportMarkdown) plus
+  # prNumberFromRef's every-ref-shape guarantee and the review.dimensions merge path.
+  ROOT="$ROOT" TMP_ROOT="$TMP_ROOT" node <<'NODE' || fail "review pure-function pins failed"
+const fs = require('fs')
+const assert = require('assert')
+const path = process.env.ROOT + '/workflows/brigade-review.js'
+const src = fs.readFileSync(path, 'utf8')
+
+const marker = '\nreturn (async () => {'
+const idx = src.indexOf(marker)
+assert.ok(idx !== -1, 'runtime IIFE marker not found in brigade-review.js')
+const header = `${src.slice(0, idx).replace('export const meta', 'const meta')}\n`
+
+// dedupFindings/productShouldRun/productCaveatNeeded/prNumberFromRef are declared INSIDE
+// the runtime IIFE (same as buildDispatchGroups in test_review_policy_binding), so pull
+// each one out by brace-matching its own function text and append it after the header —
+// dedupFindings is the only one of the four that closes over a header-level free var
+// (REPORT_SEVERITY_RANK); the other three take everything they need as params.
+function extractFn(name) {
+  const fnStart = src.indexOf(`function ${name}(`)
+  assert.ok(fnStart !== -1, `${name} not found in brigade-review.js`)
+  const braceStart = src.indexOf('{', fnStart)
+  let depth = 0
+  let fnEnd = -1
+  for (let i = braceStart; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1
+    else if (src[i] === '}') { depth -= 1; if (depth === 0) { fnEnd = i; break } }
+  }
+  assert.ok(fnEnd !== -1, `could not brace-match ${name}`)
+  return src.slice(fnStart, fnEnd + 1)
+}
+
+const innerFns = ['prNumberFromRef', 'productShouldRun', 'productCaveatNeeded', 'dedupFindings']
+  .map(extractFn).join('\n')
+const combined = `${header}\n${innerFns}\nreturn { buildReviewReportMarkdown, dedupFindings, productShouldRun, productCaveatNeeded, prNumberFromRef }`
+const { buildReviewReportMarkdown, dedupFindings, productShouldRun, productCaveatNeeded, prNumberFromRef } =
+  new Function('args', combined)('{}')
+
+// --- dedupFindings: location-merge keeps the higher severity's summary/fix, unions
+// dimensions into one comma-joined string; distinct locations never collapse. ---
+const deduped = dedupFindings([
+  { location: 'a.js:1', severity: 'low', dimension: 'style', summary: 'low note', fix: 'low fix' },
+  { location: 'a.js:1', severity: 'high', dimension: 'security', summary: 'high note', fix: 'high fix' },
+  { location: 'b.js:2', severity: 'medium', dimension: 'tests', summary: 'other', fix: 'other fix' },
+])
+assert.strictEqual(deduped.length, 2, `expected 2 deduped entries, got ${deduped.length}`)
+const merged = deduped.find((f) => f.location === 'a.js:1')
+assert.ok(merged, 'a.js:1 entry missing after dedup')
+assert.strictEqual(merged.severity, 'high', 'dedup did not keep the higher severity')
+assert.strictEqual(merged.summary, 'high note', 'dedup did not keep the higher-severity summary')
+assert.strictEqual(merged.fix, 'high fix', 'dedup did not keep the higher-severity fix')
+assert.strictEqual(merged.dimension, 'style, security', 'dedup did not comma-join dimensions in first-seen order')
+assert.ok(deduped.find((f) => f.location === 'b.js:2'), 'distinct location b.js:2 was dropped')
+
+// --- productShouldRun / productCaveatNeeded: full 18-cell gating matrix (policy x
+// contextTier x prBody). ---
+const POLICIES = ['always', 'with-source', 'never']
+const TIERS = ['bare', 'documented', 'tracked']
+const BODIES = ['', 'text']
+
+function expectedShouldRun(policy, tier, body) {
+  if (policy === 'always') return true
+  if (policy === 'never') return false
+  return tier === 'tracked' || !!(body && body.trim())
+}
+function expectedCaveat(policy, tier, body) {
+  return policy === 'always' && tier !== 'tracked' && !(body && body.trim())
+}
+
+let cells = 0
+for (const policy of POLICIES) {
+  for (const tier of TIERS) {
+    for (const body of BODIES) {
+      cells += 1
+      const gotRun = productShouldRun(policy, tier, body)
+      const wantRun = expectedShouldRun(policy, tier, body)
+      assert.strictEqual(gotRun, wantRun,
+        `productShouldRun(${policy}, ${tier}, ${JSON.stringify(body)}): expected ${wantRun}, got ${gotRun}`)
+      const gotCaveat = productCaveatNeeded(policy, tier, body)
+      const wantCaveat = expectedCaveat(policy, tier, body)
+      assert.strictEqual(gotCaveat, wantCaveat,
+        `productCaveatNeeded(${policy}, ${tier}, ${JSON.stringify(body)}): expected ${wantCaveat}, got ${gotCaveat}`)
+    }
+  }
+}
+assert.strictEqual(cells, 18, `expected 18 matrix cells, got ${cells}`)
+
+// --- prNumberFromRef: every accepted ref shape resolves to the same digits. ---
+for (const ref of ['123', '#123', 'https://example.com/pull/123', 'https://example.com/pull/123/']) {
+  assert.strictEqual(prNumberFromRef(ref), '123', `prNumberFromRef(${JSON.stringify(ref)}) did not resolve to "123"`)
+}
+
+// --- buildReviewReportMarkdown: synthetic 2-finding fixture, one unconfirmed. ---
+const findings = [
+  { id: 'f1', severity: 'high', location: 'a.js:10', summary: 'high sev issue', fix: 'do x', verify: 'check x', dimension: 'security', confirmed: true },
+  { id: 'f2', severity: 'low', location: 'b.js:20', summary: 'low sev issue', fix: 'do y', verify: 'check y', dimension: 'style', confirmed: false },
+]
+const md = buildReviewReportMarkdown({
+  reviewSlug: 'test-slug', tier: 'three-star', model: 'test-model', now: '2026-07-20T00:00:00Z',
+  input: { kind: 'branch', ref: 'feat/x' }, range: 'a..b', contextTier: 'documented',
+  findings, productCaveatFired: false, evidence: ['ran the suite'],
+})
+assert.ok(md.includes('doc: review_report'), 'report missing doc: review_report')
+assert.ok(md.includes('counts: { blocking: 0, high: 1, medium: 0, low: 1 }'), 'report counts line wrong')
+for (const section of ['## Scope', '## Findings', '## Context disclosure', '## Evidence']) {
+  assert.ok(md.includes(section), `report missing "${section}" section`)
+}
+assert.ok(md.includes('unconfirmed — one refute vote survived'), 'report missing unconfirmed annotation')
+
+fs.writeFileSync(process.env.TMP_ROOT + '/review-report-fixture.md', md)
+
+console.log('REVIEW PURE FUNCTIONS PIN OK')
+NODE
+
+  # buildReviewReportMarkdown's output has to be a real conforming review_report artifact,
+  # not just contain the right substrings — feed it through brigade-validate for real.
+  fixture="$TMP_ROOT/validate-pure-report"
+  mkdir -p "$fixture/.brigade/reviews/s"
+  cp "$TMP_ROOT/review-report-fixture.md" "$fixture/.brigade/reviews/s/report.md"
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+    "$fixture/.brigade/reviews/s/report.md" >/dev/null ||
+    fail "brigade-validate rejected buildReviewReportMarkdown's synthetic fixture"
+
+  # --- review.dimensions merge: fixture config disabling one shipped dimension and adding
+  # a custom one, asserted via brigade-config resolve --json (mirrors
+  # test_config_context_sources_merge_by_id's shape). ---
+  fixture2="$TMP_ROOT/config-review-dimensions"
+  mkdir -p "$fixture2/home" "$fixture2/.brigade"
+  cat >"$fixture2/brigade.config.json" <<'EOF'
+{ "review": { "dimensions": [
+    { "id": "security", "enabled": true, "title": "Security", "lens": "Security lens text." },
+    { "id": "custom-lens", "enabled": true, "title": "Custom", "lens": "Custom lens text." }
+] } }
+EOF
+  cat >"$fixture2/.brigade/config.local.json" <<'EOF'
+{ "review": { "dimensions": [ { "id": "security", "enabled": false } ] } }
+EOF
+  json="$(config_run "$fixture2" resolve --json)"
+  python3 - "$json" <<'PY' || fail "brigade-config did not merge review.dimensions by id"
+import json, sys
+
+dims = json.loads(sys.argv[1])["config"]["review"]["dimensions"]
+by_id = {d["id"]: d for d in dims}
+if len(dims) != 2:
+    raise SystemExit(f"expected 2 review dimensions, got {len(dims)}: {dims!r}")
+if by_id["security"]["enabled"] is not False:
+    raise SystemExit("local layer failed to disable the shipped security dimension")
+if by_id["security"]["title"] != "Security":
+    raise SystemExit("partial override dropped fields set by the earlier layer")
+if by_id["custom-lens"]["enabled"] is not True:
+    raise SystemExit("custom dimension was lost")
+PY
+}
+
 test_review_bundle() {
   # Capture the generated-file trailer count from an existing, known-good generated
   # workflow first, so the count asserted against brigade-review.js comes from a real
@@ -1541,6 +1697,7 @@ test_schema_examples_validate
 test_review_config
 test_review_policy_binding
 test_review_verify_tally
+test_review_pure_functions
 test_review_bundle
 test_inspector_modes
 test_validate_review_report
