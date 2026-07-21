@@ -458,7 +458,9 @@ return (async () => {
   function prNumberFromRef(ref) {
     const s = String(ref).trim()
     const m = s.match(/(\d+)\/?$/)
-    return m ? m[1] : s.replace(/^#/, '')
+    // The classifier only ever hands us a bare number, "#123", or a URL ending in
+    // digits — all three match above, so this is a defensive identity, not a parse.
+    return m ? m[1] : s
   }
 
   const prNumber = A.input.kind === 'pr' ? prNumberFromRef(A.input.ref) : null
@@ -874,8 +876,6 @@ no "consider improving". Return findings: [] if a lens turns up nothing.
 Return per the schema you were given: { findings: [...] }.`
   }
 
-  const SEVERITY_RANK = { blocking: 4, high: 3, medium: 2, low: 1 }
-
   // Merge findings that land on the same location: keep the highest severity's
   // summary/fix/verify, union the dimension list into one comma-joined string.
   function dedupFindings(findings) {
@@ -890,7 +890,7 @@ Return per the schema you were given: { findings: [...] }.`
         continue
       }
       const merged = { ...existing }
-      if ((SEVERITY_RANK[f.severity] || 0) > (SEVERITY_RANK[existing.severity] || 0)) {
+      if ((REPORT_SEVERITY_RANK[f.severity] || 0) > (REPORT_SEVERITY_RANK[existing.severity] || 0)) {
         merged.severity = f.severity
         merged.summary = f.summary
         merged.fix = f.fix
