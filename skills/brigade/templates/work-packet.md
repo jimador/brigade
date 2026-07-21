@@ -156,6 +156,10 @@ adjacent bugs to leave alone (report them instead).
   grep.
 - Is every named hazard paired with a matching acceptance-criterion test? Guidance without a
   test leaves the regression path open.
+- Does any step interpolate repo-external or review-subject text into an agent prompt? Then
+  the packet enumerates EVERY interpolation site and routes each through the
+  untrusted-content delimiter (BEGIN/END markers + data-not-instructions preamble) — a
+  sampled site list ships an unguarded hole; proven twice.
 - Is every expected runtime string or output that another packet also asserts — or that came
   from a scout brief — captured from a real execution and pasted verbatim into each packet
   that uses it? Never re-derive or analogize a shared value per packet; run the case once

@@ -343,12 +343,15 @@ actual calls, the query builder's WHERE/label clause, or the primary doc. An una
 scout claim is an inference to re-derive, not a fact to paste. Dry-run every distinct gate
 command and self-check grep on the base branch before dispatch — and prove the full-suite
 command actually enumerates every workspace package (a suite that silently skips a
-package's tests exits 0 too). Two claim classes get
+package's tests exits 0 too). Three claim classes get
 extra teeth: an exhaustiveness list ("all call sites", "all files with X") is re-derived
 by your own grep at packet-write time, never copied from a brief or review (every copied
-list so far has been short); and a parity claim ("matches today's behavior") is verified
+list so far has been short); a parity claim ("matches today's behavior") is verified
 against the base branch itself — sibling artifacts written alongside the change (docs,
-tests, comments) validate each other circularly and prove nothing.
+tests, comments) validate each other circularly and prove nothing; and a coverage claim
+("existing tests already cover X") carries the covering test's name/line or the grep
+output that proves it — two sibling packets in one dish repeated the same unverified
+coverage claim that a one-line grep disproved.
 
 **Disjointness is the spine.** Two work items in the same wave must not touch the same
 files — doc files included. Anything that genuinely overlaps is sequenced with a
