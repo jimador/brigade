@@ -42,6 +42,7 @@ set `tier` in config or run `/brigade:tier`.
 | `/brigade:retro` | Run the analyst pass on the current dish now (intensive at ★★★; `--standard`/`--intensive` to override) |
 | `/brigade:design` | Design swag for a ticket without claiming or cooking it |
 | `/brigade:review` | Advisory, tier-scaled code review of a branch, PR, or commit range |
+| `/brigade:review-dispatch` | Dispatch selected findings from a completed review report into a cooked mini-dish |
 
 ## Shell commands
 
