@@ -25,6 +25,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const TIERS = ['three-star', 'two-star', 'one-star']
 const PLAN_CHECKS = ['always', 'triggers', 'never']
@@ -80,7 +81,25 @@ const KNOWN_TOP_LEVEL = new Set(Object.keys(DEFAULTS))
 // --- layer discovery ---------------------------------------------------------
 
 function repoRoot() {
-  return process.env.CLAUDE_PROJECT_DIR || process.cwd()
+  const explicit = process.env.BRIGADE_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR ||
+    process.env.CODEX_PROJECT_DIR
+  if (explicit) return path.resolve(explicit)
+  let cursor = process.cwd()
+  while (true) {
+    if (fs.existsSync(path.join(cursor, '.brigade'))) return cursor
+    const parent = path.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return process.cwd()
+  }
 }
 
 function layerFiles() {

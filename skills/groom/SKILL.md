@@ -46,6 +46,10 @@ shape. Restructures are applied in step 4 only after confirmation:
 
 ## 3. Review — two perspectives per ticket, in parallel where independent
 
+For each ticket, derive its canonical dish slug using the source-plus-ticket algorithm in
+the main skill, acquire that dish lease before writing any `.brigade/grooming/` artifact,
+and release it before the batch confirmation. A held lease leaves that ticket read-only.
+
 **Scout pass (grounding).** Dispatch one `brigade-scout` per ticket with: the ticket text,
 the repo root, the question "Which files, modules, and contracts does this ticket actually
 touch, and do its claims about the codebase hold?", and a brief output path under
@@ -90,7 +94,12 @@ out of the ready status.
 
 Show the user each groomed body and every split/merge/reparent (a compact before/after
 summary is fine) and get **one confirmation for the batch**. Then apply via the configured
-transport: replace bodies where the transport supports content updates (else append the
+transport. Before each ticket mutation, reacquire the same canonical dish slug with
+`brigade-coord ... claude`, re-read that it did not change during grooming, apply the
+update, and release the lease. A lease held by Codex or another Claude session leaves
+that ticket unchanged and is reported to the user.
+
+Replace bodies where the transport supports content updates (else append the
 groomed spec as a comment and say so), create/close tickets for splits and merges with
 cross-reference comments, and post one short human-facing comment per changed ticket —
 what was clarified or restructured, and any open questions. Plain language, no brigade
@@ -102,8 +111,9 @@ questions moves to the blocked-equivalent status only if the user confirms.
 End each round with: the feature clusters, tickets groomed, splits/merges applied,
 tickets with open questions, corrections the scouts made to codebase claims, and which
 tickets you'd recommend cooking first. The user may iterate — re-cluster, re-split,
-sharpen further — as many rounds as they want. Clean up `.brigade/grooming/` after the
-final report.
+sharpen further — as many rounds as they want. After the final report, acquire
+`repo-global`, remove only this session's known `.brigade/grooming/` artifacts, then
+release it. Never sweep the directory or remove another session's files.
 
 Guardrails: originals preserved verbatim; no restructure or status change without
 confirmation; open questions are surfaced, never answered by invention; no secrets or

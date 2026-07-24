@@ -1678,6 +1678,162 @@ main()
 NODE
 }
 
+test_coord_single_writer_and_handoff() {
+  fixture="$TMP_ROOT/coord"
+  mkdir -p "$fixture/.brigade"
+
+  first="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared claude)"
+  owner="$(python3 - "$first" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["owner"])
+PY
+)"
+
+  if CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex >/dev/null; then
+    fail "brigade-coord allowed Codex to acquire a Claude-held dish"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 3 ] || fail "brigade-coord contention returned $status instead of 3"
+
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" heartbeat shared "$owner" >/dev/null
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared "$owner" >/dev/null
+
+  second="$(CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex)"
+  python3 - "$second" <<'PY' || fail "Codex could not acquire after Claude handoff"
+import json
+import sys
+document = json.loads(sys.argv[1])
+assert document["acquired"] is True
+assert document["runtime"] == "codex"
+PY
+
+  CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared \
+    "$(python3 - "$second" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["owner"])
+PY
+)" >/dev/null
+}
+
+test_coord_recovers_malformed_lease() {
+  fixture="$TMP_ROOT/coord-malformed"
+  mkdir -p "$fixture/.brigade/coordination/shared.lease"
+
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex >/dev/null; then
+    fail "brigade-coord silently replaced a malformed lease"
+  else
+    [ "$?" -eq 3 ] || fail "malformed lease contention did not return 3"
+  fi
+
+  status="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" status shared)"
+  python3 - "$status" <<'PY' || fail "malformed lease was reported as unheld"
+import json
+import sys
+document = json.loads(sys.argv[1])
+assert document["held"] is True
+assert document["invalid"] is True
+PY
+
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" break shared --force >/dev/null
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex >/dev/null ||
+    fail "could not acquire after operator-approved malformed lease recovery"
+}
+
+test_coord_fences_stale_owner() {
+  fixture="$TMP_ROOT/coord-fencing"
+  mkdir -p "$fixture/.brigade"
+  first="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared claude)"
+  owner_a="$(python3 - "$first" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["owner"])
+PY
+)"
+
+  mkdir "$fixture/.brigade/coordination/shared.mutex"
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" break shared --force >/dev/null; then
+    fail "break bypassed an active lifecycle mutex"
+  else
+    [ "$?" -eq 5 ] || fail "busy lifecycle mutex did not return 5"
+  fi
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" recover-lock shared --force >/dev/null
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" break shared --force >/dev/null
+  second="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex)"
+  owner_b="$(python3 - "$second" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["owner"])
+PY
+)"
+
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" heartbeat shared "$owner_a" >/dev/null; then
+    fail "stale owner heartbeat modified a replacement lease"
+  else
+    [ "$?" -eq 2 ] || fail "stale owner heartbeat did not return owner mismatch"
+  fi
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared "$owner_a" >/dev/null; then
+    fail "stale owner release removed a replacement lease"
+  else
+    [ "$?" -eq 2 ] || fail "stale owner release did not return owner mismatch"
+  fi
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared "$owner_b" >/dev/null
+}
+
+test_helpers_share_project_root() {
+  fixture="$TMP_ROOT/project-root"
+  nested="$fixture/nested/path"
+  mkdir -p "$fixture/.brigade/dishes/sample" "$nested"
+  printf '%s\n' \
+    '---' \
+    'doc: plan' \
+    'schema: 1' \
+    'dish: sample' \
+    'role: planner' \
+    'model: test' \
+    'created: 2026-01-01T00:00:00Z' \
+    'ticket: TEST-ROOT' \
+    'source: local' \
+    'items: []' \
+    '---' \
+    '## Dish' \
+    'Root resolution fixture.' \
+    '## Waves' \
+    'None.' >"$fixture/.brigade/dishes/sample/PLAN.md"
+
+  key="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" key local TEST-ROOT)"
+  python3 - "$key" <<'PY' || fail "canonical key did not reuse existing PLAN identity"
+import json
+import sys
+document = json.loads(sys.argv[1])
+assert document["dish"] == "sample"
+assert document["existing"] is True
+PY
+  review="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" review-key 'Feature/Foo_Bar')"
+  python3 - "$review" <<'PY' || fail "review key normalization drifted"
+import json
+import sys
+document = json.loads(sys.argv[1])
+assert document["review"] == "feature-foo-bar"
+assert document["lease"] == "review-feature-foo-bar"
+PY
+
+  (
+    cd "$nested"
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-status" --json |
+      python3 -c 'import json,sys; assert json.load(sys.stdin)["brigade"] is True'
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-config" resolve --json >/dev/null
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" >/dev/null
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" status shared >/dev/null
+  ) || fail "helpers resolved different CODEX_PROJECT_DIR roots"
+}
+
+test_coord_single_writer_and_handoff
+test_coord_recovers_malformed_lease
+test_coord_fences_stale_owner
+test_helpers_share_project_root
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy

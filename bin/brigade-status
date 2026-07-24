@@ -5,7 +5,32 @@
 # (exit 0) when the repo has no .brigade/.
 set -euo pipefail
 
-ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+find_root() {
+  if [ -n "${BRIGADE_PROJECT_DIR:-}" ]; then
+    printf '%s\n' "$BRIGADE_PROJECT_DIR"
+    return
+  fi
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    printf '%s\n' "$CLAUDE_PROJECT_DIR"
+    return
+  fi
+  if [ -n "${CODEX_PROJECT_DIR:-}" ]; then
+    printf '%s\n' "$CODEX_PROJECT_DIR"
+    return
+  fi
+  local cursor
+  cursor="$(pwd)"
+  while [ "$cursor" != "/" ]; do
+    if [ -d "$cursor/.brigade" ]; then
+      printf '%s\n' "$cursor"
+      return
+    fi
+    cursor="$(dirname "$cursor")"
+  done
+  git rev-parse --show-toplevel 2>/dev/null || pwd
+}
+
+ROOT="$(find_root)"
 B="$ROOT/.brigade"
 MODE="${1:-text}"
 

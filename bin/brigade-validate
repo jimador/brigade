@@ -16,6 +16,7 @@
 // Exit codes: 0 = all conforming, 1 = violations found, 2 = usage/IO error.
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const STATUSES = ['todo', 'dispatched', 'in_review', 'rework', 'done', 'blocked']
 const SEVERITIES = ['blocking', 'high', 'medium', 'low']
@@ -384,11 +385,33 @@ function collectDefaultTargets(root) {
   return targets
 }
 
+function repoRoot() {
+  const explicit = process.env.BRIGADE_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR ||
+    process.env.CODEX_PROJECT_DIR
+  if (explicit) return path.resolve(explicit)
+  let cursor = process.cwd()
+  while (true) {
+    if (fs.existsSync(path.join(cursor, '.brigade'))) return cursor
+    const parent = path.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return process.cwd()
+  }
+}
+
 function main() {
   const args = process.argv.slice(2)
   const json = args.includes('--json')
   const files = args.filter((a) => a !== '--json')
-  const root = process.env.CLAUDE_PROJECT_DIR || process.cwd()
+  const root = repoRoot()
 
   const targets = files.length > 0 ? files : collectDefaultTargets(root)
   if (targets.length === 0) {

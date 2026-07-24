@@ -28,6 +28,10 @@ It is a Claude Code-native fleet workflow with two deliberate design choices:
    runs on the tier's cheap subagents (see `TIERS.md`). The granularity rules below exist to
    make haiku viable.
 
+Claude and Codex Brigade share one wire protocol. A dish planned or partially executed
+by either runtime is resumed by the other from the same `.brigade` PLAN, artifacts,
+branches, and worktrees without conversion.
+
 ## Roles
 
 | Role | Who runs it | Model (by tier) | Job |
@@ -106,15 +110,69 @@ authority rules (what counts as a valid source for that type's claims).
   and required sections. A FAIL from the validator is handled like any malformed artifact —
   re-request once with the schema, then treat as a failed attempt.
 
+## Claude/Codex coordination
+
+Each dish is a single-writer shared state machine. Claude and Codex may run different
+dishes concurrently; they must not mutate the same dish simultaneously.
+
+The dish slug is a canonical identity, not a title. Resolve it mechanically with
+`brigade-coord key <source> <immutable-ticket-id>`: the helper first reuses an existing
+`PLAN.md` whose `source:` and verbatim `ticket:` match, otherwise it normalizes
+`<source>-<ticket-id>` by lowercasing, collapsing every run outside `[a-z0-9]` to `-`,
+and trimming leading/trailing `-`. For work with no source ticket, first mint a stable local ticket id
+`local-<UTC-compact-timestamp>-<short-title-slug>` and record it verbatim in PLAN. If
+lookup is ambiguous or normalization is empty, stop. Claude and Codex must run this exact
+derivation before acquiring or creating a dish.
+
+Before the first mutation of a dish, run:
+
+```bash
+brigade-coord acquire <dish-slug> claude
+```
+
+Retain the returned `owner` token. If another runtime holds the lease, remain read-only:
+show its runtime and heartbeat, reconcile status/git/artifacts, and let the operator
+decide whether to wait or investigate. Never silently break a lease.
+
+Heartbeat after every Scout, Cook, Inspector, and landing wave. Release before yielding
+at a human approval/question checkpoint and at completed handoff:
+
+```bash
+brigade-coord heartbeat <dish-slug> <owner-token>
+brigade-coord release <dish-slug> <owner-token>
+```
+
+A leftover lease is not stale merely because time passed. Check live sessions,
+`brigade-status`, `git worktree list`, branches, and artifact timestamps. Only after
+explicit operator approval, archive it with
+`brigade-coord break <dish-slug> --force`, then acquire a new lease.
+Lifecycle updates are serialized by a short operation mutex. If a crashed helper leaves
+one behind, `status` reports `operation_busy`; after the same live-state checks and
+separate operator approval, archive only that mutex with
+`brigade-coord recover-lock <dish-slug> --force`, then run `break` or resume normally.
+
+The shared wire contract is the canonical paths and shapes in `SCHEMAS.md`: PLAN statuses,
+`reports/<item>-cook.md`, `reports/<item>-verdict.md`, `state/<item>.md`,
+`wip/<delivery-slug>/<item>`, `.brigade/worktrees/<delivery-slug>--<item>`, and attempt
+records `{model, trigger, result}`. Runtime/model identifiers are opaque provenance
+strings; preserve unfamiliar Codex values.
+
+The shared config keeps Claude agent overrides in
+`models.scout|cook|cookHeavy|inspector|analyst|design|steward`. Codex uses separate
+nested keys prefixed `codex`; never consume or rewrite them.
+
 ## Setup (first run in a repo)
 
 0. Run `brigade-config layers` and `brigade-config doctor` (free). They tell you which
    config layers exist and whether any is broken, before you touch anything else.
 1. Check for `.brigade/config.md` in the repo root. If present, read it and continue.
 2. If absent, run **init**:
-   - Copy `templates/config.md` (next to this Skill) to `.brigade/config.md` and interview
-     the user for the values: source type, board/database id, their identity on the source,
+   - Read `templates/config.md` (next to this Skill) without writing it and interview the
+     user for the values: source type, board/database id, their identity on the source,
      the status-name mapping, and the repo's verification gate commands.
+   - Gather all discoverable and operator-provided values first. Acquire coordination key
+     `repo-global` as `claude`, re-check that config is still absent, write the config and
+     exclusion, then release it before any further human checkpoint.
    - Pick the source **transport**: if the session has matching MCP tools (e.g. a Notion
      MCP server), prefer them — record the transport and the op→tool mapping in config per
      the source adapter. Otherwise use the adapter's CLI/curl path with its token env var.
@@ -122,8 +180,7 @@ authority rules (what counts as a valid source for that type's claims).
      credentials with the user before doing anything else.
    - If a personal KB CLI is configured in `~/.brigade/config.json` (`kb.enabled` + `kb.cli`)
      and that CLI is on PATH, optionally confirm identity helpers it exposes; otherwise skip.
-   - Append `.brigade/` to the repo's `.git/info/exclude` (never to the tracked
-     `.gitignore`, and never commit `.brigade/`).
+   - Never put `.brigade/` in tracked `.gitignore` and never commit it.
 3. `.brigade/` layout (all local, never committed):
 
 ```
@@ -163,7 +220,8 @@ Use when the operator wants a first cut, not a cook:
 
 Load `agents/brigade-design.md`. Write `.brigade/dishes/<slug>/DESIGN.md` (`doc: design_swag`).
 Mirror open questions + status `design` (or `scoping`). **Do not claim, set worker, or
-dispatch cooks.** Stop for human curation.
+dispatch cooks.** Acquire `<slug>` as `claude` before writing and release it before
+stopping for human curation.
 
 ## Claim the ticket (mandatory before cook / decompose)
 
@@ -171,10 +229,11 @@ dispatch cooks.** Stop for human curation.
 
 Otherwise, before decompose/dispatch:
 
-1. Set `assignee` to the human operator running the session.
-2. Ensure `kind` is set.
-3. Move status `todo` → `in_progress` (mapped native names).
-4. On each dispatch, set `worker` to the cook roster name in the same turn.
+1. Derive the dish slug and acquire it as `claude`.
+2. Set `assignee` to the human operator running the session.
+3. Ensure `kind` is set.
+4. Move status `todo` → `in_progress` (mapped native names).
+5. On each dispatch, set `worker` to the cook roster name in the same turn.
 
 Confirm with a read-back. Skipping claim/`worker` while cooking in chat is a readiness
 failure.
@@ -271,8 +330,9 @@ with this dish. For each overlap record one decision in `PLAN.md`: **absorb** (f
 comment + close the old ticket), **cross-reference** (comment linking the two), or **leave**
 (checked, unrelated). An unreconciled overlap is a readiness failure — resolve it or ask.
 
-Derive `<dish-slug>` (kebab-case from the ticket key/title) and `<ticket>` (the source's
-short id or key). Create `.brigade/dishes/<dish-slug>/`.
+Derive `<dish-slug>` with the canonical source-plus-ticket algorithm in
+**Claude/Codex coordination** and `<ticket>` as the source's verbatim immutable id or key.
+Create `.brigade/dishes/<dish-slug>/`.
 
 ## Phase 1 — Research (scouts, not you)
 
@@ -426,11 +486,12 @@ already decided.
 
 Show the user the plan (item titles, DAG edges, wave layout, heavy flags, and the plan
 check verdict if one ran) and get one confirmation before creating branches. This is the
-single planning checkpoint.
+single planning checkpoint. Release the dish lease before yielding for that confirmation.
 
 ## Phase 3–5 — Execute the DAG (`brigade-execute` Workflow script)
 
-**Pre-flight.** Branches become PRs and history — name them for WHAT THEY DELIVER, in the
+**Pre-flight.** Reacquire the dish lease, then reconcile PLAN.md, artifacts, branches,
+and worktrees before dispatch. Branches become PRs and history — name them for WHAT THEY DELIVER, in the
 repo's own convention, never for the process that made them (no "brigade" in any branch or
 worktree name). Pick a short delivery slug at plan time and record it in PLAN.md
 frontmatter as `delivery_branch:` — e.g. `feat/config-users`, `fix/async-401`,
@@ -583,6 +644,8 @@ When all items are merged:
 6. The ticket reaches its done-equivalent status only when the human merges the PR. The
    integration branch is deleted only after that.
 
+Release the dish lease before returning the handoff to the operator.
+
 ## Reviewing code (`brigade-review` Workflow script)
 
 **What it is.** An advisory, tier-scaled standalone code review over a branch, PR, or
@@ -591,6 +654,10 @@ pipeline, on demand. It's the same Mode 3 (standalone diff review) contract an I
 already uses when reviewing outside a packet: findings, never a PASS/FAIL verdict. It
 never posts to a pull request; the only write besides its own report is a plain-language
 ticket comment when a tracked ticket was found, and only ever to that ticket.
+
+Before creating the review worktree or report, acquire coordination key
+`review-<review-slug>` as `claude`; release it after report assembly and cleanup. This
+prevents a concurrent Codex review of the same input from colliding on shared paths.
 
 **Invocation.** Resolve `scriptPath` the same two-path rule as research/execute: prefer
 `$CLAUDE_PLUGIN_ROOT/workflows/brigade-review.js` when that env is set, else
@@ -658,7 +725,8 @@ Dispatch `brigade-analyst` with: the dish dir path (`PLAN.md`, `briefs/`, `repor
 including every FAIL verdict and rework trail), `.brigade/LEARNINGS.md`, and the output
 path `.brigade/dishes/<dish-slug>/analyst.md`. It scores the run (rework rate, escalation
 use, blocked packets, conflicts, review yield) and returns 1–3 concrete proposals. Apply
-what's repo-local yourself by appending to `.brigade/LEARNINGS.md` — the fleet's working
+what's repo-local yourself by acquiring `repo-global`, re-reading the latest file,
+appending to `.brigade/LEARNINGS.md`, and releasing the lease — the fleet's working
 memory, re-read at every dish start.
 
 **At ★★★ the end-of-dish retro is intensive** (mid-dish 10-item checkpoints stay
@@ -728,7 +796,8 @@ user — not instructions that execute themselves.
 ownership, per-dispatch `attempts` records)
 plus the report trail, updated at every transition. So resume is trivial and gate-free:
 
-1. Run `brigade-status` (plugin command, zero model tokens) — config, per-dish item
+1. Run `brigade-status` and `brigade-coord list`, then acquire the dish lease before any
+   reconciliation write or dispatch. `brigade-status` (plugin command, zero model tokens) — config, per-dish item
    statuses, worktrees, learnings tail in one shot (`--json` for structured output when a
    script or precise state check needs it). The SessionStart hook already injected this in
    brigade repos; don't re-derive what it shows.
@@ -811,6 +880,7 @@ an optional batched progress comment on the parent, not a status thrash.
   design, review, review-dispatch.
 - `../../bin/brigade-config` — resolves the four config layers and the prompt-override
   stacks. Run it instead of reading config files.
+- `../../bin/brigade-coord` — atomic per-dish leases shared by Claude and Codex.
 - `hooks/guard.sh` — PreToolUse git-hygiene guard.
 - `../groom/SKILL.md` — the board-grooming session: cluster by product feature,
   split/merge/sharpen tickets via scout + inspector review. Run it for whole-board work,

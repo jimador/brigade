@@ -10,7 +10,7 @@ skills/brigade/     the planner's brain, schemas, tier policy, source adapters, 
 skills/groom/       the board-grooming session
 agents/             one file per subagent role
 commands/           slash commands (thin wrappers over the bin/ scripts)
-bin/                brigade-status, brigade-config, brigade-validate, brigade-bundle
+bin/                brigade-status, brigade-config, brigade-validate, brigade-bundle, brigade-coord
 hooks/              SessionStart state injection, PreToolUse git guard
 workflows/src/      hand-edited Workflow script sources
 workflows/config.js policy consts + config merging, spliced into all three scripts
@@ -43,6 +43,7 @@ for f in install.sh bin/brigade-status hooks/*.sh; do bash -n "$f" || exit 1; do
 node --check bin/brigade-validate
 node --check bin/brigade-config
 node --check bin/brigade-bundle
+node --check bin/brigade-coord
 node --check workflows/config.js
 for f in workflows/src/*.js workflows/brigade-*.js; do node --check "$f" || exit 1; done
 bin/brigade-bundle --check
@@ -52,8 +53,9 @@ python3 -c "import json; [json.load(open(f)) for f in ['.claude-plugin/plugin.js
 
 There is no unit-test framework. `test/regression.sh` covers the behaviors that have
 broken before: `brigade-status` parsing of both inline and block-style plan items,
-`brigade-config` layer precedence and prompt stacking, and the git guard's block/allow
-policy including the smuggling paths (`env`, `sh -c`, command substitution, heredocs).
+`brigade-config` layer precedence and prompt stacking, cross-runtime lease contention and
+handoff, and the git guard's block/allow policy including the smuggling paths (`env`,
+`sh -c`, command substitution, heredocs).
 
 **A bug that got past the gate gets a regression test in the same change.** That is the
 only way this file stays honest.

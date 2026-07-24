@@ -1,0 +1,312 @@
+#!/usr/bin/env node
+// brigade-coord — atomic single-writer leases shared by Claude and Codex Brigade.
+//
+// A lease protects one dish control plane. Different dishes may run concurrently.
+// The lease is intentionally not time-expired: a paused human checkpoint is not proof
+// that an owner died. `break --force` archives the old lease for operator-approved
+// recovery instead of deleting its evidence.
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+
+function repoRoot() {
+  const explicit = process.env.BRIGADE_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR ||
+    process.env.CODEX_PROJECT_DIR
+  if (explicit) return path.resolve(explicit)
+  let cursor = process.cwd()
+  while (true) {
+    if (fs.existsSync(path.join(cursor, '.brigade'))) return cursor
+    const parent = path.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return process.cwd()
+  }
+}
+
+const root = repoRoot()
+const coordinationRoot = path.join(root, '.brigade', 'coordination')
+const command = process.argv[2]
+const dish = process.argv[3]
+
+function fail(message, code = 1) {
+  process.stderr.write(`${message}\n`)
+  process.exit(code)
+}
+
+function validDish(value) {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9._-]*$/.test(value)
+}
+
+function leasePath(value) {
+  if (!validDish(value)) fail('dish must match [a-z0-9][a-z0-9._-]*')
+  return path.join(coordinationRoot, `${value}.lease`)
+}
+
+function mutexPath(value) {
+  if (!validDish(value)) fail('dish must match [a-z0-9][a-z0-9._-]*')
+  return path.join(coordinationRoot, `${value}.mutex`)
+}
+
+function withMutex(value, operation) {
+  fs.mkdirSync(coordinationRoot, { recursive: true })
+  try {
+    fs.mkdirSync(mutexPath(value))
+  } catch (error) {
+    if (error && error.code === 'EEXIST') {
+      fail(`coordination operation already active for ${value}`, 5)
+    }
+    throw error
+  }
+  try {
+    return operation()
+  } finally {
+    fs.rmdirSync(mutexPath(value))
+  }
+}
+
+function metadataPath(value) {
+  const lease = leasePath(value)
+  return fs.existsSync(lease) && fs.statSync(lease).isDirectory()
+    ? path.join(lease, 'owner.json')
+    : lease
+}
+
+function readMetadata(value) {
+  const lease = leasePath(value)
+  if (!fs.existsSync(lease)) return null
+  try {
+    return JSON.parse(fs.readFileSync(metadataPath(value), 'utf8'))
+  } catch (error) {
+    return { dish: value, invalid: true, error: error.message }
+  }
+}
+
+function writeMetadata(value, metadata) {
+  const file = metadataPath(value)
+  const temporary = `${file}.tmp-${crypto.randomUUID()}`
+  fs.writeFileSync(temporary, `${JSON.stringify(metadata, null, 2)}\n`, { flag: 'wx' })
+  fs.renameSync(temporary, file)
+}
+
+function emit(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+}
+
+function normalizeKey(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+function unquote(value) {
+  const trimmed = value.trim()
+  if (trimmed.length >= 2 &&
+      ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+       (trimmed.startsWith("'") && trimmed.endsWith("'")))) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function planIdentity(file) {
+  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/)
+  const identity = {}
+  let fences = 0
+  for (const line of lines) {
+    if (line === '---') {
+      fences += 1
+      if (fences === 2) break
+      continue
+    }
+    if (fences !== 1) continue
+    const match = line.match(/^(dish|source|ticket):\s*(.*)$/)
+    if (match) identity[match[1]] = unquote(match[2])
+  }
+  return identity
+}
+
+if (command === 'key') {
+  const source = process.argv[3]
+  const ticket = process.argv[4]
+  if (!source || !ticket) fail('key requires source and immutable ticket id')
+  const matches = []
+  const dishesRoot = path.join(root, '.brigade', 'dishes')
+  if (fs.existsSync(dishesRoot)) {
+    for (const entry of fs.readdirSync(dishesRoot)) {
+      const file = path.join(dishesRoot, entry, 'PLAN.md')
+      if (!fs.existsSync(file)) continue
+      const identity = planIdentity(file)
+      if (identity.source === source && identity.ticket === ticket) {
+        matches.push(identity.dish || entry)
+      }
+    }
+  }
+  if (matches.length > 1) fail(`ambiguous existing dish identity for ${source}:${ticket}`, 4)
+  if (matches.length === 1) {
+    emit({ dish: matches[0], source, ticket, existing: true })
+    process.exit(0)
+  }
+  const derived = normalizeKey(`${source}-${ticket}`)
+  if (!derived) fail('source and ticket id normalize to an empty dish key')
+  emit({ dish: derived, source, ticket, existing: false })
+  process.exit(0)
+}
+
+if (command === 'review-key') {
+  const ref = process.argv[3]
+  if (!ref) fail('review-key requires a ref')
+  const review = normalizeKey(ref)
+  if (!review) fail('ref normalizes to an empty review key')
+  emit({ review, lease: `review-${review}` })
+  process.exit(0)
+}
+
+if (command === 'list') {
+  if (!fs.existsSync(coordinationRoot)) {
+    emit({ leases: [] })
+    process.exit(0)
+  }
+  const leases = fs.readdirSync(coordinationRoot)
+    .filter((name) => name.endsWith('.lease'))
+    .sort()
+    .map((name) => {
+      const key = name.slice(0, -'.lease'.length)
+      return {
+        ...(readMetadata(key) || { dish: key, invalid: true }),
+        operation_busy: fs.existsSync(mutexPath(key)),
+      }
+    })
+  emit({ leases })
+  process.exit(0)
+}
+
+if (!dish) fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|list [...]')
+
+if (command === 'status') {
+  const metadata = readMetadata(dish)
+  emit({
+    ...(metadata ? { held: true, ...metadata } : { held: false, dish }),
+    operation_busy: fs.existsSync(mutexPath(dish)),
+  })
+  process.exit(0)
+}
+
+if (command === 'acquire') {
+  const runtime = process.argv[4]
+  if (!['claude', 'codex'].includes(runtime)) fail('runtime must be claude or codex')
+  const now = new Date().toISOString()
+  const owner = `${runtime}-${crypto.randomUUID()}`
+  const metadata = {
+    schema: 1,
+    dish,
+    runtime,
+    owner,
+    acquired_at: now,
+    heartbeat_at: now,
+  }
+  const result = withMutex(dish, () => {
+    try {
+      fs.writeFileSync(leasePath(dish), `${JSON.stringify(metadata, null, 2)}\n`, {
+        flag: 'wx',
+      })
+    } catch (error) {
+      if (error && ['EEXIST', 'EISDIR'].includes(error.code)) {
+        const holder = readMetadata(dish)
+        return {
+          code: 3,
+          output: { acquired: false, held: true, ...(holder || { dish, invalid: true }) },
+        }
+      }
+      throw error
+    }
+    return { code: 0, output: { acquired: true, ...metadata } }
+  })
+  emit(result.output)
+  process.exit(result.code)
+}
+
+if (command === 'heartbeat') {
+  const owner = process.argv[4]
+  if (!owner) fail('heartbeat requires the owner token')
+  const metadata = withMutex(dish, () => {
+    const current = readMetadata(dish)
+    if (!current) return { error: `no lease for ${dish}`, code: 4 }
+    if (current.invalid) {
+      return { error: `invalid lease metadata for ${dish}; operator-approved break required`, code: 4 }
+    }
+    if (current.owner !== owner) return { error: `lease owner mismatch for ${dish}`, code: 2 }
+    current.heartbeat_at = new Date().toISOString()
+    writeMetadata(dish, current)
+    return current
+  })
+  if (metadata.error) fail(metadata.error, metadata.code)
+  emit({ heartbeat: true, ...metadata })
+  process.exit(0)
+}
+
+if (command === 'release') {
+  const owner = process.argv[4]
+  if (!owner) fail('release requires the owner token')
+  const metadata = withMutex(dish, () => {
+    const current = readMetadata(dish)
+    if (!current) return { error: `no lease for ${dish}`, code: 4 }
+    if (current.invalid) {
+      return { error: `invalid lease metadata for ${dish}; operator-approved break required`, code: 4 }
+    }
+    if (current.owner !== owner) return { error: `lease owner mismatch for ${dish}`, code: 2 }
+    const lease = leasePath(dish)
+    if (fs.statSync(lease).isDirectory()) {
+      for (const entry of fs.readdirSync(lease)) {
+        if (entry !== 'owner.json' && !entry.startsWith('owner.json.tmp-')) {
+          return {
+            error: `unexpected lease entry ${entry}; operator-approved break required`,
+            code: 4,
+          }
+        }
+        fs.unlinkSync(path.join(lease, entry))
+      }
+      fs.rmdirSync(lease)
+    } else {
+      fs.unlinkSync(lease)
+    }
+    return current
+  })
+  if (metadata.error) fail(metadata.error, metadata.code)
+  emit({ released: true, dish, runtime: metadata.runtime, owner })
+  process.exit(0)
+}
+
+if (command === 'break') {
+  if (process.argv[4] !== '--force') fail('break requires explicit --force')
+  const result = withMutex(dish, () => {
+    const metadata = readMetadata(dish)
+    if (!metadata) return null
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const archive = path.join(coordinationRoot, `${dish}.broken-${stamp}-${crypto.randomUUID()}`)
+    fs.renameSync(leasePath(dish), archive)
+    return { metadata, archive }
+  })
+  if (!result) fail(`no lease for ${dish}`, 4)
+  emit({ broken: true, dish, previous: result.metadata, archived_at: result.archive })
+  process.exit(0)
+}
+
+if (command === 'recover-lock') {
+  if (process.argv[4] !== '--force') fail('recover-lock requires explicit --force')
+  const mutex = mutexPath(dish)
+  if (!fs.existsSync(mutex)) fail(`no operation lock for ${dish}`, 4)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const archive = path.join(coordinationRoot, `${dish}.mutex-broken-${stamp}-${crypto.randomUUID()}`)
+  fs.renameSync(mutex, archive)
+  emit({ recovered: true, dish, archived_at: archive })
+  process.exit(0)
+}
+
+fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|recover-lock|list [...]')

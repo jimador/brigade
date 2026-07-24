@@ -8,12 +8,18 @@ Everything you can say or run, and what it actually does.
 
 ## The shape of a session
 
-You talk to the **Planner** — the Claude Code session itself. It never reads source files
-or writes code; it plans, dispatches, and reports. All the token-heavy work happens in
-subagents you never talk to directly.
+You talk to the **Planner** — the Claude Code or Codex session itself. It never reads
+source files or writes code; it plans, dispatches, and reports. All the token-heavy work
+happens in subagents you never talk to directly.
 
 A **dish** is one ticket cooked to completion. It has exactly two human checkpoints:
 approving the decomposition, and reviewing the PR.
+
+Claude and Codex may work different dishes in the same repository at the same time. For
+one dish, Brigade acquires an atomic ownership lease before changing shared state and
+releases it at handoff or a human checkpoint. Either runtime can then resume from the same
+`PLAN.md`, reports, worktrees, and branches. Brigade never treats elapsed time alone as
+permission to break a lease.
 
 ## Phrases
 
@@ -66,6 +72,9 @@ brigade-validate --json         # structured results
 
 brigade-bundle                  # regenerate workflows/ from workflows/src/
 brigade-bundle --check          # fail if generated output is stale
+
+brigade-coord list              # active Claude/Codex dish owners
+brigade-coord status <dish>     # inspect one dish lease
 ```
 
 ## The phases, in order

@@ -70,6 +70,10 @@ triggers. Run the adversarial plan check per the tier's policy (★★★ always
 triggers, ★ self-check only) exactly as for any other dish — a findings-derived plan does
 not get to skip it.
 
+Before writing the mini-dish, acquire `review-fixes-<review-slug>` as `claude`. Hold the
+lease through execute and release it on completion or before any human/blocking
+checkpoint. A Codex-held lease is a read-only stop, not a takeover.
+
 Execute: if the review resolved a tracked source ticket, claim it (assignee, `kind`,
 `todo` → `in_progress`) before dispatching, the same as any other dish. Pick a delivery
 branch in the repo's own naming convention (check `git log`/existing branches; never

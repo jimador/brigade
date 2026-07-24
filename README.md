@@ -76,6 +76,12 @@ JavaScript, not in a model deciding what to do next.
 State lives in `PLAN.md` frontmatter and a typed report trail on disk, so any session can
 resume mid-run and nothing already landed is re-cooked.
 
+Claude and Codex Brigade use the same `.brigade` wire protocol. They share schemas,
+configuration, artifact paths, PLAN statuses, branches, worktrees, and reports. An atomic
+per-dish lease allows different dishes to run concurrently while keeping one writer for
+the same dish; either runtime can release and hand the dish to the other at a human
+checkpoint.
+
 | SDLC role | Brigade form |
 | --- | --- |
 | requirements | grooming + two-stage grilling |
@@ -155,6 +161,7 @@ and [docs/overrides.md](docs/overrides.md).
 | `commands/` | `/brigade:status`, `/brigade:config`, `/brigade:validate`, `/brigade:tier`, `/brigade:retro`, `/brigade:design`, `/brigade:review` |
 | `bin/brigade-status` | zero-token dish-state summary; `--json` for tooling |
 | `bin/brigade-config` | resolves the config layers and prompt-override stacks; `doctor` validates |
+| `bin/brigade-coord` | atomic per-dish Claude/Codex ownership and handoff leases |
 | `bin/brigade-validate` | zero-token schema conformance checker for dish artifacts |
 | `bin/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |

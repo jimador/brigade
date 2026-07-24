@@ -76,5 +76,10 @@ echo
 echo "Service tier: $TIER — model choice, scout caps, plan-check policy, and retro cadence come from the tier (skills/brigade/TIERS.md)."
 echo "Say \"brigade heavy\" (three-star) or \"brigade light\" (one-star) to override for one dish."
 echo "Whatever the tier: the planner never explores or implements; subagents do all token-heavy work; brigade-status is free — prefer it over re-reading artifacts."
+
+if command -v brigade-coord >/dev/null 2>&1; then
+  echo "Shared Claude/Codex leases:"
+  brigade-coord list 2>/dev/null || true
+fi
 echo "Design swag (/brigade:design) never claims tickets — leave status in design."
 echo "</brigade-state>"

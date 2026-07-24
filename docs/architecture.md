@@ -72,6 +72,12 @@ statuses, DAG edges, file ownership, and attempt records. Reports and verdicts c
 frontmatter. So resume is mechanical and gate-free: a new session reads the ledger, not
 the history. Where the filesystem and the plan disagree, the filesystem wins.
 
+**The wire protocol is runtime-neutral.** Claude and Codex use the same schemas, paths,
+statuses, branch names, and attempt records. A per-dish atomic lease makes that shared
+state single-writer: different dishes may progress concurrently, but two runtimes cannot
+mutate the same dish at once. A lease has no automatic expiry; takeover requires checking
+the live repository state and explicit operator approval.
+
 **Failure is evidence, not noise.** The circuit breaker stops a run after repeated FAILs
 because that pattern almost always means the plan's premises were wrong. A third attempt
 against a wrong premise is the most expensive way to discover it.
@@ -86,6 +92,7 @@ Everything lives under `.brigade/`, which is never committed (init adds it to
   config.md                  # board wiring: source, board id, identity, gate
   config.local.json          # personal settings layer for this repo
   overrides/                 # personal prompt overrides for this repo
+  coordination/              # atomic Claude/Codex dish ownership leases
   LEARNINGS.md               # append-only retro notes
   dishes/<slug>/
     PLAN.md                  # the DAG + every work packet
