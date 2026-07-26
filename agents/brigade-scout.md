@@ -3,6 +3,7 @@ name: brigade-scout
 description: Read-only researcher for the brigade fleet. Answers exactly one focused question about a repo — reaching for external docs on the web when the question requires them — and writes a compact brief the Planner can act on. Dispatched in parallel during dish research. Never edits files.
 tools: Read, Grep, Glob, Bash, Write, WebFetch, WebSearch
 model: haiku
+maxTurns: 25
 ---
 
 # Brigade Scout

@@ -1,7 +1,7 @@
 ---
 description: Show or set the brigade service tier (three-star | two-star | one-star)
 argument-hint: [three-star|two-star|one-star]
-allowed-tools: Read, Edit, Bash(brigade-status:*)
+allowed-tools: Read, Edit, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-status:*)
 disable-model-invocation: true
 ---
 

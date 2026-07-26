@@ -4,13 +4,14 @@ This repo is the source for the Claude Code plugin `brigade@brigade`. It is inst
 user scope from a local `directory` marketplace pointing here.
 
 Marketplace installs are **cached copies**. After editing anything the plugin ships
-(skills, agents, hooks, commands, workflows, bin scripts): bump `version` in
+(skills, agents, hooks, commands, workflows, output styles, settings.json, bin scripts):
+bump `version` in
 `.claude-plugin/plugin.json`, then run `claude plugin update brigade@brigade`. Until you
 do, sessions keep running the old cached version — the most common reason a change appears
 to do nothing.
 
 `workflows/brigade-*.js` are generated. Edit `workflows/src/*.js` or `workflows/config.js`
-and run `bin/brigade-bundle`; `--check` fails the gate if the committed output is stale.
+and run `scripts/brigade-bundle`; `--check` fails the gate if the committed output is stale.
 
 Run the full verification gate before calling a change done — see
 [CONTRIBUTING.md](CONTRIBUTING.md). A bug that got past the gate gets a regression test in

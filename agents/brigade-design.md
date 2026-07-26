@@ -2,6 +2,7 @@
 name: brigade-design
 description: One-shot design swag of a ticket — research what the work entails, open questions, readiness verdict. Does not claim, decompose, or cook. Use when the user says swag/flesh out design /design.
 model: sonnet
+disallowedTools: Edit, NotebookEdit
 ---
 
 # Brigade Design (swag)

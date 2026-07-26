@@ -6,14 +6,14 @@ argument-hint: <branch|range|PR> [--tier <star>]
 Arguments: $ARGUMENTS
 
 Resolve the input ref: the first non-flag argument, else ask. Resolve the tier: an
-explicit `--tier <star>` flag wins; otherwise `brigade-config resolve --json`'s
+explicit `--tier <star>` flag wins; otherwise `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json`'s
 `.config.tier`. Resolve `mainLine`: that same call's `.config.mainBranch`; if unset, fall
 back to `git symbolic-ref --short refs/remotes/origin/HEAD` (strip the `origin/` prefix),
 then to `main` if even that fails.
 
 Infer the input kind from the ref: contains `..` → `range`; a bare number, `#<number>`, or
 a URL ending in a PR/issue number → `pr`; anything else → `branch`. Resolve `reviewSlug`
-with `brigade-coord review-key <ref>`. It lowercases the ref and collapses every run
+with `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" review-key <ref>`. It lowercases the ref and collapses every run
 outside `[a-z0-9]` to a single `-`, trimmed of leading/trailing `-`
 (`feature/Foo_Bar` → `feature-foo-bar`, `123` → `123`,
 `main..feature/x` → `main-feature-x`).
@@ -24,8 +24,8 @@ and release it on every exit path after Workflow cleanup, including Resolve fail
 
 Build args (may be passed as a JSON string): `{ repoRoot, now, tier, mainLine, reviewSlug,
 input: { kind, ref }, boardConfigured, overrides, promptOverrides }` — `overrides` is the
-`config` object from `brigade-config resolve --json` (passing the whole resolve output also
-works — the script unwraps `.config`), `promptOverrides` is `brigade-config prompts --json`.
+`config` object from `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json` (passing the whole resolve output also
+works — the script unwraps `.config`), `promptOverrides` is `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts --json`.
 `boardConfigured` is true when `.brigade/config.md`'s `## Source` section has a
 `database_id` set (a ticket board this review's context probe and board-mirror comment can
 use), false otherwise.

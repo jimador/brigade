@@ -7,7 +7,7 @@ Arguments: $ARGUMENTS
 
 Resolve the report: the first argument is either a review slug or a path. A bare slug
 resolves to `.brigade/reviews/<slug>/report.md`; anything containing a `/` or ending in
-`.md` is used as a literal path. Run `bin/brigade-validate <path>` before trusting
+`.md` is used as a literal path. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate" <path>` before trusting
 anything in it — a validation problem is decision-ready and stops here, reported
 verbatim. Read the `findings:` frontmatter as machine state, one entry per finding (id,
 dimension, severity, location, summary, files, fix, verify_hint, confirmed) — this is the
@@ -63,7 +63,7 @@ is a bug fix, add the **Bug-fix self-falsification** bullet requiring the Cook t
 reintroduce the bug, paste the red run, restore the fix, and paste the green run. Two
 surviving findings that touch the same file get a dependency edge, never the same wave.
 Resolve tier the usual way
-(`brigade-config get tier` or a trigger phrase); flag an item `heavy: true` under the same
+(`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" get tier` or a trigger phrase); flag an item `heavy: true` under the same
 rules as any other plan — an item whose Verify must assert an exact error/output message
 is always heavy, on top of the usual cross-cutting/concurrency/security/data-correctness
 triggers. Run the adversarial plan check per the tier's policy (★★★ always, ★★ on its

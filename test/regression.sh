@@ -29,7 +29,7 @@ items:
 Regression fixture.
 EOF
 
-  json="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-status" --json)"
+  json="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-status" --json)"
   python3 - "$json" <<'PY' || fail "brigade-status --json did not report wrapped inline items"
 import json
 import sys
@@ -44,7 +44,7 @@ if items != expected:
     raise SystemExit(f"expected {expected!r}, got {items!r}")
 PY
 
-  text="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-status")"
+  text="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-status")"
   printf '%s\n' "$text" | grep -Fq "  one: done" ||
     fail "brigade-status text did not report inline item one"
   printf '%s\n' "$text" | grep -Fq "  two: blocked" ||
@@ -67,7 +67,7 @@ items:
 ---
 EOF
 
-  json="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-status" --json)"
+  json="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-status" --json)"
   python3 - "$json" <<'PY' || fail "brigade-status --json lost block-style item support"
 import json
 import sys
@@ -378,7 +378,7 @@ EOF"
 config_run() { # brigade-config against a fixture repo and a fake home
   fixture="$1"
   shift
-  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" "$ROOT/bin/brigade-config" "$@"
+  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" "$ROOT/scripts/brigade-config" "$@"
 }
 
 test_config_layer_precedence() {
@@ -604,14 +604,14 @@ No structure here.
 EOF
 
   # Test good.md — should validate successfully.
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/dishes/sample/state/good.md" 2>&1)"
   printf '%s\n' "$output" | grep -Fq "ok" &&
     printf '%s\n' "$output" | grep -Fq "(ledger)" ||
     fail "brigade-validate did not report ok for valid ledger: $output"
 
   # Test bad.md — should fail validation.
-  if CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  if CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/dishes/sample/state/bad.md" >/dev/null 2>&1; then
     fail "brigade-validate passed an invalid ledger"
   fi
@@ -790,7 +790,7 @@ console.log('EXECUTE VERDICT-SCRIBE SELF-HEAL PIN OK')
 // the following keys, e.g. trivial_only, into body text). Every free-text field is now
 // routed through yamlQuote (JSON.stringify) inside both builders, so prove the hostile
 // text can never surface as a raw line in the file — parse the result back with the
-// SAME rule bin/brigade-validate's splitFrontmatter uses (frontmatter ends at the next
+// SAME rule scripts/brigade-validate's splitFrontmatter uses (frontmatter ends at the next
 // line that is EXACTLY '---'), not a re-implementation that could itself paper over
 // the bug, and separately feed it to the real validator binary.
 const nodePath = require('path')
@@ -849,7 +849,7 @@ for (const [label, block] of [['verdict', hostileVerdictBlock], ['report', hosti
   fs.writeFileSync(tmpFixture, block)
   let out
   try {
-    out = execFileSync('node', [nodePath.join(process.env.ROOT, 'bin/brigade-validate'), tmpFixture], { encoding: 'utf8' })
+    out = execFileSync('node', [nodePath.join(process.env.ROOT, 'scripts/brigade-validate'), tmpFixture], { encoding: 'utf8' })
   } finally {
     fs.unlinkSync(tmpFixture)
   }
@@ -988,7 +988,7 @@ NODE
         ;;
     esac
 
-    output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)"
+    output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)"
     printf '%s\n' "$output" | grep -Fq "ok" &&
       printf '%s\n' "$output" | grep -Fq "($type)" ||
       fail "brigade-validate did not report ok for $type example: $output"
@@ -1028,13 +1028,13 @@ Sample work packet for retro readiness.
 EOF
 
   # Test without verdict file — should warn about missing verdict.
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/dishes/sample/PLAN.md" 2>&1)"
   printf '%s\n' "$output" | grep -Fq "has no reports/a-verdict.md" ||
     fail "brigade-validate did not warn about missing verdict: $output"
 
   # Verify exit code is still 0 (warn, not FAIL).
-  if ! CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  if ! CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/dishes/sample/PLAN.md" >/dev/null 2>&1; then
     fail "brigade-validate exited non-zero on retro-readiness warn (should be 0)"
   fi
@@ -1066,13 +1066,13 @@ Verification gate completed successfully.
 EOF
 
   # Test with verdict file — warn should be gone.
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/dishes/sample/PLAN.md" 2>&1)"
   printf '%s\n' "$output" | grep -Fq "has no reports/a-verdict.md" &&
     fail "brigade-validate still warns about missing verdict after adding file: $output"
 
   # Verify exit code is still 0 with no warnings.
-  if ! CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  if ! CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/dishes/sample/PLAN.md" >/dev/null 2>&1; then
     fail "brigade-validate exited non-zero with valid verdict (should be 0)"
   fi
@@ -1121,24 +1121,24 @@ EOF
   }
 
   write_analyst "" ""
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" &&
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)" &&
     fail "standard analyst over 120 lines validated clean: $output"
   printf '%s\n' "$output" | grep -Fq "standard analyst budget of 120" ||
     fail "no standard-budget violation reported: $output"
 
   write_analyst "mode: intensive" "## Proposal ledger
 P0: applied — LEARNINGS.md line 3."
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" ||
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)" ||
     fail "intensive analyst under 200 lines with ledger failed validation: $output"
 
   write_analyst "mode: intensive" ""
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" &&
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)" &&
     fail "intensive analyst without ledger validated clean: $output"
   printf '%s\n' "$output" | grep -Fq 'missing "## Proposal ledger"' ||
     fail "no missing-ledger violation reported: $output"
 
   write_analyst "mode: exhaustive" ""
-  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" "$file" 2>&1)" &&
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)" &&
     fail "unknown analyst mode validated clean: $output"
   printf '%s\n' "$output" | grep -Fq "invalid analyst mode: exhaustive" ||
     fail "no invalid-mode violation reported: $output"
@@ -1429,7 +1429,7 @@ NODE
   fixture="$TMP_ROOT/validate-pure-report"
   mkdir -p "$fixture/.brigade/reviews/s"
   cp "$TMP_ROOT/review-report-fixture.md" "$fixture/.brigade/reviews/s/report.md"
-  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/reviews/s/report.md" >/dev/null ||
     fail "brigade-validate rejected buildReviewReportMarkdown's synthetic fixture"
 
@@ -1468,7 +1468,7 @@ test_review_bundle() {
   # Capture the generated-file trailer count from an existing, known-good generated
   # workflow first, so the count asserted against brigade-review.js comes from a real
   # run in this same test rather than being retyped from memory.
-  reference_count="$(grep -c "GENERATED by bin/brigade-bundle" "$ROOT/workflows/brigade-execute.js")"
+  reference_count="$(grep -c "GENERATED by scripts/brigade-bundle" "$ROOT/workflows/brigade-execute.js")"
   [ "$reference_count" -eq 1 ] ||
     fail "reference generated workflow brigade-execute.js does not carry exactly one GENERATED trailer (got $reference_count)"
 
@@ -1478,7 +1478,7 @@ test_review_bundle() {
   node --check "$ROOT/workflows/brigade-review.js" ||
     fail "node --check failed on workflows/brigade-review.js"
 
-  count="$(grep -c "GENERATED by bin/brigade-bundle" "$ROOT/workflows/brigade-review.js")"
+  count="$(grep -c "GENERATED by scripts/brigade-bundle" "$ROOT/workflows/brigade-review.js")"
   [ "$count" -eq "$reference_count" ] ||
     fail "workflows/brigade-review.js GENERATED trailer count: expected $reference_count, got $count"
 }
@@ -1517,14 +1517,14 @@ test_validate_review_report() {
 
   printf -- '---\ndoc: review_report\nschema: 1\nrole: inspector\nmodel: test\ncreated: 2026-07-20T00:00:00Z\ninput: { kind: branch, ref: feat/x }\nrange: abc..def\ncontext_tier: documented\ntier: three-star\ncounts: { blocking: 0, high: 0, medium: 0, low: 0 }\nfindings: []\n---\n\n## Scope\nx\n\n## Findings\nnone\n\n## Context disclosure\nx\n\n## Evidence\nx\n' >"$fixture/.brigade/reviews/s/report.md"
 
-  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/reviews/s/report.md" >/dev/null ||
     fail "brigade-validate rejected a valid review_report fixture"
 
   printf -- '---\ndoc: review_report\nschema: 1\ncontext_tier: bogus\n---\n\nx\n' \
     >"$fixture/.brigade/reviews/s/bad.md"
 
-  if CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" \
+  if CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
     "$fixture/.brigade/reviews/s/bad.md" >/dev/null 2>&1; then
     fail "brigade-validate passed an invalid review_report fixture (bogus context_tier)"
   fi
@@ -1682,7 +1682,7 @@ test_coord_single_writer_and_handoff() {
   fixture="$TMP_ROOT/coord"
   mkdir -p "$fixture/.brigade"
 
-  first="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared claude)"
+  first="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared claude)"
   owner="$(python3 - "$first" <<'PY'
 import json
 import sys
@@ -1690,17 +1690,17 @@ print(json.loads(sys.argv[1])["owner"])
 PY
 )"
 
-  if CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex >/dev/null; then
+  if CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared codex >/dev/null; then
     fail "brigade-coord allowed Codex to acquire a Claude-held dish"
   else
     status=$?
   fi
   [ "$status" -eq 3 ] || fail "brigade-coord contention returned $status instead of 3"
 
-  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" heartbeat shared "$owner" >/dev/null
-  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared "$owner" >/dev/null
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" heartbeat shared "$owner" >/dev/null
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release shared "$owner" >/dev/null
 
-  second="$(CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex)"
+  second="$(CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared codex)"
   python3 - "$second" <<'PY' || fail "Codex could not acquire after Claude handoff"
 import json
 import sys
@@ -1709,7 +1709,7 @@ assert document["acquired"] is True
 assert document["runtime"] == "codex"
 PY
 
-  CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared \
+  CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release shared \
     "$(python3 - "$second" <<'PY'
 import json
 import sys
@@ -1722,13 +1722,13 @@ test_coord_recovers_malformed_lease() {
   fixture="$TMP_ROOT/coord-malformed"
   mkdir -p "$fixture/.brigade/coordination/shared.lease"
 
-  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex >/dev/null; then
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared codex >/dev/null; then
     fail "brigade-coord silently replaced a malformed lease"
   else
     [ "$?" -eq 3 ] || fail "malformed lease contention did not return 3"
   fi
 
-  status="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" status shared)"
+  status="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" status shared)"
   python3 - "$status" <<'PY' || fail "malformed lease was reported as unheld"
 import json
 import sys
@@ -1737,15 +1737,15 @@ assert document["held"] is True
 assert document["invalid"] is True
 PY
 
-  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" break shared --force >/dev/null
-  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex >/dev/null ||
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" break shared --force >/dev/null
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared codex >/dev/null ||
     fail "could not acquire after operator-approved malformed lease recovery"
 }
 
 test_coord_fences_stale_owner() {
   fixture="$TMP_ROOT/coord-fencing"
   mkdir -p "$fixture/.brigade"
-  first="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared claude)"
+  first="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared claude)"
   owner_a="$(python3 - "$first" <<'PY'
 import json
 import sys
@@ -1754,14 +1754,14 @@ PY
 )"
 
   mkdir "$fixture/.brigade/coordination/shared.mutex"
-  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" break shared --force >/dev/null; then
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" break shared --force >/dev/null; then
     fail "break bypassed an active lifecycle mutex"
   else
     [ "$?" -eq 5 ] || fail "busy lifecycle mutex did not return 5"
   fi
-  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" recover-lock shared --force >/dev/null
-  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" break shared --force >/dev/null
-  second="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" acquire shared codex)"
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" recover-lock shared --force >/dev/null
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" break shared --force >/dev/null
+  second="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire shared codex)"
   owner_b="$(python3 - "$second" <<'PY'
 import json
 import sys
@@ -1769,17 +1769,17 @@ print(json.loads(sys.argv[1])["owner"])
 PY
 )"
 
-  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" heartbeat shared "$owner_a" >/dev/null; then
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" heartbeat shared "$owner_a" >/dev/null; then
     fail "stale owner heartbeat modified a replacement lease"
   else
     [ "$?" -eq 2 ] || fail "stale owner heartbeat did not return owner mismatch"
   fi
-  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared "$owner_a" >/dev/null; then
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release shared "$owner_a" >/dev/null; then
     fail "stale owner release removed a replacement lease"
   else
     [ "$?" -eq 2 ] || fail "stale owner release did not return owner mismatch"
   fi
-  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" release shared "$owner_b" >/dev/null
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release shared "$owner_b" >/dev/null
 }
 
 test_helpers_share_project_root() {
@@ -1803,7 +1803,7 @@ test_helpers_share_project_root() {
     '## Waves' \
     'None.' >"$fixture/.brigade/dishes/sample/PLAN.md"
 
-  key="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" key local TEST-ROOT)"
+  key="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" key local TEST-ROOT)"
   python3 - "$key" <<'PY' || fail "canonical key did not reuse existing PLAN identity"
 import json
 import sys
@@ -1811,7 +1811,7 @@ document = json.loads(sys.argv[1])
 assert document["dish"] == "sample"
 assert document["existing"] is True
 PY
-  review="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" review-key 'Feature/Foo_Bar')"
+  review="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" review-key 'Feature/Foo_Bar')"
   python3 - "$review" <<'PY' || fail "review key normalization drifted"
 import json
 import sys
@@ -1822,14 +1822,99 @@ PY
 
   (
     cd "$nested"
-    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-status" --json |
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-status" --json |
       python3 -c 'import json,sys; assert json.load(sys.stdin)["brigade"] is True'
-    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-config" resolve --json >/dev/null
-    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-validate" >/dev/null
-    CODEX_PROJECT_DIR="$fixture" "$ROOT/bin/brigade-coord" status shared >/dev/null
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-config" resolve --json >/dev/null
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" >/dev/null
+    CODEX_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" status shared >/dev/null
   ) || fail "helpers resolved different CODEX_PROJECT_DIR roots"
 }
 
+test_plugin_manifests_validate() {
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "SKIP: claude CLI not on PATH — plugin manifest validation not run" >&2
+    return 0
+  fi
+
+  for manifest in plugin marketplace; do
+    output="$(claude plugin validate "$ROOT/.claude-plugin/$manifest.json" 2>&1)" ||
+      fail "claude plugin validate rejected $manifest.json:
+$output"
+  done
+}
+
+test_coord_watch_transitions() {
+  fixture="$TMP_ROOT/coord-watch"
+  mkdir -p "$fixture/.brigade/dishes/sample/reports"
+  state="$fixture/watch-state.json"
+
+  # Baseline tick emits nothing.
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" watch --once --state "$state" --runtime claude)"
+  [ -z "$out" ] || fail "watch baseline tick emitted output: $out"
+
+  # Codex acquiring and a report landing in a codex-held dish both emit.
+  acquire_json="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire sample codex)"
+  echo "cook report" >"$fixture/.brigade/dishes/sample/reports/item-cook.md"
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" watch --once --state "$state" --runtime claude)"
+  printf '%s\n' "$out" | grep -Fq "lease acquired: sample (codex)" ||
+    fail "watch missed codex lease acquire: $out"
+  printf '%s\n' "$out" | grep -Fq "artifact landed: sample/reports/item-cook.md" ||
+    fail "watch missed codex-held artifact: $out"
+
+  # Claude's own lease and artifacts stay silent; a pure codex release emits.
+  owner="$(printf '%s' "$acquire_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["owner"])')"
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release sample "$owner" >/dev/null
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" watch --once --state "$state" --runtime claude)"
+  printf '%s\n' "$out" | grep -Fq "lease released: sample (was codex)" ||
+    fail "watch missed codex lease release: $out"
+  acquire_json="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" acquire sample claude)"
+  echo "my own report" >"$fixture/.brigade/dishes/sample/reports/mine-cook.md"
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" watch --once --state "$state" --runtime claude)"
+  [ -z "$out" ] || fail "watch echoed claude's own work back: $out"
+
+  # Write-then-release inside one tick: the artifact in the now-unheld dish still
+  # attributes to last tick's holder (claude) and stays silent.
+  owner="$(printf '%s' "$acquire_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["owner"])')"
+  echo "handoff artifact" >"$fixture/.brigade/dishes/sample/reports/handoff-cook.md"
+  BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release sample "$owner" >/dev/null
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" watch --once --state "$state" --runtime claude)"
+  [ -z "$out" ] || fail "watch echoed claude's write-then-release artifacts: $out"
+}
+
+test_post_cook_validate_hook() {
+  fixture="$TMP_ROOT/post-cook-hook"
+  mkdir -p "$fixture/.brigade/dishes/sample/reports"
+  guard_file="${TMPDIR:-/tmp}/brigade-postcook-regression-agent"
+  rm -f "$guard_file"
+
+  printf 'no frontmatter at all\n' >"$fixture/.brigade/dishes/sample/reports/bad-cook.md"
+  out="$(echo '{"agent_id":"regression-agent"}' | CLAUDE_PROJECT_DIR="$fixture" "$ROOT/hooks/post-cook-validate.sh")"
+  printf '%s' "$out" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert d["decision"] == "block", d
+assert "SCHEMAS.md" in d["reason"], d' || fail "hook did not block on nonconforming artifact: $out"
+
+  # Third strike gives up with a systemMessage instead of blocking forever.
+  echo '{"agent_id":"regression-agent"}' | CLAUDE_PROJECT_DIR="$fixture" "$ROOT/hooks/post-cook-validate.sh" >/dev/null
+  out="$(echo '{"agent_id":"regression-agent"}' | CLAUDE_PROJECT_DIR="$fixture" "$ROOT/hooks/post-cook-validate.sh")"
+  printf '%s' "$out" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert "decision" not in d, d
+assert "systemMessage" in d, d' || fail "hook kept blocking past the loop guard: $out"
+  rm -f "$guard_file"
+
+  # Conforming state is silent, and a repo without .brigade exits instantly.
+  rm -f "$fixture/.brigade/dishes/sample/reports/bad-cook.md"
+  out="$(echo '{"agent_id":"regression-agent-2"}' | CLAUDE_PROJECT_DIR="$fixture" "$ROOT/hooks/post-cook-validate.sh")"
+  [ -z "$out" ] || fail "hook was not silent on conforming artifacts: $out"
+  rm -f "${TMPDIR:-/tmp}/brigade-postcook-regression-agent-2"
+  out="$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP_ROOT" "$ROOT/hooks/post-cook-validate.sh")"
+  [ -z "$out" ] || fail "hook produced output in a non-brigade repo: $out"
+}
+
+test_plugin_manifests_validate
+test_post_cook_validate_hook
+test_coord_watch_transitions
 test_coord_single_writer_and_handoff
 test_coord_recovers_malformed_lease
 test_coord_fences_stale_owner

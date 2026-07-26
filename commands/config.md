@@ -1,14 +1,14 @@
 ---
 description: Show the resolved brigade configuration — every layer, the winning value per key, and any prompt overrides
-allowed-tools: Bash(brigade-config:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config:*)
 ---
 
 ## Context
 
-- !`brigade-config layers`
-- !`brigade-config resolve`
-- !`brigade-config prompts`
-- !`brigade-config doctor`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" layers`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" doctor`
 
 ## Task
 

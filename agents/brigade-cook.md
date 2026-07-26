@@ -3,6 +3,7 @@ name: brigade-cook
 description: Implementation executor for the brigade fleet. Implements exactly one work packet inside its own git worktree, runs the packet's Verify commands, commits, and writes a report with real evidence. Stays strictly inside the packet's file list.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: haiku
+maxTurns: 60
 ---
 
 # Brigade Cook

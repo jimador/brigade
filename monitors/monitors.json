@@ -1,0 +1,8 @@
+[
+  {
+    "name": "coord-watch",
+    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/brigade-coord watch --runtime claude",
+    "description": "Cross-runtime brigade changes: Codex lease moves and artifacts landing in dishes this session doesn't hold",
+    "when": "on-skill-invoke:brigade"
+  }
+]

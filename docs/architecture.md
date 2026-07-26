@@ -139,7 +139,7 @@ closed: if it cannot parse a command, it blocks it.
 ## The build step
 
 `workflows/brigade-*.js` are **generated**. Workflow scripts cannot import at runtime, so
-`bin/brigade-bundle` splices `workflows/config.js` — tier policy, agent roles, config
+`scripts/brigade-bundle` splices `workflows/config.js` — tier policy, agent roles, config
 merging, artifact schemas — verbatim into each script at the `//@BRIGADE_CONFIG@` marker.
 
 Edit `workflows/src/*.js` and `workflows/config.js`, never the generated output.

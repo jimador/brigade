@@ -5,7 +5,7 @@ one thing without restating everything above it.
 
 | # | Layer | File | Committed? | Scope |
 | --- | --- | --- | --- | --- |
-| 1 | defaults | built into `bin/brigade-config` | — | what brigade does with no config at all |
+| 1 | defaults | built into `scripts/brigade-config` | — | what brigade does with no config at all |
 | 2 | global | `~/.brigade/config.json` | no | you, every repo |
 | 3 | team | `<repo>/brigade.config.json` | **yes** | everyone in this repo |
 | 4 | local | `<repo>/.brigade/config.local.json` | no | you, this repo |

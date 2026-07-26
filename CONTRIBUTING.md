@@ -9,8 +9,13 @@ no package to publish — but there are a few rules that keep it working.
 skills/brigade/     the planner's brain, schemas, tier policy, source adapters, templates
 skills/groom/       the board-grooming session
 agents/             one file per subagent role
-commands/           slash commands (thin wrappers over the bin/ scripts)
-bin/                brigade-status, brigade-config, brigade-validate, brigade-bundle, brigade-coord
+commands/           slash commands (thin wrappers over the scripts/ helpers)
+output-styles/      opt-in Planner output style (users pick it in /config; never forced)
+settings.json       plugin defaults — currently just the subagent status line
+monitors/           background coord watch (starts on brigade skill invoke)
+CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
+scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
+                    brigade-coord, brigade-subagent-line
 hooks/              SessionStart state injection, PreToolUse git guard
 workflows/src/      hand-edited Workflow script sources
 workflows/config.js policy consts + config merging, spliced into all three scripts
@@ -21,14 +26,14 @@ test/regression.sh  operational regressions
 
 ## The one build step
 
-Workflow scripts cannot import at runtime, so `bin/brigade-bundle` splices
+Workflow scripts cannot import at runtime, so `scripts/brigade-bundle` splices
 `workflows/config.js` verbatim into each script at the `//@BRIGADE_CONFIG@` marker.
 
 Edit `workflows/src/*.js` or `workflows/config.js`, then:
 
 ```bash
-bin/brigade-bundle          # regenerate
-bin/brigade-bundle --check  # fail if committed output is stale
+scripts/brigade-bundle          # regenerate
+scripts/brigade-bundle --check  # fail if committed output is stale
 ```
 
 Commit the regenerated output. `--check` is part of the verification gate, so drift fails
@@ -39,17 +44,26 @@ the build.
 Run all of this before calling a change done:
 
 ```bash
-for f in install.sh bin/brigade-status hooks/*.sh; do bash -n "$f" || exit 1; done
-node --check bin/brigade-validate
-node --check bin/brigade-config
-node --check bin/brigade-bundle
-node --check bin/brigade-coord
+for f in install.sh scripts/brigade-status hooks/*.sh; do bash -n "$f" || exit 1; done
+node --check scripts/brigade-validate
+node --check scripts/brigade-config
+node --check scripts/brigade-bundle
+node --check scripts/brigade-coord
+node --check scripts/brigade-subagent-line
 node --check workflows/config.js
 for f in workflows/src/*.js workflows/brigade-*.js; do node --check "$f" || exit 1; done
-bin/brigade-bundle --check
-python3 -c "import json; [json.load(open(f)) for f in ['.claude-plugin/plugin.json','.claude-plugin/marketplace.json','hooks/hooks.json']]"
+scripts/brigade-bundle --check
+python3 -c "import json; [json.load(open(f)) for f in ['.claude-plugin/plugin.json','.claude-plugin/marketplace.json','hooks/hooks.json','settings.json','monitors/monitors.json']]"
+claude plugin validate .claude-plugin/plugin.json
+claude plugin validate .claude-plugin/marketplace.json
 ./test/regression.sh
 ```
+
+`claude plugin validate` is the only check that reads the manifests and every skill,
+command, and agent the way the runtime does. It is how a command whose frontmatter fails
+to parse — and therefore loads with its description silently dropped — gets caught. Don't
+use `--strict` here: the repo's own `CLAUDE.md` draws an intentional warning (it is
+contributor instructions, not shipped context), and `--strict` turns that into an error.
 
 There is no unit-test framework. `test/regression.sh` covers the behaviors that have
 broken before: `brigade-status` parsing of both inline and block-style plan items,
@@ -68,7 +82,7 @@ same commit, then re-bundle.
 
 ## Changing artifact schemas
 
-`skills/brigade/SCHEMAS.md` is the registry, `bin/brigade-validate` enforces it, and
+`skills/brigade/SCHEMAS.md` is the registry, `scripts/brigade-validate` enforces it, and
 `workflows/config.js` carries the blocks pasted into subagent prompts. All three move
 together.
 

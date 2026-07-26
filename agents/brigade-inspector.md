@@ -3,6 +3,7 @@ name: brigade-inspector
 description: Adversarial reviewer for the brigade fleet. Default mode reviews one work item's diff against its packet before merge and rules PASS or FAIL with severity-ranked findings. Plan check mode blind-sketches its own decomposition then critiques the Planner's PLAN.md. Standalone diff review mode gives an advisory, verdict-free findings pass over an arbitrary commit range against a single dimension lens. Never implements fixes, never merges.
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
+maxTurns: 40
 ---
 
 # Brigade Inspector

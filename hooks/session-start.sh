@@ -20,20 +20,21 @@ echo
 echo "CLAUDE_PLUGIN_ROOT (for Workflow scriptPath): $PLUGIN_ROOT"
 echo "  research: $PLUGIN_ROOT/workflows/brigade-research.js"
 echo "  execute:  $PLUGIN_ROOT/workflows/brigade-execute.js"
+echo "  helpers:  $PLUGIN_ROOT/scripts/ — whenever brigade docs say run brigade-status/-config/-validate/-coord, use this directory (they are not on PATH)"
 echo
-"$SELF_DIR/../bin/brigade-status" || true
+"$SELF_DIR/../scripts/brigade-status" || true
 
 # Which config layers are in play, plus anything wrong with them. Both are cheap and
 # save the session from reading config files to find out.
-if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../bin/brigade-config" ]; then
+if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-config" ]; then
   echo
-  CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../bin/brigade-config" layers || true
-  if ! CONFIG_PROBLEMS="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../bin/brigade-config" doctor 2>&1)"; then
+  CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-config" layers || true
+  if ! CONFIG_PROBLEMS="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-config" doctor 2>&1)"; then
     echo
     echo "## config problems (fix before dispatching)"
     printf '%s\n' "$CONFIG_PROBLEMS" | sed 's/^/  /'
   fi
-  OVERRIDES="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../bin/brigade-config" prompts 2>/dev/null || true)"
+  OVERRIDES="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-config" prompts 2>/dev/null || true)"
   case "$OVERRIDES" in
     *"(none)"*) ;;
     "") ;;
@@ -77,9 +78,9 @@ echo "Service tier: $TIER — model choice, scout caps, plan-check policy, and r
 echo "Say \"brigade heavy\" (three-star) or \"brigade light\" (one-star) to override for one dish."
 echo "Whatever the tier: the planner never explores or implements; subagents do all token-heavy work; brigade-status is free — prefer it over re-reading artifacts."
 
-if command -v brigade-coord >/dev/null 2>&1; then
+if [ -x "$SELF_DIR/../scripts/brigade-coord" ]; then
   echo "Shared Claude/Codex leases:"
-  brigade-coord list 2>/dev/null || true
+  "$SELF_DIR/../scripts/brigade-coord" list 2>/dev/null || true
 fi
 echo "Design swag (/brigade:design) never claims tickets — leave status in design."
 echo "</brigade-state>"

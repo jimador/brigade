@@ -78,11 +78,16 @@ which model to `/model` to, or proceed degraded and say so. When a difficult-pla
 trigger fires (the trigger list is in `TIERS.md`), escalate the planning checkpoint to the
 tier's difficult-planning model the same way, then drop back.
 
+**Mechanical helpers** — `brigade-status`, `brigade-config`, `brigade-validate`,
+`brigade-coord` — live at `${CLAUDE_PLUGIN_ROOT}/scripts/` (SessionStart echoes the
+resolved path in brigade repos). They are NOT on PATH: whenever this document names one,
+run it from that directory. They cost zero model tokens.
+
 Whatever the tier:
 
 - **Plan once.** The single planning checkpoint is the only expensive thinking per dish;
   after approval, everything is mechanical dispatch/merge. Never re-derive the plan.
-- **Resume mechanically.** Run `brigade-status` (a plugin command on PATH, zero model
+- **Resume mechanically.** Run `brigade-status` (zero model
   tokens) instead of re-reading dish artifacts to figure out where things stand. The
   SessionStart hook injects the same snapshot automatically in brigade repos.
 - Give scouts strict output budgets (the `brief` schema has them) and don't start a second
@@ -103,8 +108,8 @@ authority rules (what counts as a valid source for that type's claims).
 - **When consuming**, dispatch on `doc:` and trust the frontmatter as machine state —
   that's what makes resume, plan-state tracking, and the analyst's scoring mechanical
   instead of interpretive.
-- **Conformance is checked mechanically, not by you.** Run `brigade-validate` (plugin
-  command on PATH, zero model tokens; `--json` for scripts) after subagent waves and
+- **Conformance is checked mechanically, not by you.** Run `brigade-validate` (zero
+  model tokens; `--json` for scripts) after subagent waves and
   before resume-critical decisions: it checks every dish artifact's envelope, enum values,
   plan-DAG sanity (unknown statuses, dangling `depends_on`, duplicate slugs), body budgets,
   and required sections. A FAIL from the validator is handled like any malformed artifact —
@@ -127,7 +132,7 @@ derivation before acquiring or creating a dish.
 Before the first mutation of a dish, run:
 
 ```bash
-brigade-coord acquire <dish-slug> claude
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" acquire <dish-slug> claude
 ```
 
 Retain the returned `owner` token. If another runtime holds the lease, remain read-only:
@@ -138,8 +143,8 @@ Heartbeat after every Scout, Cook, Inspector, and landing wave. Release before y
 at a human approval/question checkpoint and at completed handoff:
 
 ```bash
-brigade-coord heartbeat <dish-slug> <owner-token>
-brigade-coord release <dish-slug> <owner-token>
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" heartbeat <dish-slug> <owner-token>
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" release <dish-slug> <owner-token>
 ```
 
 A leftover lease is not stale merely because time passed. Check live sessions,
@@ -161,56 +166,15 @@ The shared config keeps Claude agent overrides in
 `models.scout|cook|cookHeavy|inspector|analyst|design|steward`. Codex uses separate
 nested keys prefixed `codex`; never consume or rewrite them.
 
-## Setup (first run in a repo)
+## Setup and workspaces (`SETUP.md`)
 
-0. Run `brigade-config layers` and `brigade-config doctor` (free). They tell you which
-   config layers exist and whether any is broken, before you touch anything else.
-1. Check for `.brigade/config.md` in the repo root. If present, read it and continue.
-2. If absent, run **init**:
-   - Read `templates/config.md` (next to this Skill) without writing it and interview the
-     user for the values: source type, board/database id, their identity on the source,
-     the status-name mapping, and the repo's verification gate commands.
-   - Gather all discoverable and operator-provided values first. Acquire coordination key
-     `repo-global` as `claude`, re-check that config is still absent, write the config and
-     exclusion, then release it before any further human checkpoint.
-   - Pick the source **transport**: if the session has matching MCP tools (e.g. a Notion
-     MCP server), prefer them — record the transport and the op→tool mapping in config per
-     the source adapter. Otherwise use the adapter's CLI/curl path with its token env var.
-   - Verify source access with one cheap read (per the source adapter). If it fails, fix
-     credentials with the user before doing anything else.
-   - If a personal KB CLI is configured in `~/.brigade/config.json` (`kb.enabled` + `kb.cli`)
-     and that CLI is on PATH, optionally confirm identity helpers it exposes; otherwise skip.
-   - Never put `.brigade/` in tracked `.gitignore` and never commit it.
-3. `.brigade/` layout (all local, never committed):
-
-```
-.brigade/
-  config.md                  # board wiring: source, board id, identity, gate
-  config.local.json          # optional personal settings layer (this repo, uncommitted)
-  overrides/agents/          # optional personal prompt overrides (this repo)
-  overrides/prompts/
-  LEARNINGS.md               # append-only retro notes
-  dishes/<dish-slug>/
-    PLAN.md                  # the DAG + all work packets
-    DESIGN.md                # design swag (when applicable)
-    CONTEXT.md               # gathered context sources (optional)
-    briefs/                  # scout briefs
-    reports/                 # cook reports + inspector verdicts
-    analyst.md               # self-improvement report (dish handoff)
-  worktrees/<flat-branch>/   # executor worktrees (or workspace worktree_root)
-```
-
-## Workspaces (multi-repo cwd)
-
-When the session cwd matches a workspace in `~/.brigade/workspaces.md` (or a vault
-`tickets/<id>/_workspace.md`):
-
-1. List/groom across **all** member boards under `~/vault/tickets/<workspace>/`.
-2. Tickets carry `workspace`, `project`, and `repo` (absolute child git path).
-3. Cook worktrees under `worktree_root`; branches live in the **child** repo — never treat
-   the workspace root as the git remote.
-4. Prefer `<repo>/.brigade/dishes/<slug>/` for dish artifacts.
-5. See `sources/workspaces.md` and `sources/obsidian.md`.
+First run in a repo (no `.brigade/config.md`), or a session cwd that matches a
+`~/.brigade/workspaces.md` workspace: read `SETUP.md` (next to this SKILL) and follow its
+init interview and `.brigade/` layout before anything else. Two rules hold whether or not
+you read it: never commit `.brigade/` (keep it in `.git/info/exclude`), and
+`brigade-config layers` + `doctor` are free — run them before touching config by hand.
+Dish artifacts live under `.brigade/dishes/<dish-slug>/` (`PLAN.md`, `briefs/`,
+`reports/`, `analyst.md`); executor worktrees under `.brigade/worktrees/`.
 
 ## Design swag — one-shot research, leave in Design
 
@@ -246,13 +210,12 @@ committed) → `<repo>/.brigade/config.local.json` (repo personal). `.brigade/co
 stays the **board wiring** (source, board id, identity, status mapping, gate commands);
 the JSON layers carry **fleet behavior** and win where both express the same thing.
 
-**Resolve once per dish with `brigade-config`** (a plugin command on PATH, zero model
-tokens):
+**Resolve once per dish with `brigade-config`** (zero model tokens):
 
 ```bash
-brigade-config resolve --json     # merged settings + which layer set each key
-brigade-config prompts --json     # prompt-override stacks, by role
-brigade-config doctor             # validate every layer; exit 1 on problems
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json     # merged settings + which layer set each key
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts --json     # prompt-override stacks, by role
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" doctor             # validate every layer; exit 1 on problems
 ```
 
 Pass the resolved settings into the Workflow scripts as `overrides`, and the prompt stacks
@@ -646,148 +609,26 @@ When all items are merged:
 
 Release the dish lease before returning the handoff to the operator.
 
-## Reviewing code (`brigade-review` Workflow script)
+## Reviewing code (`/brigade:review` — read `REVIEW.md` first)
 
-**What it is.** An advisory, tier-scaled standalone code review over a branch, PR, or
-commit range, invoked via `/brigade:review` — it runs outside the cook/inspect/land
-pipeline, on demand. It's the same Mode 3 (standalone diff review) contract an Inspector
-already uses when reviewing outside a packet: findings, never a PASS/FAIL verdict. It
-never posts to a pull request; the only write besides its own report is a plain-language
-ticket comment when a tracked ticket was found, and only ever to that ticket.
+An advisory, tier-scaled standalone review over a branch, PR, or commit range — outside
+the cook/inspect/land pipeline, findings only, never a PASS/FAIL verdict. Before
+dispatching the review workflow or `/brigade:review-dispatch`, read `REVIEW.md` (next to
+this SKILL): the coordination lease, invocation args, input contract, per-tier depth,
+return shape, and the dispatch follow-up all live there. Do not build the Workflow args
+from memory — the args block is in `REVIEW.md`.
 
-Before creating the review worktree or report, acquire coordination key
-`review-<review-slug>` as `claude`; release it after report assembly and cleanup. This
-prevents a concurrent Codex review of the same input from colliding on shared paths.
+## Self-improvement (retro → heuristics → brain upgrade — read `RETRO.md` first)
 
-**Invocation.** Resolve `scriptPath` the same two-path rule as research/execute: prefer
-`$CLAUDE_PLUGIN_ROOT/workflows/brigade-review.js` when that env is set, else
-`<skill-base>/../../workflows/brigade-review.js`. Build args (may arrive as a JSON
-string): `{ repoRoot, now, tier, mainLine, reviewSlug, input: { kind, ref },
-boardConfigured, overrides, promptOverrides }` — `overrides` is the `config` object from
-`brigade-config resolve --json` (passing the whole resolve output also works — the script
-unwraps `.config`), `promptOverrides` is `brigade-config prompts --json`. `boardConfigured`
-is true when `.brigade/config.md`'s `## Source` section has a `database_id` set, false
-otherwise.
-
-**Input contract (D2).** `branch` and `range` inputs resolve locally — `git merge-base
-<mainLine> <head>` for a branch, both endpoints checked with `git rev-parse` for a range —
-no `gh` needed. A `pr` input (a bare number, `#123`, or a URL) requires an authenticated
-`gh` and a remote: `gh pr view --json number,title,body,headRefName,baseRefName` plus
-`git fetch <remote> pull/<n>/head:<review-ref>`; the PR's title/body feed the product
-dimension as its intent source. `gh` missing/unauthenticated, or either command failing
-for any other reason, fails fast with a decision-ready message naming the equivalent
-branch/range invocation to retry with — never a guess. There is no raw-diff-file input:
-the context probe and every dimension review need a real checkout. Review worktrees live
-at `.brigade/review/<slug>` — deliberately not under `.brigade/worktrees/` (that location
-is execute's; review runs independently of the item DAG) — checked out and torn down by
-the script itself on every exit path.
-
-**Per-tier depth (D1).** Eight dimensions, id-keyed (`correctness`, `tests`,
-`architecture`, `maintainability`, `reuse`, `duplication`, `security`, `product`),
-configurable via the `review.dimensions` config key (merged by `id`, like
-`contextSources` — see [configuration.md](../../docs/configuration.md)):
-
-| | ★★★ | ★★ | ★ |
-| --- | --- | --- | --- |
-| dispatches | 8 — one per dimension | 4 groups: correctness+tests, architecture+maintainability, reuse+duplication, security; product as conditional 5th | 1 merged pass |
-| product dimension | always; degrades to PR/commit intent with explicit "no requirements source" caveat | only when a requirements source exists | only when a requirements source exists (folded into the merged pass) |
-| verify pass | every blocking+high finding, 2 independent refute-framed verifiers; finding dies if both refute, reported "unconfirmed" if one refutes | blocking findings, 1 verifier | none; findings labeled unverified |
-| context probe | docs + ticket + KB + ≤2 context scouts | docs + ticket | docs only |
-
-**Return shape.** On success: `{ reportPath, contextTier, counts, findings, unconfirmed,
-dropped }` — `contextTier` is `bare`/`documented`/`tracked` (what context the review
-actually had); `counts` is findings by severity; `findings` are the survivors, each
-packet-shaped (id, severity, location, summary, dimension, fix, verify); `unconfirmed` is
-the subset a refute vote couldn't kill outright but also couldn't confirm; `dropped` is
-what a full refute pass killed. On a Resolve failure: `{ findings: [], contextTier: 'bare',
-reportPath: null, error }` — present `error` verbatim and stop.
-
-**Follow-up.** Findings are already packet-shaped, so `/brigade:review-dispatch
-<review-slug|report-path> [finding-id...]` turns selected ones into a cooked mini-dish.
-Selection is explicit (arguments or an `AskUserQuestion` multi-select — no bulk mode); any
-finding whose `confirmed` isn't `true` gets a premise re-check against current main before
-it's trusted. Surviving findings become `.brigade/dishes/review-fixes-<slug>/PLAN.md`, one
-item per finding, with no second planning pass since the findings already did the
-decomposition — then it runs through `brigade-execute` (Phases 3–5) like any other dish.
-
-## Self-improvement (retro → heuristics → brain upgrade)
-
-A dish is a sprint: one ticket cooked to completion. Retrospectives run on the tier's
-cadence (at ★ skipping a dish is the cadence, not an omission), and they compound
-through three layers:
-
-**Layer 1 — the retro (cadence set by the tier, mandatory).** The `brigade-analyst`
-cadence comes from `TIERS.md`: ★★★ every dish plus every 10 merged items on long dishes;
-★★ every dish; ★ every 3rd dish or on request — and whenever the user asks, at any tier.
-Never skipped silently at any tier — if you must defer a due pass, say so to the user
-explicitly.
-Dispatch `brigade-analyst` with: the dish dir path (`PLAN.md`, `briefs/`, `reports/` —
-including every FAIL verdict and rework trail), `.brigade/LEARNINGS.md`, and the output
-path `.brigade/dishes/<dish-slug>/analyst.md`. It scores the run (rework rate, escalation
-use, blocked packets, conflicts, review yield) and returns 1–3 concrete proposals. Apply
-what's repo-local yourself by acquiring `repo-global`, re-reading the latest file,
-appending to `.brigade/LEARNINGS.md`, and releasing the lease — the fleet's working
-memory, re-read at every dish start.
-
-**At ★★★ the end-of-dish retro is intensive** (mid-dish 10-item checkpoints stay
-standard). Dispatch the same agent with model override `opus`, say `mode: intensive` in
-the prompt, and add the cross-dish inputs: every prior `.brigade/dishes/*/analyst.md`,
-the efficiency block from `brigade-status`, and the live heuristic set (the configured KB
-search command when `kb.enabled`, else `.brigade/LEARNINGS.md` `## Heuristics` and the
-committed heuristics file). The intensive report adds a proposal ledger — every past
-proposal ruled applied/ignored/dead with proof — cross-dish trend scoring, and up to 5
-proposals including researched `tooling` recommendations (a tool, lint rule, CI step, or
-hook that would eliminate a recurring failure class). When it lands: apply learnings as
-usual, retire ledger-dead proposals (KB amend or heuristics-file status), surface ignored
-ones to the user, and treat `tooling` proposals as operator decisions — never
-auto-install anything.
-
-**Layer 2 — the heuristic store (accumulates across repos and dishes).** Proposals the
-Analyst marks as **generalizable heuristics** — rules about decomposition, packet writing,
-model selection, or review that would hold in any repo — are offered to the operator's
-knowledge base (KB writes are the operator's call; one yes/no per retro, never automatic).
-When `~/.brigade/config.json` has `kb.enabled` and a `kb.cli` on PATH, run that CLI with
-the configured ingest/search argument templates (defaults often look like a personal KB
-CLI with tags `brigade,heuristic,active`). The stable tags and one-rule-per-note format
-are what make Layer 3 possible.
-
-No configured KB CLI? Accumulate them in a `## Heuristics` section of `.brigade/LEARNINGS.md`
-instead. Teams sharing brigade should prefer the committed heuristics file
-`skills/brigade/policies/heuristics.md` (one rule per entry: rule, evidence, dish ref);
-a personal KB is then an operator overlay, never the team's only memory.
-
-**Layer 3 — the brain upgrade (heavy model, periodic).** Every few dishes — or when the
-same heuristic keeps recurring in retros — the user runs an upgrade pass; it runs at
-three-star by definition (the strongest available model).
-This pass is the only thing that edits brigade itself, and it edits the **source, never
-the installed copy**:
-
-1. Locate the source: the operator's user memory (`~/.claude/CLAUDE.md`) records the
-   brigade source directory; failing that, `claude plugin marketplace list` shows the
-   marketplace path, and a legacy copy install has a `PROVENANCE` file next to this SKILL.
-   Marketplace installs are **cached copies** — source edits reach sessions only via
-   `claude plugin update brigade@brigade` (bump the version in
-   `.claude-plugin/plugin.json` first).
-2. Gather the evidence base: the full live heuristic set via the configured KB search
-   (or `skills/brigade/policies/heuristics.md` + `LEARNINGS.md`), plus recent `analyst.md`
-   reports from active repos. Soft-fail optional graph tooling if the KB CLI exposes it.
-3. Synthesize: which heuristics have earned a place in the brain (recurring, evidence-
-   backed) vs. stay repo-local vs. contradict each other (surface contradictions to the
-   user — don't average them). Then edit the source SKILL/agents/templates: tighten the
-   granularity bar, sharpen packet/verdict formats, adjust the escalation or heavy-flag
-   policy — smallest diff that captures the rule.
-4. The user reviews the source diff; roll it out with a version bump +
-   `claude plugin update brigade@brigade` (legacy copy installs rerun
-   `./install.sh --legacy`). Retire each absorbed heuristic in the KB (or mark
-   `status: absorbed` in the committed heuristics file) so it never gets re-proposed.
-
-Never self-edit an installed copy in place, never bulk-import unvetted heuristics into the
-brain, and keep the brain small — a heuristic earns its token cost in every future dish
-or it stays in the KB.
-
-The Analyst is deliberately tiny and brigade-specific: it reads artifacts the run already
-produced, it never touches source code, and its report is information for you and the
-user — not instructions that execute themselves.
+Retros run on the tier's cadence (`TIERS.md`: ★★★ every dish + every 10 merged items;
+★★ every dish; ★ every 3rd dish — and whenever the user asks) and are **never skipped
+silently at any tier**: if you must defer a due pass, say so to the user explicitly.
+Before dispatching `brigade-analyst`, applying its report, offering heuristics to the
+KB, or running a brain-upgrade pass, read `RETRO.md` (next to this SKILL) — the dispatch
+inputs, the ★★★ intensive mode, the heuristic store, and the brain-upgrade protocol live
+there. Two invariants hold regardless: KB writes are the operator's call (one yes/no per
+retro, never automatic), and a brain upgrade edits the plugin **source**, never the
+installed copy.
 
 ## Resuming a dish (any session, any time)
 
@@ -797,7 +638,7 @@ ownership, per-dispatch `attempts` records)
 plus the report trail, updated at every transition. So resume is trivial and gate-free:
 
 1. Run `brigade-status` and `brigade-coord list`, then acquire the dish lease before any
-   reconciliation write or dispatch. `brigade-status` (plugin command, zero model tokens) — config, per-dish item
+   reconciliation write or dispatch. `brigade-status` (zero model tokens) — config, per-dish item
    statuses, worktrees, learnings tail in one shot (`--json` for structured output when a
    script or precise state check needs it). The SessionStart hook already injected this in
    brigade repos; don't re-derive what it shows.
@@ -860,6 +701,15 @@ an optional batched progress comment on the parent, not a status thrash.
 - `SCHEMAS.md` (next to this SKILL) — the artifact type registry (envelope, per-type
   frontmatter, body sections, length budgets, authority rules). Read it before producing
   any artifact.
+- `SETUP.md` (next to this SKILL) — first-run init interview, the `.brigade/` layout,
+  and multi-repo workspace rules. Read on first run in a repo or in a workspace cwd.
+- `../../CONNECTORS.md` (plugin root) — the connector categories brigade binds to
+  (`~~tickets` board source, `~~kb` knowledge base) and how the binding is recorded.
+- `REVIEW.md` (next to this SKILL) — the standalone `/brigade:review` contract:
+  invocation args, input contract, per-tier depth, return shape, review-dispatch.
+  Read before dispatching a review.
+- `RETRO.md` (next to this SKILL) — the self-improvement stack: analyst dispatch,
+  intensive mode, heuristic store, brain upgrade. Read when a retro is due.
 - `TIERS.md` (next to this SKILL) — the service tiers (three-star / two-star / one-star):
   per-tier model policy, scout caps, plan-check policy, the escalation ladder as
   implemented by `brigade-execute`, retro cadence, difficult-planning triggers.
@@ -872,15 +722,15 @@ an optional batched progress comment on the parent, not a status thrash.
   enables one.
 - `../../workflows/` — the three generated Workflow scripts: `brigade-research.js`
   (Phase 1), `brigade-execute.js` (Phases 3–5), and `brigade-review.js` (`/brigade:review`,
-  above) — all built from `workflows/src/*.js` by `bin/brigade-bundle`. `workflows/config.js`
+  above) — all built from `workflows/src/*.js` by `scripts/brigade-bundle`. `workflows/config.js`
   mirrors the tier policy and schemas already defined in `TIERS.md`/`SCHEMAS.md` for the
   scripts to read at runtime (they can't import) — edit the `.md` files and rerun the
   bundle, never hand-edit `config.js` alone.
 - `../../commands/` — mechanical slash commands: status, config, tier, retro, validate,
   design, review, review-dispatch.
-- `../../bin/brigade-config` — resolves the four config layers and the prompt-override
+- `../../scripts/brigade-config` — resolves the four config layers and the prompt-override
   stacks. Run it instead of reading config files.
-- `../../bin/brigade-coord` — atomic per-dish leases shared by Claude and Codex.
+- `../../scripts/brigade-coord` — atomic per-dish leases shared by Claude and Codex.
 - `hooks/guard.sh` — PreToolUse git-hygiene guard.
 - `../groom/SKILL.md` — the board-grooming session: cluster by product feature,
   split/merge/sharpen tickets via scout + inspector review. Run it for whole-board work,

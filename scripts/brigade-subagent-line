@@ -1,0 +1,86 @@
+#!/usr/bin/env node
+// Renders the agent-panel row for brigade's own subagents: role, what packet or question
+// it is on, how full its context is, and how many tokens it has burned.
+//
+// Claude Code hands us every visible row on stdin and takes one JSON line per row we want
+// to override. Rows we say nothing about keep their default rendering — that is how a
+// plugin-shipped status line stays out of the way of everyone else's subagents.
+//
+// Anything unexpected (bad JSON, a missing field, no tasks) exits quietly with no output,
+// because a status line is never worth breaking a session over.
+
+const ROLES = {
+  'brigade-cook': 'cook',
+  'brigade-cook-heavy': 'cook+',
+  'brigade-inspector': 'inspect',
+  'brigade-scout': 'scout',
+  'brigade-analyst': 'retro',
+  'brigade-design': 'design',
+}
+
+const STATUS_MARK = { running: '●', in_progress: '●', completed: '✓', done: '✓', failed: '✗', error: '✗' }
+
+function roleOf(task) {
+  const haystack = `${task.name || ''} ${task.type || ''} ${task.label || ''}`
+  for (const [agent, role] of Object.entries(ROLES)) {
+    // cook-heavy contains cook, so the longest match has to win.
+    if (haystack.includes(agent) && (agent !== 'brigade-cook' || !haystack.includes('brigade-cook-heavy'))) {
+      return role
+    }
+  }
+  return null
+}
+
+function compactTokens(n) {
+  if (typeof n !== 'number' || !isFinite(n) || n <= 0) return ''
+  if (n < 1000) return `${n}`
+  return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`
+}
+
+function subject(task) {
+  // Workflow labels are already packet-shaped ("cook:auth-guard"), so they beat the
+  // agent's long prose description. Strip the role prefix the row already shows.
+  const raw = (task.label || task.description || '').trim()
+  return raw.replace(/^(cook|cook-heavy|inspect|verify|review|scout|retro|design)[:/]\s*/i, '')
+}
+
+function render(task, columns) {
+  const role = roleOf(task)
+  if (!role) return null
+
+  const parts = [`${STATUS_MARK[task.status] || '·'} ${role}`]
+
+  const what = subject(task)
+  if (what) parts.push(what)
+
+  if (typeof task.tokenCount === 'number' && typeof task.contextWindowSize === 'number' && task.contextWindowSize > 0) {
+    parts.push(`${Math.round((task.tokenCount / task.contextWindowSize) * 100)}% ctx`)
+  }
+
+  const tokens = compactTokens(task.tokenCount)
+  if (tokens) parts.push(tokens)
+
+  let content = parts.join('  ')
+  const width = typeof columns === 'number' && columns > 12 ? columns : 0
+  if (width && content.length > width) content = `${content.slice(0, width - 1)}…`
+  return content
+}
+
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  input += chunk
+})
+process.stdin.on('end', () => {
+  try {
+    const payload = JSON.parse(input)
+    const tasks = Array.isArray(payload.tasks) ? payload.tasks : []
+    for (const task of tasks) {
+      if (!task || !task.id) continue
+      const content = render(task, payload.columns)
+      if (content !== null) process.stdout.write(`${JSON.stringify({ id: task.id, content })}\n`)
+    }
+  } catch {
+    // Leave every row at its default rendering.
+  }
+})

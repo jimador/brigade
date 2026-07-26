@@ -1,12 +1,12 @@
 ---
 description: Brigade state snapshot — tier, dishes, worktrees, efficiency — at zero exploration cost
-allowed-tools: Bash(brigade-status:*), Bash(brigade-coord:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-status:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord:*)
 ---
 
 ## Context
 
-- !`brigade-status`
-- !`brigade-coord list`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-status"`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" list`
 
 ## Task
 

@@ -1,11 +1,11 @@
 ---
 description: Mechanically validate brigade dish artifacts against SCHEMAS.md (zero model tokens)
-allowed-tools: Bash(brigade-validate:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate:*)
 ---
 
 ## Context
 
-- !`brigade-validate`
+- !`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate"`
 
 ## Task
 

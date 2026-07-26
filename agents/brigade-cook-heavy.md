@@ -3,6 +3,7 @@ name: brigade-cook-heavy
 description: Heavyweight implementation executor for the brigade fleet. Same one-packet contract as brigade-cook, on a stronger model. Used for packets flagged heavy (cross-cutting, concurrency, security, data correctness) and for rework after a first-attempt cook failed the review gate.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
+maxTurns: 80
 ---
 
 # Brigade Cook (heavy)

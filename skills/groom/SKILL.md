@@ -95,7 +95,7 @@ out of the ready status.
 Show the user each groomed body and every split/merge/reparent (a compact before/after
 summary is fine) and get **one confirmation for the batch**. Then apply via the configured
 transport. Before each ticket mutation, reacquire the same canonical dish slug with
-`brigade-coord ... claude`, re-read that it did not change during grooming, apply the
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" ... claude`, re-read that it did not change during grooming, apply the
 update, and release the lease. A lease held by Codex or another Claude session leaves
 that ticket unchanged and is reported to the user.
 

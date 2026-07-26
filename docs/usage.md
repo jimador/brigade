@@ -117,8 +117,15 @@ an analyst retro.
 above — no packet, no PASS/FAIL gate, and it never posts to a pull request. It scales
 review depth to the tier (more dimensions and a stronger verify pass at ★★★, a single
 merged pass at ★) and returns findings that are already packet-shaped, so any of them can
-be handed to the execute pipeline later as a work item. See `skills/brigade/SKILL.md`'s
-"Reviewing code" section for the full contract.
+be handed to the execute pipeline later as a work item. See `skills/brigade/REVIEW.md`
+for the full contract.
+
+## Undo is git, not /rewind
+
+Claude Code checkpointing doesn't track subagent edits or bash-driven changes — which is
+every mutation brigade makes (cooks edit in worktrees, landings are git merges). To undo
+brigade work, use git: reset the delivery branch, drop the item branch, or revert the
+merge. `/rewind` only restores the planner conversation.
 
 ## When something blocks
 

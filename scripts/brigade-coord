@@ -187,7 +187,131 @@ if (command === 'list') {
   process.exit(0)
 }
 
-if (!dish) fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|list [...]')
+if (command === 'watch') {
+  // Long-running change feed for the plugin monitor: every emitted line becomes a model
+  // notification in the session, so the bar is "would the planner act on this?". We
+  // report what the OTHER runtime does — lease transitions, and new report/state
+  // artifacts in dishes we don't hold — and stay silent about our own work, which the
+  // session already knows about firsthand.
+  const flags = process.argv.slice(3)
+  const flagValue = (name) => {
+    const at = flags.indexOf(name)
+    return at >= 0 ? flags[at + 1] : undefined
+  }
+  const myRuntime = flagValue('--runtime') || 'claude'
+  const intervalSeconds = Math.max(2, Number(flagValue('--interval')) || 5)
+  const once = flags.includes('--once')
+  const stateFile = flagValue('--state')
+  const MAX_LINES_PER_TICK = 12
+
+  function leaseSnapshot() {
+    const leases = {}
+    if (!fs.existsSync(coordinationRoot)) return leases
+    for (const name of fs.readdirSync(coordinationRoot)) {
+      if (!name.endsWith('.lease')) continue
+      const key = name.slice(0, -'.lease'.length)
+      // An unexpected filename would trip leasePath's validation exit; a watch skips it.
+      if (!validDish(key)) continue
+      const metadata = readMetadata(key)
+      leases[key] = { runtime: metadata?.runtime || 'unknown', owner: metadata?.owner || '' }
+    }
+    return leases
+  }
+
+  function artifactSnapshot() {
+    const artifacts = {}
+    const dishesRoot = path.join(root, '.brigade', 'dishes')
+    if (!fs.existsSync(dishesRoot)) return artifacts
+    for (const dishEntry of fs.readdirSync(dishesRoot)) {
+      for (const kind of ['reports', 'state']) {
+        const dir = path.join(dishesRoot, dishEntry, kind)
+        if (!fs.existsSync(dir)) continue
+        for (const file of fs.readdirSync(dir)) {
+          if (!file.endsWith('.md')) continue
+          const full = path.join(dir, file)
+          try {
+            artifacts[`${dishEntry}/${kind}/${file}`] = fs.statSync(full).mtimeMs
+          } catch {
+            // Raced a delete; skip.
+          }
+        }
+      }
+    }
+    return artifacts
+  }
+
+  function diff(previous, current) {
+    const lines = []
+    for (const [key, lease] of Object.entries(current.leases)) {
+      const before = previous.leases[key]
+      if (!before && lease.runtime !== myRuntime) {
+        lines.push(`lease acquired: ${key} (${lease.runtime})`)
+      } else if (before && before.owner !== lease.owner && lease.runtime !== myRuntime) {
+        lines.push(`lease changed hands: ${key} (${before.runtime} -> ${lease.runtime})`)
+      }
+    }
+    for (const [key, lease] of Object.entries(previous.leases)) {
+      if (!current.leases[key] && lease.runtime !== myRuntime) {
+        lines.push(`lease released: ${key} (was ${lease.runtime})`)
+      }
+    }
+    for (const [key, mtime] of Object.entries(current.artifacts)) {
+      const dishKey = key.split('/')[0]
+      // Our own dishes report through the session's own workflow notifications. When a
+      // dish is unheld at tick time, fall back to who held it LAST tick — that covers
+      // the write-then-release race without echoing our own end-of-dish artifacts. A
+      // release-then-foreign-acquire inside one tick can still misattribute; the feed
+      // is advisory and brigade-status stays the source of truth.
+      const holder = current.leases[dishKey] || previous.leases[dishKey]
+      if (holder && holder.runtime === myRuntime) continue
+      const before = previous.artifacts[key]
+      if (before === undefined) lines.push(`artifact landed: ${key}`)
+      else if (before !== mtime) lines.push(`artifact updated: ${key}`)
+    }
+    return lines
+  }
+
+  function emitLines(lines) {
+    const shown = lines.slice(0, MAX_LINES_PER_TICK)
+    for (const line of shown) process.stdout.write(`brigade-coord: ${line}\n`)
+    if (lines.length > shown.length) {
+      process.stdout.write(`brigade-coord: +${lines.length - shown.length} more changes (run brigade-status)\n`)
+    }
+  }
+
+  function snapshot() {
+    return { leases: leaseSnapshot(), artifacts: artifactSnapshot() }
+  }
+
+  if (once) {
+    // Single diff pass against a state file — this is the testable core of the loop.
+    if (!stateFile) fail('watch --once requires --state <file>')
+    let previous = null
+    try {
+      previous = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    } catch {
+      previous = null
+    }
+    const current = snapshot()
+    if (previous) emitLines(diff(previous, current))
+    fs.writeFileSync(stateFile, `${JSON.stringify(current)}\n`)
+    process.exit(0)
+  }
+
+  let previous = snapshot() // Baseline tick emits nothing.
+  setInterval(() => {
+    try {
+      if (!fs.existsSync(path.join(root, '.brigade'))) return
+      const current = snapshot()
+      emitLines(diff(previous, current))
+      previous = current
+    } catch {
+      // A watch tick is never worth crashing the monitor over.
+    }
+  }, intervalSeconds * 1000)
+} else if (!dish) {
+  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|list|watch [...]')
+}
 
 if (command === 'status') {
   const metadata = readMetadata(dish)
@@ -309,4 +433,6 @@ if (command === 'recover-lock') {
   process.exit(0)
 }
 
-fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|recover-lock|list [...]')
+if (command !== 'watch') {
+  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|recover-lock|list|watch [...]')
+}
