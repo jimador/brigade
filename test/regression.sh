@@ -256,6 +256,17 @@ test_guard_worktree_paths() {
   assert_guard_blocks "git add .brigade/dishes/sample/PLAN.md"
   assert_guard_blocks "git add /abs/repo/.brigade/LEARNINGS.md"
   assert_guard_blocks "git add .brigade/worktrees/dish--item/.brigade/dishes/sample/PLAN.md"
+
+  # The bare worktree root is brigade state: staging it records a gitlink to the
+  # worktree itself. An inspector caught this exemption live — git add of the root
+  # staged the embedded repo with exit 0 — so it is pinned here.
+  assert_guard_blocks "git add .brigade/worktrees/dish--item"
+  assert_guard_blocks "git commit /abs/repo/.brigade/worktrees/dish--item -m msg"
+
+  # A DIFFERENT item's worktree content is exempted identically: the guard is a
+  # static inspector with no knowledge of which worktree a command runs in, so
+  # per-item scoping is not possible lexically. Deliberate, not an oversight.
+  assert_guard_allows "git add .brigade/worktrees/other-item/src/main/kotlin/Y.kt"
 }
 
 test_guard_staging_policy() {
@@ -1500,9 +1511,9 @@ assert.ok(
   'reconstructed report body missing the literal reconstruction attribution',
 )
 
-// The steward-land prompt itself: with both reconstructions in hand it must instruct
-// a self-heal write (not a refusal) and must embed the reconstructed text verbatim —
-// this is the actual write-if-missing instruction the steward acts on.
+// The steward-land prompt: the REPORT half self-heals (recovered, and marked as
+// recovered); the VERDICT half must refuse — a verdict the steward wrote itself
+// would authorize its own bypass.
 const healingPrompt = stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportBlock, verdictBlock)
 // A REPORT records what happened, so recovering one is safe — but it must announce that
 // it was recovered rather than written by the cook.

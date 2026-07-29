@@ -292,7 +292,12 @@ def repo_relative(path):
     parts = os.path.normpath(path).split(os.sep)
     for i in range(len(parts) - 2):
         if parts[i] == ".brigade" and parts[i + 1] == "worktrees":
-            return parts[i + 3:]
+            inside = parts[i + 3:]
+            # The worktree root itself is brigade state — staging it records a
+            # gitlink to the worktree, which is exactly the noise this guard
+            # exists to keep out of commits. Only paths BELOW the root are the
+            # worktree's own content.
+            return inside if inside else parts
     return parts
 def brigade_path(path):
     if path.startswith(":(") and ")" in path:
