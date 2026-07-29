@@ -279,12 +279,27 @@ def broad_path(path):
     elif path.startswith(":/"):
         pattern = path[2:]
     return os.path.normpath(pattern) == "." or any(char in pattern for char in "*?[")
+def repo_relative(path):
+    """The path as its OWN repository sees it.
+
+    An item worktree lives at `.brigade/worktrees/<item>/`, so inside it
+    `src/main/…` is ordinary source that belongs in a commit. Judging the path
+    as written would call every file in that worktree brigade state and refuse
+    the commit — which is how a cook once staged 400 lines it could not save,
+    purely because it spelled the path absolutely instead of relatively.
+    Anything below the worktree root is therefore judged on its own.
+    """
+    parts = os.path.normpath(path).split(os.sep)
+    for i in range(len(parts) - 2):
+        if parts[i] == ".brigade" and parts[i + 1] == "worktrees":
+            return parts[i + 3:]
+    return parts
 def brigade_path(path):
     if path.startswith(":(") and ")" in path:
         path = path.split(")", 1)[1]
     elif path.startswith(":/"):
         path = path[2:]
-    return ".brigade" in os.path.normpath(path).split(os.sep)
+    return ".brigade" in repo_relative(path)
 def path_violation(paths, verb):
     for path in paths:
         if broad_path(path): return "no repository-wide or wildcard pathspec"
