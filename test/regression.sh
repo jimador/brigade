@@ -567,6 +567,83 @@ assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHea
 NODE
 }
 
+onboard_run() { # brigade-onboard against a fixture repo and a fake plugin root
+  fixture="$1"
+  plugroot="$2"
+  shift 2
+  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" "$ROOT/scripts/brigade-onboard" "$@"
+}
+
+test_onboard_status() {
+  fixture="$TMP_ROOT/onboard-status"
+  plugroot="$TMP_ROOT/onboard-plugroot"
+  mkdir -p "$fixture" "$plugroot/.claude-plugin"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "9.9.9" }
+EOF
+
+  # (a) fresh repo: nothing set up yet.
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report fresh-repo drift"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not True:
+    raise SystemExit(f"expected drift true, got {doc['drift']!r}")
+if doc["recorded_version"] is not None:
+    raise SystemExit(f"expected recorded_version null, got {doc['recorded_version']!r}")
+states = {s["id"]: s["state"] for s in doc["steps"]}
+if states.get("git-exclude") != "pending":
+    raise SystemExit(f"expected git-exclude pending, got {states.get('git-exclude')!r}")
+if states.get("board-config") != "pending":
+    raise SystemExit(f"expected board-config pending, got {states.get('board-config')!r}")
+PY
+
+  # (b) fully onboarded: exclude line + config.md + matching version record.
+  mkdir -p "$fixture/.brigade" "$fixture/.git/info"
+  printf '.brigade/\n' >>"$fixture/.git/info/exclude"
+  printf '' >"$fixture/.brigade/config.md"
+  cat >"$fixture/.brigade/onboard.json" <<'EOF'
+{ "schema": 1, "plugin_version": "9.9.9", "updated_at": "2026-01-01T00:00:00Z", "steps": {} }
+EOF
+
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report a fully onboarded repo as clean"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not False:
+    raise SystemExit(f"expected drift false, got {doc['drift']!r}")
+states = {s["id"]: s["state"] for s in doc["steps"]}
+for step_id in ("git-exclude", "version-record", "board-config"):
+    if states.get(step_id) != "ok":
+        raise SystemExit(f"expected {step_id} ok, got {states.get(step_id)!r}")
+PY
+
+  # (c) corrupt onboard.json must never crash the command.
+  printf '{not json' >"$fixture/.brigade/onboard.json"
+  out="$(onboard_run "$fixture" "$plugroot" status --json)"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "onboard status exited $rc on corrupt onboard.json"
+  python3 - "$out" <<'PY' || fail "onboard status did not report drift for corrupt onboard.json"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not True:
+    raise SystemExit(f"expected drift true with corrupt record, got {doc['drift']!r}")
+PY
+
+  # (d) no .git directory at all -> git-exclude is not-applicable.
+  nogit="$TMP_ROOT/onboard-status-nogit"
+  mkdir -p "$nogit"
+  json="$(onboard_run "$nogit" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report git-exclude na without a .git directory"
+import json, sys
+doc = json.loads(sys.argv[1])
+states = {s["id"]: s["state"] for s in doc["steps"]}
+if states.get("git-exclude") != "na":
+    raise SystemExit(f"expected git-exclude na, got {states.get('git-exclude')!r}")
+PY
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -1928,6 +2005,7 @@ test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_config_override_consumer_path
+test_onboard_status
 test_validate_ledger_artifacts
 test_validate_retro_readiness
 test_validate_analyst_modes

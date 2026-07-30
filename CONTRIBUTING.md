@@ -50,6 +50,7 @@ node --check scripts/brigade-config
 node --check scripts/brigade-bundle
 node --check scripts/brigade-coord
 node --check scripts/brigade-subagent-line
+node --check scripts/brigade-onboard
 node --check workflows/config.js
 for f in workflows/src/*.js workflows/brigade-*.js; do node --check "$f" || exit 1; done
 scripts/brigade-bundle --check

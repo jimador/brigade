@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+// brigade-onboard — checks (and, later, applies) the one-time setup a repo needs
+// before the brigade fleet can run in it: a .git/info/exclude entry so .brigade/
+// scratch never gets committed by accident, a record of which plugin version last
+// touched this repo, and a board config file the onboarding skill walks a human
+// through. Right now this only reports state (`status`); `apply` and `detect` are
+// stubs that later work packets fill in.
+//
+// Usage:
+//   brigade-onboard status [--json]
+//   brigade-onboard apply            # not implemented yet (exit 2)
+//   brigade-onboard detect           # not implemented yet (exit 2)
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+function repoRoot() {
+  const explicit = process.env.CLAUDE_PROJECT_DIR
+  return explicit ? path.resolve(explicit) : process.cwd()
+}
+
+function pluginRoot() {
+  const explicit = process.env.BRIGADE_PLUGIN_ROOT
+  return explicit ? path.resolve(explicit) : path.resolve(__dirname, '..')
+}
+
+function installedVersion(pluginRootDir) {
+  const manifestPath = path.join(pluginRootDir, '.claude-plugin', 'plugin.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  return manifest.version
+}
+
+function onboardRecordPath(root) {
+  return path.join(root, '.brigade', 'onboard.json')
+}
+
+// Reads the onboard record. Anything short of a clean parse — missing file,
+// unreadable, corrupt JSON — comes back as null so callers treat it as "no record
+// yet" instead of crashing.
+function readOnboardRecord(root) {
+  try {
+    const text = fs.readFileSync(onboardRecordPath(root), 'utf8')
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+function hasGitDir(root) {
+  return fs.existsSync(path.join(root, '.git'))
+}
+
+function gitExcludeHasEntry(root) {
+  const excludePath = path.join(root, '.git', 'info', 'exclude')
+  let text
+  try {
+    text = fs.readFileSync(excludePath, 'utf8')
+  } catch {
+    return false
+  }
+  return text.split('\n').some((line) => line === '.brigade/')
+}
+
+// The step registry: one entry per thing onboarding cares about, in the order
+// they should be shown and (later) applied. `apply` bodies land in a later work
+// item — for now every step only knows how to check itself.
+function buildSteps(root) {
+  return [
+    {
+      id: 'git-exclude',
+      kind: 'auto',
+      check() {
+        if (!hasGitDir(root)) return 'na'
+        return gitExcludeHasEntry(root) ? 'ok' : 'pending'
+      },
+      apply: null,
+    },
+    {
+      id: 'version-record',
+      kind: 'auto',
+      check(installed) {
+        const record = readOnboardRecord(root)
+        if (record && record.plugin_version === installed) return 'ok'
+        return 'pending'
+      },
+      apply: null,
+    },
+    {
+      id: 'board-config',
+      kind: 'interactive',
+      check() {
+        return fs.existsSync(path.join(root, '.brigade', 'config.md')) ? 'ok' : 'pending'
+      },
+      apply: null,
+    },
+  ]
+}
+
+function stepDetail(step, state) {
+  switch (step.id) {
+    case 'git-exclude':
+      return state === 'na' ? 'no .git directory' : state === 'ok' ? '.brigade/ excluded' : '.brigade/ not excluded'
+    case 'version-record':
+      return state === 'ok' ? 'recorded version matches installed' : 'no matching version record'
+    case 'board-config':
+      return state === 'ok' ? '.brigade/config.md present' : '.brigade/config.md missing'
+    default:
+      return state
+  }
+}
+
+function runStatus(json) {
+  const root = repoRoot()
+  const plugRoot = pluginRoot()
+  const installed = installedVersion(plugRoot)
+  const record = readOnboardRecord(root)
+  const recordedVersion = record && typeof record.plugin_version === 'string' ? record.plugin_version : null
+
+  const steps = buildSteps(root)
+  const results = steps.map((step) => ({ step, state: step.check(installed) }))
+
+  const versionDrift = recordedVersion === null || recordedVersion !== installed
+  const anyAutoPending = results.some((r) => r.step.kind === 'auto' && r.state === 'pending')
+  const drift = versionDrift || anyAutoPending
+
+  if (json) {
+    console.log(JSON.stringify({
+      schema: 1,
+      plugin_version: installed,
+      recorded_version: recordedVersion,
+      drift,
+      steps: results.map((r) => ({ id: r.step.id, kind: r.step.kind, state: r.state })),
+    }))
+  } else {
+    for (const r of results) {
+      console.log(`${r.state}  ${r.step.id}  ${stepDetail(r.step, r.state)}`)
+    }
+    console.log(`plugin_version: ${installed}`)
+    console.log(`recorded_version: ${recordedVersion ?? '(none)'}`)
+    console.log(`drift: ${drift ? 'yes' : 'no'}`)
+  }
+  return 0
+}
+
+function main() {
+  const args = process.argv.slice(2)
+  const json = args.includes('--json')
+  const command = args.find((a) => a !== '--json')
+
+  switch (command) {
+    case 'status':
+      return runStatus(json)
+    case 'apply':
+    case 'detect':
+      console.log('not implemented')
+      return 2
+    default:
+      console.error('usage: brigade-onboard <status|apply|detect> [--json]')
+      return 2
+  }
+}
+
+process.exitCode = main()
