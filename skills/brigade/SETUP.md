@@ -5,6 +5,11 @@ workspace. Not needed on a repo that already has a working board wiring.
 
 ## Setup (first run in a repo)
 
+Preferred: run `/brigade:onboard` first. It detects repo signals, interviews only for
+whatever it couldn't figure out on its own, writes the config and the git exclusion, and
+records the plugin version so later upgrades apply automatically. The manual interview
+below is the fallback for when onboard can't run or you want to walk through it by hand.
+
 0. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" layers` and `... doctor` (free). They tell you which
    config layers exist and whether any is broken, before you touch anything else.
 1. Check for `.brigade/config.md` in the repo root. If present, read it and continue.
@@ -28,6 +33,7 @@ workspace. Not needed on a repo that already has a working board wiring.
 ```
 .brigade/
   config.md                  # board wiring: source, board id, identity, gate
+  onboard.json                # version/steps record written by brigade-onboard
   config.local.json          # optional personal settings layer (this repo, uncommitted)
   overrides/agents/          # optional personal prompt overrides (this repo)
   overrides/prompts/
