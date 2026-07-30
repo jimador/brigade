@@ -38,6 +38,17 @@ at `.brigade/review/<slug>` — deliberately not under `.brigade/worktrees/` (th
 is execute's; review runs independently of the item DAG) — checked out and torn down by
 the script itself on every exit path.
 
+**Risk escalation.** Before building the invocation args, run
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk" --json` over the resolved input's changed
+files: `--range <mainLine>...<ref>` for `branch` (git's triple-dot already diffs since
+merge-base, no separate resolution step needed) or `--range <ref>` for `range`. A `pr`
+input has no local ref yet here — the D2 fetch happens later, inside the Workflow's
+Resolve phase — so pass `--files` populated from `gh pr diff --name-only <n>` instead.
+When `escalate` is `true`, bump `tier` one level (one-star → two-star → three-star,
+capped at three-star) before it's passed as the existing `tier` arg — no new arg key.
+Record `risk_escalated: true` and the matching `categories` in the report's context
+line. Add-only: never overridden downward; the operator's `--tier` may always ask deeper.
+
 **Per-tier depth (D1).** Eight dimensions, id-keyed (`correctness`, `tests`,
 `architecture`, `maintainability`, `reuse`, `duplication`, `security`, `product`),
 configurable via the `review.dimensions` config key (merged by `id`, like

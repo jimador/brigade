@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "brigade",
   "displayName": "Brigade",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Coordinate a fleet of cheap parallel coding agents from any ticket source (Notion, ClickUp, Obsidian vault boards, or a local folder of markdown files). Groom, design-swag, and cook tickets in git worktrees with tier-selected cooks, adversarial inspection, and a mandatory analyst retro. Settings, agent roles, and prompt overrides cascade across global, team, and repo-local layers.",
   "author": {
     "name": "jimador"

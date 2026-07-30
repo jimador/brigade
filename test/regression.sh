@@ -2213,6 +2213,143 @@ assert "systemMessage" in d, d' || fail "hook kept blocking past the loop guard:
   [ -z "$out" ] || fail "hook produced output in a non-brigade repo: $out"
 }
 
+risk_run() { # brigade-risk against a fixture repo and an explicit policy file
+  fixture="$1"
+  policy="$2"
+  shift 2
+  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_RISK_POLICY="$policy" "$ROOT/scripts/brigade-risk" "$@"
+}
+
+assert_risk_positive() { # path escalates via the given category, and only that category
+  path="$1"
+  category="$2"
+  json="$(risk_run "$TMP_ROOT/risk" "$RISK_POLICY" --json --files "$path")"
+  python3 - "$json" "$path" "$category" <<'PY' || fail "brigade-risk missed positive match for $path"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+path, expected = sys.argv[2], sys.argv[3]
+if doc["escalate"] is not True:
+    raise SystemExit(f"expected escalate true for {path}, got {doc['escalate']!r}")
+cats = {m["path"]: m["category"] for m in doc["matches"]}
+if cats.get(path) != expected:
+    raise SystemExit(f"expected category {expected!r} for {path}, got {cats.get(path)!r}")
+PY
+}
+
+assert_risk_negative() { # path must NOT match any category — the adversarial fixtures
+  path="$1"
+  json="$(risk_run "$TMP_ROOT/risk" "$RISK_POLICY" --json --files "$path")"
+  python3 - "$json" "$path" <<'PY' || fail "brigade-risk false-positived on negative fixture $path"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+path = sys.argv[2]
+if doc["matches"] != []:
+    raise SystemExit(f"expected zero matches for {path}, got {doc['matches']!r}")
+if doc["escalate"] is not False:
+    raise SystemExit(f"expected escalate false for {path}, got {doc['escalate']!r}")
+PY
+}
+
+test_risk_helper() {
+  RISK_POLICY="$ROOT/skills/brigade/policies/risk-escalation.md"
+  mkdir -p "$TMP_ROOT/risk"
+
+  # (a) positive fixtures: each escalates with the right category.
+  assert_risk_positive "src/auth/login.ts" "auth"
+  assert_risk_positive ".env.production" "dotenv"
+  assert_risk_positive "keys/server.pem" "secrets"
+  assert_risk_positive ".github/workflows/ci.yml" "ci-deploy"
+  assert_risk_positive "lib/billing/charge.js" "payments"
+  assert_risk_positive "db/migrations/001.sql" "data-migration"
+
+  # (a) adversarial negative fixtures — verified zero matches against the v1 patterns.
+  assert_risk_negative "docs/authoring.md"
+  assert_risk_negative "src/author.ts"
+  assert_risk_negative "secretary.js"
+  assert_risk_negative "battery-charger.js"
+  assert_risk_negative "scripts/checkout-branch.sh"
+
+  # (b) count rule: 11 benign paths escalate on count alone; 10 stay under threshold.
+  files11=""
+  for i in $(seq 1 11); do files11="$files11 src/util$i.js"; done
+  json="$(risk_run "$TMP_ROOT/risk" "$RISK_POLICY" --json --files $files11)"
+  python3 - "$json" <<'PY' || fail "brigade-risk count rule failed for 11 benign files"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+if doc["escalate"] is not True:
+    raise SystemExit(f"expected escalate true for 11 files, got {doc['escalate']!r}")
+if doc["threshold_exceeded"] is not True:
+    raise SystemExit(f"expected threshold_exceeded true for 11 files, got {doc['threshold_exceeded']!r}")
+if doc["matches"] != []:
+    raise SystemExit(f"expected zero matches for 11 benign files, got {doc['matches']!r}")
+PY
+
+  files10=""
+  for i in $(seq 1 10); do files10="$files10 src/util$i.js"; done
+  json="$(risk_run "$TMP_ROOT/risk" "$RISK_POLICY" --json --files $files10)"
+  python3 - "$json" <<'PY' || fail "brigade-risk count rule failed for 10 benign files"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+if doc["escalate"] is not False:
+    raise SystemExit(f"expected escalate false for 10 files, got {doc['escalate']!r}")
+if doc["threshold_exceeded"] is not False:
+    raise SystemExit(f"expected threshold_exceeded false for 10 files, got {doc['threshold_exceeded']!r}")
+PY
+
+  # (c) --range mode: a scratch git repo with two commits, the second touching
+  # src/auth/x.js — escalate true with category auth.
+  rangerepo="$TMP_ROOT/risk-range"
+  mkdir -p "$rangerepo/src/auth"
+  (cd "$rangerepo" && git init -q &&
+    git -c user.email=test@example.com -c user.name=test commit -q --allow-empty -m init)
+  base="$(cd "$rangerepo" && git rev-parse HEAD)"
+  echo "export const x = 1" >"$rangerepo/src/auth/x.js"
+  (cd "$rangerepo" && git add src/auth/x.js &&
+    git -c user.email=test@example.com -c user.name=test commit -q -m "add auth file")
+  head="$(cd "$rangerepo" && git rev-parse HEAD)"
+
+  json="$(risk_run "$rangerepo" "$RISK_POLICY" --json --range "$base..$head")"
+  python3 - "$json" <<'PY' || fail "brigade-risk --range mode did not detect the auth-touching commit"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+if doc["escalate"] is not True:
+    raise SystemExit(f"expected escalate true, got {doc['escalate']!r}")
+cats = {m["path"]: m["category"] for m in doc["matches"]}
+if cats.get("src/auth/x.js") != "auth":
+    raise SystemExit(f"expected src/auth/x.js category auth, got {cats.get('src/auth/x.js')!r}")
+PY
+
+  # (d) BRIGADE_RISK_POLICY at a missing file — must fail loud, never silently pass.
+  missing_policy="$TMP_ROOT/risk-missing-policy.md"
+  stderr_file="$TMP_ROOT/risk-missing.stderr"
+  if risk_run "$TMP_ROOT/risk" "$missing_policy" --files src/a.ts >/dev/null 2>"$stderr_file"; then
+    fail "brigade-risk exited 0 with a missing policy file"
+  fi
+  [ -s "$stderr_file" ] ||
+    fail "brigade-risk gave no stderr message for a missing policy file"
+
+  # (e) BRIGADE_RISK_POLICY at an invalid-json policy — must also fail loud.
+  invalid_policy="$TMP_ROOT/risk-invalid-policy.md"
+  cat >"$invalid_policy" <<'EOF'
+# Bad policy
+
+```json
+{ not valid json
+```
+EOF
+  stderr_file="$TMP_ROOT/risk-invalid.stderr"
+  if risk_run "$TMP_ROOT/risk" "$invalid_policy" --files src/a.ts >/dev/null 2>"$stderr_file"; then
+    fail "brigade-risk exited 0 with an invalid-json policy file"
+  fi
+  [ -s "$stderr_file" ] ||
+    fail "brigade-risk gave no stderr message for an invalid-json policy file"
+}
+
 test_plugin_manifests_validate
 test_post_cook_validate_hook
 test_coord_watch_transitions
@@ -2248,4 +2385,5 @@ test_review_bundle
 test_inspector_modes
 test_validate_review_report
 test_workflow_smoke
+test_risk_helper
 echo "PASS: brigade operational regressions"

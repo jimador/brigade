@@ -424,8 +424,18 @@ across it, and same-model retries fixed nothing), mark it `heavy: true` in the p
 Plain verbatim insertion at an exact quoted anchor is NOT in this class — cheap cooks
 paste-at-anchor cleanly (proven first-attempt clean where reformatting went 0/4); leave
 those `heavy: false`.
+
+**Mechanical risk check.** At packet-write time, run
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk" --json --files <item's files>` over every
+item's files list; the table lives in `policies/risk-escalation.md`. An `escalate: true`
+result forces `heavy: true` in the item's frontmatter entry as a plain value — NEVER an
+inline `#` comment inside the flow mapping, or `brigade-validate`'s manual parser breaks
+— and records the matching categories in the item's packet header line (`**heavy:** true
+— table: auth`). Table flags are add-only: your own judgment may add heavy flags, but
+never removes one the table triggered.
 Heavy items should be the exception; if more than ~1 in 5 items is heavy, your
-decomposition is too coarse.
+decomposition is too coarse — that guideline counts judgment-based flags only, table-
+triggered flags are exempt.
 
 **Adversarial plan check (policy set by the tier — `TIERS.md`: ★★★ always; ★★ when the
 dish has ≥ 6 items, touches a shared contract, or burned you last time; ★ never — run the

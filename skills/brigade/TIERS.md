@@ -27,6 +27,12 @@ against it. Change policy there and here in the same commit.
 - ★★ — worth a detour — the everyday service.
 - ★ — high quality cooking on a tight margin.
 
+The mechanical risk table (`policies/risk-escalation.md`, evaluated by
+`scripts/brigade-risk`) applies at every tier and is add-only regardless of which row
+sets the first-attempt cook. At ★★★ `heavy: true` still changes behavior even though the
+first-attempt cook is already heavy — it gates the cook's working-memory ledger — so
+table flags matter there too.
+
 ## Reading the table
 
 **Planning rows** set the session model. The Planner IS the session: at dish intake,

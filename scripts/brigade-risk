@@ -1,0 +1,154 @@
+#!/usr/bin/env node
+// brigade-risk — evaluates a set of changed file paths against the risk-escalation
+// policy table (skills/brigade/policies/risk-escalation.md) and decides whether the
+// change should escalate: either because it touches too many files, or because a
+// path matches one of the tuned risk categories (auth, secrets, CI/deploy, etc).
+// Deterministic and zero-token, so escalation stops being per-run planner judgment.
+//
+// Usage:
+//   brigade-risk [--json] --files <f1> <f2> ...
+//   brigade-risk [--json] --range <A..B>
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+function usage() {
+  console.error('usage: brigade-risk [--json] (--files <f1> <f2> ... | --range <A..B>)')
+  return 2
+}
+
+function policyPath() {
+  const explicit = process.env.BRIGADE_RISK_POLICY
+  if (explicit) return path.resolve(explicit)
+  return path.resolve(__dirname, '..', 'skills', 'brigade', 'policies', 'risk-escalation.md')
+}
+
+// Pulls the FIRST fenced ```json block out of the policy file's markdown and parses
+// it. Any failure along the way — missing file, no fenced block, invalid JSON, a bad
+// regex — throws, and the caller reports it to stderr and exits 1. Never a silent
+// pass-through: a broken policy file must not quietly evaluate to "nothing escalates".
+function loadPolicy() {
+  const filePath = policyPath()
+  let text
+  try {
+    text = fs.readFileSync(filePath, 'utf8')
+  } catch (err) {
+    throw new Error(`could not read policy file ${filePath}: ${err.message}`)
+  }
+  const match = text.match(/```json\s*\n([\s\S]*?)\n```/)
+  if (!match) {
+    throw new Error(`no fenced json block found in policy file ${filePath}`)
+  }
+  let policy
+  try {
+    policy = JSON.parse(match[1])
+  } catch (err) {
+    throw new Error(`policy file ${filePath} json block did not parse: ${err.message}`)
+  }
+  if (typeof policy.file_threshold !== 'number' || !Array.isArray(policy.categories)) {
+    throw new Error(`policy file ${filePath} json block is missing file_threshold or categories`)
+  }
+  const categories = policy.categories.map((cat) => {
+    if (typeof cat.id !== 'string' || !Array.isArray(cat.patterns)) {
+      throw new Error(`policy file ${filePath} has a category missing id or patterns`)
+    }
+    const regexes = cat.patterns.map((source) => {
+      try {
+        return new RegExp(source, 'i')
+      } catch (err) {
+        throw new Error(`policy file ${filePath} category ${cat.id} has a bad regex "${source}": ${err.message}`)
+      }
+    })
+    return { id: cat.id, regexes }
+  })
+  return { fileThreshold: policy.file_threshold, categories }
+}
+
+function rangeFiles(range) {
+  const cwd = process.env.CLAUDE_PROJECT_DIR ? path.resolve(process.env.CLAUDE_PROJECT_DIR) : process.cwd()
+  let output
+  try {
+    output = execFileSync('git', ['diff', '--name-only', range], { cwd, encoding: 'utf8' })
+  } catch (err) {
+    throw new Error(`git diff --name-only ${range} failed: ${err.message}`)
+  }
+  return output.split('\n').filter((line) => line.length > 0)
+}
+
+// The first category whose first matching pattern hits this path wins — a path only
+// ever contributes one match row, even when several categories would all match it.
+function firstMatch(filePath, categories) {
+  for (const cat of categories) {
+    if (cat.regexes.some((re) => re.test(filePath))) {
+      return cat.id
+    }
+  }
+  return null
+}
+
+function evaluate(files, policy) {
+  const matches = []
+  for (const filePath of files) {
+    const category = firstMatch(filePath, policy.categories)
+    if (category) matches.push({ path: filePath, category })
+  }
+  const fileCount = files.length
+  const thresholdExceeded = fileCount > policy.fileThreshold
+  const escalate = thresholdExceeded || matches.length > 0
+  return {
+    escalate,
+    file_count: fileCount,
+    file_threshold: policy.fileThreshold,
+    threshold_exceeded: thresholdExceeded,
+    matches,
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2)
+  const json = args.includes('--json')
+  const rest = args.filter((a) => a !== '--json')
+
+  let files
+  if (rest[0] === '--files') {
+    files = rest.slice(1)
+    if (files.length === 0) return usage()
+  } else if (rest[0] === '--range') {
+    const range = rest[1]
+    if (!range || rest.length > 2) return usage()
+    try {
+      files = rangeFiles(range)
+    } catch (err) {
+      console.error(err.message)
+      return 1
+    }
+  } else {
+    return usage()
+  }
+
+  let policy
+  try {
+    policy = loadPolicy()
+  } catch (err) {
+    console.error(err.message)
+    return 1
+  }
+
+  const result = evaluate(files, policy)
+
+  if (json) {
+    console.log(JSON.stringify(result))
+  } else {
+    for (const m of result.matches) {
+      console.log(`${m.category}  ${m.path}`)
+    }
+    console.log(`files: ${result.file_count}/${result.file_threshold}`)
+    console.log(`escalate: ${result.escalate ? 'yes' : 'no'}`)
+  }
+  return 0
+}
+
+process.exitCode = main()

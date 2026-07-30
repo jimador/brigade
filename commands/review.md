@@ -18,6 +18,11 @@ outside `[a-z0-9]` to a single `-`, trimmed of leading/trailing `-`
 (`feature/Foo_Bar` → `feature-foo-bar`, `123` → `123`,
 `main..feature/x` → `main-feature-x`).
 
+Before building the Workflow args, run `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk"
+--json` over the resolved input's changed files: `--range <mainLine>...<ref>` for branch,
+`--range <ref>` for range, `--files` from `gh pr diff --name-only <n>` for pr (no fetch
+needed yet). If escalate, bump `tier` one level (capped at three-star), note categories.
+
 Acquire coordination key `review-<reviewSlug>` as `claude` before creating the review
 worktree or report. If held, stay read-only and report the holder. Retain the owner token
 and release it on every exit path after Workflow cleanup, including Resolve failures.
