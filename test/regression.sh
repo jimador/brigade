@@ -831,6 +831,43 @@ PY
   [ "$before" = "$after" ] || fail "onboard detect wrote files to the repo"
 }
 
+test_hook_onboard_drift() {
+  fixture="$TMP_ROOT/hook-onboard-drift"
+  plugroot="$TMP_ROOT/hook-onboard-drift-plugroot"
+  mkdir -p "$fixture/.brigade" "$plugroot/.claude-plugin"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "9.9.9" }
+EOF
+
+  # (a) drifted fixture: no onboard.json yet, so the hook auto-applies and reports it.
+  out="$(CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "hook exited $rc on a drifted onboard fixture"
+  printf '%s\n' "$out" | grep -Fq "onboarding upgrade applied" ||
+    fail "hook did not report the onboarding upgrade heading: $out"
+  printf '%s\n' "$out" | grep -Fq "applied" ||
+    fail "hook did not report an applied step: $out"
+  [ -f "$fixture/.brigade/onboard.json" ] ||
+    fail "hook did not converge onboard.json for the drifted fixture"
+
+  # (b) converged fixture: second run stays silent on the upgrade heading (the
+  # board-config pointer line is still allowed since board-config is interactive).
+  out2="$(CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "hook exited $rc on a converged onboard fixture"
+  printf '%s\n' "$out2" | grep -Fq "onboarding upgrade applied" &&
+    fail "hook re-reported the onboarding upgrade heading on a converged fixture: $out2"
+
+  # (c) no .brigade/ dir at all: existing outer gate stays untouched.
+  nobrigade="$TMP_ROOT/hook-onboard-drift-nobrigade"
+  mkdir -p "$nobrigade"
+  out3="$(CLAUDE_PROJECT_DIR="$nobrigade" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "hook exited $rc on a non-brigade fixture"
+  [ -z "$out3" ] || fail "hook produced output in a non-brigade repo: $out3"
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -2195,6 +2232,7 @@ test_config_override_consumer_path
 test_onboard_status
 test_onboard_apply
 test_onboard_detect
+test_hook_onboard_drift
 test_validate_ledger_artifacts
 test_validate_retro_readiness
 test_validate_analyst_modes

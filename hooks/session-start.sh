@@ -42,6 +42,45 @@ if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-config"
   esac
 fi
 
+# Onboarding drift: auto-apply pending mechanical steps; point at /brigade:onboard for the rest.
+if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-onboard" ]; then
+  ONBOARD_STATUS="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-onboard" status --json 2>/dev/null || true)"
+  ONBOARD_DRIFT=0
+  ONBOARD_BOARD_PENDING=0
+  if [ -n "$ONBOARD_STATUS" ]; then
+    ONBOARD_PARSED="$(node -e '
+      let s = "";
+      process.stdin.on("data", (d) => { s += d; });
+      process.stdin.on("end", () => {
+        try {
+          const doc = JSON.parse(s);
+          const steps = Array.isArray(doc.steps) ? doc.steps : [];
+          const boardPending = steps.some((st) => st.id === "board-config" && st.state === "pending");
+          console.log((doc.drift ? "1" : "0") + " " + (boardPending ? "1" : "0"));
+        } catch {
+          console.log("0 0");
+        }
+      });
+    ' <<<"$ONBOARD_STATUS" 2>/dev/null || true)"
+    ONBOARD_DRIFT="$(printf '%s' "$ONBOARD_PARSED" | cut -d' ' -f1)"
+    ONBOARD_BOARD_PENDING="$(printf '%s' "$ONBOARD_PARSED" | cut -d' ' -f2)"
+  fi
+
+  if [ "$ONBOARD_DRIFT" = "1" ]; then
+    ONBOARD_APPLY_OUT="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-onboard" apply 2>&1 || true)"
+    if printf '%s' "$ONBOARD_APPLY_OUT" | grep -q '^applied '; then
+      echo
+      echo "## onboarding upgrade applied"
+      printf '%s\n' "$ONBOARD_APPLY_OUT" | sed 's/^/  /'
+    fi
+  fi
+
+  if [ "$ONBOARD_BOARD_PENDING" = "1" ]; then
+    echo
+    echo "Setup incomplete — run /brigade:onboard to finish board wiring."
+  fi
+fi
+
 # Optional KB heuristics from ~/.brigade/config.json (or repo overlay).
 if command -v jq >/dev/null 2>&1; then
   CFG=""
