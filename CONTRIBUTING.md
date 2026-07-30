@@ -52,6 +52,7 @@ node --check scripts/brigade-coord
 node --check scripts/brigade-subagent-line
 node --check scripts/brigade-onboard
 node --check scripts/brigade-risk
+node --check scripts/brigade-eval
 node --check workflows/config.js
 for f in workflows/src/*.js workflows/brigade-*.js; do node --check "$f" || exit 1; done
 scripts/brigade-bundle --check
@@ -60,6 +61,11 @@ claude plugin validate .claude-plugin/plugin.json
 claude plugin validate .claude-plugin/marketplace.json
 ./test/regression.sh
 ```
+
+**Eval tier (opt-in).** `scripts/brigade-eval` runs prompt evals against skill and agent
+surfaces; it needs `ANTHROPIC_API_KEY` and Node 18+. Run `node scripts/brigade-eval` to try
+it — with no key set it skips cleanly (exit 0). Results land in `.brigade/evals/` and are
+never committed. A full sweep is operator-invoked, not part of the per-commit gate.
 
 `claude plugin validate` is the only check that reads the manifests and every skill,
 command, and agent the way the runtime does. It is how a command whose frontmatter fails

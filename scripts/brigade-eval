@@ -1,0 +1,503 @@
+#!/usr/bin/env node
+// brigade-eval — runs prompt evals against the surfaces the fleet ships (skills and
+// agents): send a case's prompt to the model the surface's file names as its system
+// prompt, then check the response against a handful of assertions — does it contain a
+// phrase, avoid one, match a regex, or satisfy a semantic criterion judged by a second
+// model call. This file is the engine: discovery, validation, assertion evaluation
+// (mechanical and semantic), mock mode, the live API path, and the results file.
+//
+// Usage:
+//   brigade-eval [--json] [--only <case-name>] [--list]
+//
+// Env:
+//   ANTHROPIC_API_KEY   needed for a live run; unset with no mock skips cleanly
+//   BRIGADE_EVAL_MOCK    a directory of canned responses — makes runs hermetic for tests
+//   CLAUDE_PROJECT_DIR   repo root; falls back to cwd
+//   BRIGADE_EVAL_ROOT    overrides both of the above, for tests
+import fs from 'node:fs'
+import path from 'node:path'
+
+function repoRoot() {
+  if (process.env.BRIGADE_EVAL_ROOT) return path.resolve(process.env.BRIGADE_EVAL_ROOT)
+  if (process.env.CLAUDE_PROJECT_DIR) return path.resolve(process.env.CLAUDE_PROJECT_DIR)
+  return process.cwd()
+}
+
+// ---- argv ----
+
+function parseArgs(argv) {
+  const flags = { json: false, list: false, only: null }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--json') flags.json = true
+    else if (arg === '--list') flags.list = true
+    else if (arg === '--only') {
+      const value = argv[i + 1]
+      if (value === undefined) return { error: 'usage: --only requires a case name' }
+      flags.only = value
+      i++
+    } else {
+      return { error: `usage: unrecognized argument "${arg}"` }
+    }
+  }
+  return { flags }
+}
+
+// ---- discovery ----
+
+// Case files live at skills/*/evals.json and agents/evals.json under the repo root —
+// one flat glob plus one fixed path, nothing recursive.
+function discoverCaseFiles(root) {
+  const files = []
+  const skillsDir = path.join(root, 'skills')
+  let skillEntries = []
+  try {
+    skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
+  } catch {
+    skillEntries = []
+  }
+  for (const entry of skillEntries) {
+    if (!entry.isDirectory()) continue
+    const candidate = path.join(skillsDir, entry.name, 'evals.json')
+    if (fs.existsSync(candidate)) files.push(candidate)
+  }
+  const agentsEvals = path.join(root, 'agents', 'evals.json')
+  if (fs.existsSync(agentsEvals)) files.push(agentsEvals)
+  return files.sort()
+}
+
+// ---- validation ----
+
+const ASSERTION_TYPES = new Set(['contains', 'not_contains', 'regex', 'semantic'])
+
+// Validates one case file's shape. Returns { cases } on success or { error } on the
+// first problem found — the error string always names the file and, once it's inside a
+// specific case or assertion, the field that's wrong, so a broken fixture is a one-line
+// fix instead of a guessing game.
+function validateCaseFile(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch (err) {
+    return { error: `${file}: could not read file (${err.message})` }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    return { error: `${file}: invalid JSON (${err.message})` }
+  }
+  if (!Array.isArray(parsed)) {
+    return { error: `${file}: field "<root>" must be a JSON array of cases` }
+  }
+
+  const cases = []
+  for (let i = 0; i < parsed.length; i++) {
+    const c = parsed[i]
+    const where = `${file}: case ${i}`
+    if (typeof c !== 'object' || c === null) return { error: `${where}: field "<case>" must be an object` }
+    if (typeof c.name !== 'string' || c.name.length === 0) {
+      return { error: `${where}: field "name" is required` }
+    }
+    const named = `${where} (${c.name})`
+    if (typeof c.surface !== 'string' || c.surface.length === 0) {
+      return { error: `${named}: field "surface" is required` }
+    }
+    if (typeof c.prompt !== 'string' || c.prompt.length === 0) {
+      return { error: `${named}: field "prompt" is required` }
+    }
+    if (c.model !== undefined && typeof c.model !== 'string') {
+      return { error: `${named}: field "model" must be a string` }
+    }
+    if (c.max_tokens !== undefined && (!Number.isInteger(c.max_tokens) || c.max_tokens <= 0)) {
+      return { error: `${named}: field "max_tokens" must be a positive integer` }
+    }
+    if (!Array.isArray(c.assertions) || c.assertions.length === 0) {
+      return { error: `${named}: field "assertions" must be a non-empty array` }
+    }
+    for (let j = 0; j < c.assertions.length; j++) {
+      const a = c.assertions[j]
+      const awhere = `${named}: assertions[${j}]`
+      if (typeof a !== 'object' || a === null) return { error: `${awhere}: must be an object` }
+      if (!ASSERTION_TYPES.has(a.type)) {
+        return { error: `${awhere}: field "type" must be one of contains, not_contains, regex, semantic` }
+      }
+      if (typeof a.value !== 'string' || a.value.length === 0) {
+        return { error: `${awhere}: field "value" is required` }
+      }
+      if (a.flags !== undefined && typeof a.flags !== 'string') {
+        return { error: `${awhere}: field "flags" must be a string` }
+      }
+      if (a.type === 'regex') {
+        try {
+          // eslint-disable-next-line no-new
+          new RegExp(a.value, a.flags || '')
+        } catch (err) {
+          return { error: `${awhere}: field "value" is not a valid regex (${err.message})` }
+        }
+      }
+    }
+    cases.push({
+      name: c.name,
+      surface: c.surface,
+      model: c.model,
+      prompt: c.prompt,
+      max_tokens: c.max_tokens ?? 4096,
+      assertions: c.assertions.map((a) => ({ type: a.type, value: a.value, flags: a.flags })),
+      file,
+    })
+  }
+  return { cases }
+}
+
+// Discovers every evals.json under the repo root, validates each, and checks case-name
+// uniqueness across the whole set (names have to be unique globally — a case file
+// doesn't get its own namespace). Returns either { cases } or { error }.
+function discoverAndValidate(root) {
+  const files = discoverCaseFiles(root)
+  const allCases = []
+  const seenNames = new Map()
+  for (const file of files) {
+    const result = validateCaseFile(file)
+    if (result.error) return { error: result.error }
+    for (const c of result.cases) {
+      if (seenNames.has(c.name)) {
+        return { error: `${file}: field "name" duplicates "${c.name}" already defined in ${seenNames.get(c.name)}` }
+      }
+      seenNames.set(c.name, file)
+      allCases.push(c)
+    }
+  }
+  return { cases: allCases }
+}
+
+// ---- model resolution ----
+
+// Which production tier a surface runs on, mapped to the model id that grades it the way
+// it actually gets used. A case's own "model" always wins; failing that we read the
+// surface file's frontmatter; failing that, opus (the strictest reasonable default).
+const MODEL_TIER_MAP = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5' }
+const DEFAULT_MODEL = 'claude-opus-5'
+
+// Same shallow frontmatter read brigade-validate uses: first line must be "---", find the
+// closing "---", then look for a "model:" line in between. Returns null (not an error) for
+// anything that doesn't look like frontmatter with a model key — that just falls through
+// to the default.
+function frontmatterModelTier(surfaceText) {
+  const lines = surfaceText.split('\n')
+  if (lines[0] !== '---') return null
+  const end = lines.indexOf('---', 1)
+  if (end < 0) return null
+  const line = lines.slice(1, end).find((l) => l.startsWith('model:'))
+  if (!line) return null
+  return line.slice('model:'.length).trim()
+}
+
+function resolveModel(testCase, surfaceText) {
+  if (testCase.model) return testCase.model
+  const tier = frontmatterModelTier(surfaceText)
+  if (tier && MODEL_TIER_MAP[tier]) return MODEL_TIER_MAP[tier]
+  return DEFAULT_MODEL
+}
+
+function readSurfaceText(root, relPath) {
+  try {
+    return fs.readFileSync(path.join(root, relPath), 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+// ---- live API call ----
+
+const MAX_RETRIES = 2
+const CALL_TIMEOUT_MS = 120000
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function apiHeaders() {
+  return {
+    'x-api-key': process.env.ANTHROPIC_API_KEY,
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json',
+  }
+}
+
+// Response text is the concatenation of every content[] block whose type is "text" — a
+// live reply can carry other block types (tool use, thinking) that this eval ignores.
+function extractText(json) {
+  const blocks = Array.isArray(json && json.content) ? json.content : []
+  return blocks.filter((b) => b && b.type === 'text').map((b) => b.text).join('')
+}
+
+// POSTs one Messages API call with the fleet's retry/timeout rules: 429 waits out
+// retry-after (default 30s), 5xx waits 5s, at most two retries, then it's a call-level
+// error carrying the status and a body snippet. A 120s AbortController guards each attempt
+// individually. Returns { json } on success or { error } — never throws.
+async function callMessagesAPI(body) {
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS)
+    let response
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } catch (err) {
+      clearTimeout(timer)
+      if (err.name === 'AbortError') return { error: 'request timed out after 120s' }
+      return { error: `request failed: ${err.message}` }
+    }
+    clearTimeout(timer)
+
+    if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
+      const waitSec = response.status === 429 ? Number(response.headers.get('retry-after')) || 30 : 5
+      await sleep(waitSec * 1000)
+      continue
+    }
+    if (!response.ok) {
+      const snippet = (await response.text().catch(() => '')).slice(0, 200)
+      return { error: `HTTP ${response.status}: ${snippet}` }
+    }
+    try {
+      return { json: await response.json() }
+    } catch (err) {
+      return { error: `invalid JSON response: ${err.message}` }
+    }
+  }
+}
+
+// ---- subject response (mock or live) ----
+
+// Mock is checked before any fetch construction — a mocked run never touches the network,
+// whatever env vars happen to be set.
+async function getSubjectResponse(testCase, mockDir, surfaceText, resolvedModel) {
+  if (mockDir) {
+    const file = path.join(mockDir, `${testCase.name}.txt`)
+    try {
+      return { text: fs.readFileSync(file, 'utf8') }
+    } catch {
+      return { error: `missing mock response file: ${file}` }
+    }
+  }
+  const result = await callMessagesAPI({
+    model: resolvedModel,
+    max_tokens: testCase.max_tokens,
+    system: surfaceText,
+    messages: [{ role: 'user', content: testCase.prompt }],
+  })
+  if (result.error) return { error: result.error }
+  return { text: extractText(result.json) }
+}
+
+// ---- judge (semantic assertions) ----
+
+function buildJudgePrompt(criterion, subjectText) {
+  return [
+    `You are grading an eval. Criterion:${criterion}`,
+    `Output under evaluation:${subjectText}`,
+    'Reply with ONLY a JSON object: {"pass": true|false, "reasoning": "<one sentence>"}',
+  ].join('\n')
+}
+
+// Exact parsing algorithm the contract specifies — handles bare, fenced, and
+// prose-wrapped judge replies alike: grab the first "{" through the last "}", parse it,
+// and require a boolean "pass". Anything short of that is an error, never a silent pass.
+function parseJudgeReply(text) {
+  const m = text.match(/\{[\s\S]*\}/)
+  if (!m) return { error: true, detail: text }
+  let parsed
+  try {
+    parsed = JSON.parse(m[0])
+  } catch {
+    return { error: true, detail: text }
+  }
+  if (typeof parsed.pass !== 'boolean') return { error: true, detail: text }
+  return { error: false, pass: parsed.pass, reasoning: parsed.reasoning }
+}
+
+// Mock is checked before any fetch construction here too — same canary as the subject
+// side: an absent judge mock file is an assertion-level error, never a fetch attempt.
+async function getJudgeVerdict(criterion, subjectText, mockDir, caseName) {
+  if (mockDir) {
+    const file = path.join(mockDir, `${caseName}.judge.json`)
+    let raw
+    try {
+      raw = fs.readFileSync(file, 'utf8')
+    } catch {
+      return { error: true, detail: `missing mock judge response file: ${file}` }
+    }
+    return parseJudgeReply(raw)
+  }
+  const result = await callMessagesAPI({
+    model: 'claude-haiku-4-5',
+    max_tokens: 512,
+    messages: [{ role: 'user', content: buildJudgePrompt(criterion, subjectText) }],
+  })
+  if (result.error) return { error: true, detail: result.error }
+  return parseJudgeReply(extractText(result.json))
+}
+
+// ---- assertion evaluation ----
+
+// Given an assertion and the subject's response text, decides pass/fail. The mechanical
+// types (contains/not_contains/regex) are pure, no I/O. Semantic needs an actual judge
+// call — mocked or live, per getJudgeVerdict above — so this is async throughout.
+async function evaluateAssertion(assertion, responseText, mockDir, caseName) {
+  const { type, value, flags } = assertion
+  if (type === 'contains') {
+    const pass = responseText.includes(value)
+    return { type, value, pass, detail: pass ? `found "${value}"` : `missing "${value}"`, errored: false }
+  }
+  if (type === 'not_contains') {
+    const pass = !responseText.includes(value)
+    return {
+      type,
+      value,
+      pass,
+      detail: pass ? `absent "${value}" as expected` : `unexpectedly found "${value}"`,
+      errored: false,
+    }
+  }
+  if (type === 'regex') {
+    try {
+      const re = new RegExp(value, flags || '')
+      const pass = re.test(responseText)
+      const label = `/${value}/${flags || ''}`
+      return { type, value, pass, detail: pass ? `matched ${label}` : `no match for ${label}`, errored: false }
+    } catch (err) {
+      return { type, value, pass: false, detail: `invalid regex: ${err.message}`, errored: true }
+    }
+  }
+  // type === 'semantic'
+  const verdict = await getJudgeVerdict(value, responseText, mockDir, caseName)
+  if (verdict.error) {
+    return { type, value, pass: false, detail: verdict.detail, errored: true }
+  }
+  const detail = verdict.reasoning || (verdict.pass ? 'judge: pass' : 'judge: fail')
+  return { type, value, pass: verdict.pass, detail, errored: false }
+}
+
+// ---- run one case ----
+
+// Resolves the model, fetches (or reads the mocked) subject response, then evaluates
+// every assertion against it — mechanical ones locally, semantic ones through the judge.
+async function runCase(testCase, root, mockDir) {
+  const start = Date.now()
+  const surfaceText = readSurfaceText(root, testCase.surface)
+  const resolvedModel = resolveModel(testCase, surfaceText)
+
+  const subject = await getSubjectResponse(testCase, mockDir, surfaceText, resolvedModel)
+  if (subject.error) {
+    return {
+      name: testCase.name,
+      status: 'error',
+      model: resolvedModel,
+      duration_ms: Date.now() - start,
+      assertions: [],
+      detail: subject.error,
+    }
+  }
+
+  const assertions = []
+  for (const a of testCase.assertions) {
+    assertions.push(await evaluateAssertion(a, subject.text, mockDir, testCase.name))
+  }
+  const status = assertions.some((a) => a.errored) ? 'error' : assertions.some((a) => !a.pass) ? 'fail' : 'pass'
+  return {
+    name: testCase.name,
+    status,
+    model: resolvedModel,
+    duration_ms: Date.now() - start,
+    assertions: assertions.map(({ type, value, pass, detail }) => ({ type, value, pass, detail })),
+  }
+}
+
+// ---- results file ----
+
+function compactTimestamp(d) {
+  return d.toISOString().replace(/[-:]/g, '').replace('.', '')
+}
+
+function writeResults(root, summary, cases, now) {
+  const dir = path.join(root, '.brigade', 'evals')
+  fs.mkdirSync(dir, { recursive: true })
+  const doc = { summary, cases }
+  const text = `${JSON.stringify(doc, null, 2)}\n`
+  fs.writeFileSync(path.join(dir, `eval-${compactTimestamp(now)}.json`), text)
+  fs.writeFileSync(path.join(dir, 'latest.json'), text)
+  return path.join(dir, 'latest.json')
+}
+
+// ---- main ----
+
+async function main() {
+  const parsed = parseArgs(process.argv.slice(2))
+  if (parsed.error) {
+    console.error(`brigade-eval: ${parsed.error}`)
+    return 2
+  }
+  const { json, list, only } = parsed.flags
+
+  const mockDir = process.env.BRIGADE_EVAL_MOCK ? path.resolve(process.env.BRIGADE_EVAL_MOCK) : null
+
+  // Checked before discovery: no key and no mock means nothing here can run without
+  // reaching the network, so bail out clean rather than fail loud. --list never touches
+  // the network (it only validates and prints case names), so it's exempt from this skip.
+  if (!list && !process.env.ANTHROPIC_API_KEY && !mockDir) {
+    console.log('brigade-eval: skipped (no ANTHROPIC_API_KEY)')
+    return 0
+  }
+
+  // Live calls need a global fetch (Node 18+). A mocked run never reaches this — the mock
+  // branch is always checked first, for both the subject and judge calls.
+  if (!mockDir && typeof fetch === 'undefined') {
+    console.error('brigade-eval: live evals need Node 18+ (global fetch is not available)')
+    return 2
+  }
+
+  const root = repoRoot()
+  const discovered = discoverAndValidate(root)
+  if (discovered.error) {
+    console.error(`brigade-eval: ${discovered.error}`)
+    return 1
+  }
+  let cases = discovered.cases
+  if (only) cases = cases.filter((c) => c.name === only)
+
+  if (list) {
+    if (json) {
+      console.log(
+        JSON.stringify(cases.map(({ name, surface, model, file }) => ({ name, surface, model: model ?? null, file })))
+      )
+    } else {
+      for (const c of cases) console.log(`${c.name}  ${c.surface}`)
+    }
+    return 0
+  }
+
+  const results = []
+  for (const c of cases) results.push(await runCase(c, root, mockDir))
+  const summary = {
+    pass: results.filter((r) => r.status === 'pass').length,
+    fail: results.filter((r) => r.status === 'fail').length,
+    error: results.filter((r) => r.status === 'error').length,
+  }
+  const resultsPath = writeResults(root, summary, results, new Date())
+
+  if (json) {
+    console.log(JSON.stringify({ summary, cases: results }))
+  } else {
+    for (const r of results) console.log(`${r.status}  ${r.name}${r.detail ? `  (${r.detail})` : ''}`)
+    console.log(`pass=${summary.pass} fail=${summary.fail} error=${summary.error}  ${resultsPath}`)
+  }
+
+  return summary.fail > 0 || summary.error > 0 ? 1 : 0
+}
+
+process.exitCode = await main()

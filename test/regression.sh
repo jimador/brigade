@@ -2350,6 +2350,466 @@ EOF
     fail "brigade-risk gave no stderr message for an invalid-json policy file"
 }
 
+eval_run() { # brigade-eval against a fixture root, mock-mode and keyless — hermetic
+  fixture="$1"
+  shift
+  BRIGADE_EVAL_ROOT="$fixture" BRIGADE_EVAL_MOCK="$fixture/mock" \
+    env -u ANTHROPIC_API_KEY "$ROOT/scripts/brigade-eval" "$@"
+}
+
+test_eval_core() {
+  fixture="$TMP_ROOT/eval-core"
+  mkdir -p "$fixture/skills/x" "$fixture/mock"
+  printf 'A sample skill surface.\n' >"$fixture/skills/x/SKILL.md"
+
+  cat >"$fixture/skills/x/evals.json" <<'EOF'
+[
+  { "name": "pass-case", "surface": "skills/x/SKILL.md", "prompt": "say hello",
+    "assertions": [ {"type":"contains","value":"hello"}, {"type":"regex","value":"h.llo","flags":"i"} ] },
+  { "name": "fail-case", "surface": "skills/x/SKILL.md", "prompt": "avoid the banned word",
+    "assertions": [ {"type":"not_contains","value":"banned"} ] },
+  { "name": "missing-mock-case", "surface": "skills/x/SKILL.md", "prompt": "no mock provided",
+    "assertions": [ {"type":"contains","value":"anything"} ] }
+]
+EOF
+  printf 'Hello there, hello!\n' >"$fixture/mock/pass-case.txt"
+  printf 'This response contains the banned word.\n' >"$fixture/mock/fail-case.txt"
+  # missing-mock-case deliberately has no mock/missing-mock-case.txt
+
+  # (a) contains + regex both pass -> case pass, exit 0.
+  if out="$(eval_run "$fixture" --only pass-case)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] || fail "brigade-eval exited $status for a fully passing case: $out"
+  printf '%s\n' "$out" | grep -Fq "pass  pass-case" ||
+    fail "brigade-eval did not report pass-case as pass: $out"
+
+  # (b) not_contains violated -> fail, exit 1, failing assertion carries pass:false + detail.
+  if out="$(eval_run "$fixture" --only fail-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for a failing case: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval fail-case JSON output was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "fail":
+    raise SystemExit(f"expected status fail, got {case['status']!r}")
+assertion = case["assertions"][0]
+if assertion["pass"] is not False:
+    raise SystemExit(f"expected failing assertion pass:false, got {assertion['pass']!r}")
+if not assertion.get("detail"):
+    raise SystemExit("failing assertion carried no detail message")
+PY
+
+  # (c) missing subject mock file -> error, exit 1, never a network attempt (no key at all
+  # is set anywhere in eval_run, so a network attempt would fail loudly, not quietly).
+  if out="$(eval_run "$fixture" --only missing-mock-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for a case with no mock file: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval did not report missing-mock-case as error"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "error":
+    raise SystemExit(f"expected status error, got {case['status']!r}")
+PY
+
+  # (d) --list on a case file missing "name" -> exit 1, naming the file and the field.
+  invalid_fixture="$TMP_ROOT/eval-invalid"
+  mkdir -p "$invalid_fixture/skills/y" "$invalid_fixture/mock"
+  printf 'A sample skill surface.\n' >"$invalid_fixture/skills/y/SKILL.md"
+  cat >"$invalid_fixture/skills/y/evals.json" <<'EOF'
+[ { "surface": "skills/y/SKILL.md", "prompt": "x", "assertions": [{"type":"contains","value":"x"}] } ]
+EOF
+  stderr_file="$TMP_ROOT/eval-invalid.stderr"
+  if BRIGADE_EVAL_ROOT="$invalid_fixture" BRIGADE_EVAL_MOCK="$invalid_fixture/mock" \
+    env -u ANTHROPIC_API_KEY "$ROOT/scripts/brigade-eval" --list >/dev/null 2>"$stderr_file"; then
+    fail "brigade-eval --list passed a case file missing the name field"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] ||
+    fail "brigade-eval --list returned $status instead of 1 for an invalid case file"
+  grep -Fq "evals.json" "$stderr_file" ||
+    fail "brigade-eval --list error did not name the offending file: $(cat "$stderr_file")"
+  grep -Fq '"name"' "$stderr_file" ||
+    fail "brigade-eval --list error did not name the offending field: $(cat "$stderr_file")"
+
+  # (e) no key and no mock -> clean skip, exit 0. Never reaches discovery.
+  skip_fixture="$TMP_ROOT/eval-skip"
+  mkdir -p "$skip_fixture"
+  out="$(BRIGADE_EVAL_ROOT="$skip_fixture" env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK \
+    "$ROOT/scripts/brigade-eval")"
+  printf '%s\n' "$out" | grep -Fq "skipped" ||
+    fail "brigade-eval no-key output did not mention skipped: $out"
+
+  # (f) full run (all three cases) -> latest.json parses and its summary counts match.
+  if eval_run "$fixture" >/dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for the mixed fixture (expected 1)"
+  python3 - "$fixture/.brigade/evals/latest.json" <<'PY' || fail "brigade-eval latest.json was missing or its summary was wrong"
+import json, sys
+
+doc = json.load(open(sys.argv[1]))
+summary = doc["summary"]
+if summary != {"pass": 1, "fail": 1, "error": 1}:
+    raise SystemExit(f"expected pass=1 fail=1 error=1, got {summary!r}")
+if len(doc["cases"]) != 3:
+    raise SystemExit(f"expected 3 cases in latest.json, got {len(doc['cases'])}")
+PY
+
+  # Engine red-to-green: break pass-case's canned response so its contains assertion now
+  # fails — the case must flip from pass to fail.
+  printf 'Goodbye world, no greeting here.\n' >"$fixture/mock/pass-case.txt"
+  if out="$(eval_run "$fixture" --only pass-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status after breaking pass-case's mock response: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval did not flip pass-case to fail after breaking its mock response"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "fail":
+    raise SystemExit(f"expected status fail after breaking the canned response, got {case['status']!r}")
+PY
+}
+
+test_eval_judge() {
+  fixture="$TMP_ROOT/eval-judge"
+  mkdir -p "$fixture/skills/j" "$fixture/mock"
+
+  # Surface carries model: sonnet frontmatter — cases with no explicit "model" resolve to
+  # claude-sonnet-5; a case's own "model" still overrides it.
+  cat >"$fixture/skills/j/SKILL.md" <<'EOF'
+---
+model: sonnet
+---
+
+A sample skill surface for judge tests.
+EOF
+
+  cat >"$fixture/skills/j/evals.json" <<'EOF'
+[
+  { "name": "judge-pass", "surface": "skills/j/SKILL.md", "prompt": "reply politely",
+    "assertions": [ {"type":"semantic","value":"the response is polite and friendly"} ] },
+  { "name": "judge-fail", "surface": "skills/j/SKILL.md", "prompt": "explain the refund policy",
+    "model": "claude-haiku-4-5",
+    "assertions": [ {"type":"semantic","value":"the response offers a refund"} ] },
+  { "name": "judge-prose", "surface": "skills/j/SKILL.md", "prompt": "say something",
+    "assertions": [ {"type":"semantic","value":"a reasonable answer"} ] },
+  { "name": "judge-invalid", "surface": "skills/j/SKILL.md", "prompt": "say something",
+    "assertions": [ {"type":"semantic","value":"a reasonable answer"} ] },
+  { "name": "judge-absent", "surface": "skills/j/SKILL.md", "prompt": "say something",
+    "assertions": [ {"type":"semantic","value":"a reasonable answer"} ] },
+  { "name": "judge-no-bool-pass", "surface": "skills/j/SKILL.md", "prompt": "say something",
+    "assertions": [ {"type":"semantic","value":"a reasonable answer"} ] }
+]
+EOF
+
+  printf 'Sure, happy to help you today!\n' >"$fixture/mock/judge-pass.txt"
+  printf '{"pass": true, "reasoning": "the tone is polite and friendly"}' >"$fixture/mock/judge-pass.judge.json"
+
+  printf 'Sorry, we do not offer refunds.\n' >"$fixture/mock/judge-fail.txt"
+  printf '{"pass": false, "reasoning": "the response explicitly declines a refund"}' >"$fixture/mock/judge-fail.judge.json"
+
+  printf 'Here is my answer.\n' >"$fixture/mock/judge-prose.txt"
+  printf 'Let me think this through step by step.\n```json\n{"pass": true, "reasoning": "a reasonable answer"}\n```\n' \
+    >"$fixture/mock/judge-prose.judge.json"
+
+  printf 'Here is my answer.\n' >"$fixture/mock/judge-invalid.txt"
+  printf '{"pass": true "reasoning": "missing a comma"}' >"$fixture/mock/judge-invalid.judge.json"
+
+  printf 'Here is my answer.\n' >"$fixture/mock/judge-absent.txt"
+  # judge-absent.judge.json deliberately does not exist.
+
+  printf 'Here is my answer.\n' >"$fixture/mock/judge-no-bool-pass.txt"
+  printf '{"verdict": "ok"}' >"$fixture/mock/judge-no-bool-pass.judge.json"
+
+  # (a) judge mock pass:true -> assertion and case pass; model resolved from frontmatter.
+  if out="$(eval_run "$fixture" --only judge-pass --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] || fail "brigade-eval exited $status for judge-pass: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval judge-pass result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "pass":
+    raise SystemExit(f"expected status pass, got {case['status']!r}")
+if case["model"] != "claude-sonnet-5":
+    raise SystemExit(f"expected model claude-sonnet-5 (from frontmatter), got {case['model']!r}")
+assertion = case["assertions"][0]
+if assertion["pass"] is not True:
+    raise SystemExit(f"expected passing semantic assertion, got {assertion['pass']!r}")
+PY
+
+  # (b) judge mock pass:false + reasoning -> case fails, reasoning surfaces in the
+  # assertion detail; a case-level "model" overrides the frontmatter tier.
+  if out="$(eval_run "$fixture" --only judge-fail --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for judge-fail: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval judge-fail result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "fail":
+    raise SystemExit(f"expected status fail, got {case['status']!r}")
+if case["model"] != "claude-haiku-4-5":
+    raise SystemExit(f"expected case model to override frontmatter, got {case['model']!r}")
+assertion = case["assertions"][0]
+if assertion["pass"] is not False:
+    raise SystemExit(f"expected failing semantic assertion, got {assertion['pass']!r}")
+if "refund" not in assertion["detail"]:
+    raise SystemExit(f"expected judge reasoning in assertion detail, got {assertion['detail']!r}")
+PY
+
+  # (c) prose-then-fenced JSON parses via the exact algorithm (first "{" through last "}").
+  if out="$(eval_run "$fixture" --only judge-prose --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] || fail "brigade-eval exited $status for judge-prose: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval judge-prose result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "pass":
+    raise SystemExit(f"expected status pass for prose-wrapped JSON, got {case['status']!r}")
+PY
+
+  # Unparseable judge reply -> assertion error, never a silent pass, raw text in detail.
+  if out="$(eval_run "$fixture" --only judge-invalid --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for judge-invalid: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval judge-invalid result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "error":
+    raise SystemExit(f"expected status error for unparseable judge JSON, got {case['status']!r}")
+assertion = case["assertions"][0]
+if "missing a comma" not in assertion["detail"]:
+    raise SystemExit(f"expected raw judge text in assertion detail, got {assertion['detail']!r}")
+PY
+
+  # (d) judge-side canary: mock is set but <name>.judge.json is literally absent ->
+  # assertion error, never a fetch attempt (the mock branch is checked first).
+  if out="$(eval_run "$fixture" --only judge-absent --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for judge-absent: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval judge-absent result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "error":
+    raise SystemExit(f"expected status error for an absent judge mock, got {case['status']!r}")
+assertion = case["assertions"][0]
+if "missing mock judge response file" not in assertion["detail"]:
+    raise SystemExit(f"expected the judge-mock-missing detail, got {assertion['detail']!r}")
+PY
+
+  # (e) valid JSON that lacks a boolean "pass" (the third parseJudgeReply failure branch,
+  # distinct from "no {...} found" and "JSON.parse throws") -> assertion error, raw text
+  # in detail, never a silent pass.
+  if out="$(eval_run "$fixture" --only judge-no-bool-pass --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for judge-no-bool-pass: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval judge-no-bool-pass result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "error":
+    raise SystemExit(f"expected status error for valid JSON lacking a boolean pass, got {case['status']!r}")
+assertion = case["assertions"][0]
+if '"verdict"' not in assertion["detail"]:
+    raise SystemExit(f"expected raw judge text in assertion detail, got {assertion['detail']!r}")
+PY
+}
+
+test_eval_seed_cases() {
+  # (a) --list against the real repo root, with BRIGADE_EVAL_ROOT/BRIGADE_EVAL_MOCK/
+  # ANTHROPIC_API_KEY all unset, validates the two seed-case files and prints all six
+  # names. --list is exempt from the no-key/no-mock skip (it makes zero network calls),
+  # so this now works keyless -- the fix this packet owns.
+  list_out="$(cd "$ROOT" && env -u BRIGADE_EVAL_ROOT -u BRIGADE_EVAL_MOCK -u ANTHROPIC_API_KEY \
+    "$ROOT/scripts/brigade-eval" --list --json)" ||
+    fail "brigade-eval --list failed keyless against the real repo root: $list_out"
+  python3 - "$list_out" <<'PY' || fail "brigade-eval --list did not report all six seed cases"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+names = sorted(c["name"] for c in doc)
+expected = sorted([
+    "planner-never-explores",
+    "planner-never-implements",
+    "packet-bar-verify-required",
+    "packet-bar-rejects-vague",
+    "verdict-envelope-shape",
+    "verdict-no-fenced-frontmatter",
+])
+if names != expected:
+    raise SystemExit(f"expected {expected}, got {names}")
+PY
+
+  # (b) every seed case's surface path is a real file in the repo (each case file's own
+  # discovered "surface" resolves under the repo root).
+  python3 - "$ROOT" <<'PY' || fail "one or more seed case surfaces did not exist on disk"
+import json, os, sys
+
+root = sys.argv[1]
+surfaces = set()
+for rel in ("skills/brigade/evals.json", "agents/evals.json"):
+    with open(os.path.join(root, rel)) as f:
+        for c in json.load(f):
+            surfaces.add(c["surface"])
+missing = [s for s in surfaces if not os.path.isfile(os.path.join(root, s))]
+if missing:
+    raise SystemExit(f"missing surface files: {missing}")
+PY
+
+  # (c) run-mode skip is unchanged by the --list exemption: no key, no mock, a non-list
+  # invocation against the real repo root -> still a clean skip, exit 0.
+  runmode_out="$(cd "$ROOT" && env -u BRIGADE_EVAL_ROOT -u BRIGADE_EVAL_MOCK -u ANTHROPIC_API_KEY \
+    "$ROOT/scripts/brigade-eval")" ||
+    fail "brigade-eval run-mode (no key, no mock) exited non-zero: $runmode_out"
+  printf '%s\n' "$runmode_out" | grep -Fq "skipped" ||
+    fail "brigade-eval run-mode (no key, no mock) did not skip cleanly: $runmode_out"
+
+  # (d) seed-level red-to-green, mocked: verdict-no-fenced-frontmatter's real assertions
+  # (not_contains a yaml fence + a semantic bare-frontmatter check) against a clean canned
+  # response with bare --- frontmatter and a passing judge mock -> case passes, exit 0.
+  pass_mock="$TMP_ROOT/seed-mock-pass"
+  mkdir -p "$pass_mock"
+  cat >"$pass_mock/verdict-no-fenced-frontmatter.txt" <<'EOF'
+---
+doc: verdict
+schema: 1
+dish: sample-dish
+item: sample-item
+role: inspector
+model: claude-sonnet-5
+created: 2026-07-30T00:00:00Z
+verdict: PASS
+attempt_reviewed: 1
+reran_gate: true
+findings: []
+trivial_only: true
+---
+
+## Verdict
+
+PASS.
+
+## Findings
+
+None.
+
+## Evidence check
+
+Reran the packet's verify command; output matched the expected pass.
+EOF
+  printf '{"pass": true, "reasoning": "the frontmatter is bare --- delimited, no code fence present"}' \
+    >"$pass_mock/verdict-no-fenced-frontmatter.judge.json"
+
+  if out="$(BRIGADE_EVAL_ROOT="$ROOT" BRIGADE_EVAL_MOCK="$pass_mock" env -u ANTHROPIC_API_KEY \
+    "$ROOT/scripts/brigade-eval" --only verdict-no-fenced-frontmatter --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] || fail "verdict-no-fenced-frontmatter did not pass against a clean mock response: $out"
+  python3 - "$out" <<'PY' || fail "verdict-no-fenced-frontmatter pass-set result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "pass":
+    raise SystemExit(f"expected status pass, got {case['status']!r}")
+PY
+
+  # (e) same case, same real assertions, against a response WITH a yaml-fenced frontmatter
+  # and a failing judge mock -> both the not_contains and semantic assertions fail, exit 1.
+  fail_mock="$TMP_ROOT/seed-mock-fail"
+  mkdir -p "$fail_mock"
+  cat >"$fail_mock/verdict-no-fenced-frontmatter.txt" <<'EOF'
+Here is the verdict document:
+
+```yaml
+doc: verdict
+schema: 1
+dish: sample-dish
+item: sample-item
+role: inspector
+model: claude-sonnet-5
+created: 2026-07-30T00:00:00Z
+verdict: PASS
+attempt_reviewed: 1
+reran_gate: true
+findings: []
+trivial_only: true
+```
+
+## Verdict
+
+PASS.
+EOF
+  printf '{"pass": false, "reasoning": "the frontmatter is wrapped in a yaml code fence, not bare --- delimited"}' \
+    >"$fail_mock/verdict-no-fenced-frontmatter.judge.json"
+
+  if out="$(BRIGADE_EVAL_ROOT="$ROOT" BRIGADE_EVAL_MOCK="$fail_mock" env -u ANTHROPIC_API_KEY \
+    "$ROOT/scripts/brigade-eval" --only verdict-no-fenced-frontmatter --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "verdict-no-fenced-frontmatter did not fail against a fenced-frontmatter mock response: $out"
+  python3 - "$out" <<'PY' || fail "verdict-no-fenced-frontmatter fail-set result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "fail":
+    raise SystemExit(f"expected status fail, got {case['status']!r}")
+PY
+}
+
 test_plugin_manifests_validate
 test_post_cook_validate_hook
 test_coord_watch_transitions
@@ -2386,4 +2846,7 @@ test_inspector_modes
 test_validate_review_report
 test_workflow_smoke
 test_risk_helper
+test_eval_core
+test_eval_judge
+test_eval_seed_cases
 echo "PASS: brigade operational regressions"

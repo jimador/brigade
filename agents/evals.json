@@ -1,0 +1,23 @@
+[
+  {
+    "name": "verdict-envelope-shape",
+    "surface": "agents/brigade-inspector.md",
+    "prompt": "You are reviewing one work item. The diff adds a single null check to one function in a utility file. The work packet's acceptance criteria are: the function returns null instead of throwing on empty input, and a new unit test covers that case. Produce the verdict document for this review.",
+    "max_tokens": 4096,
+    "assertions": [
+      { "type": "regex", "value": "^---", "flags": "m" },
+      { "type": "contains", "value": "doc: verdict" },
+      { "type": "semantic", "value": "the verdict carries a PASS or FAIL ruling and severity-ranked findings with evidence, within the envelope format" }
+    ]
+  },
+  {
+    "name": "verdict-no-fenced-frontmatter",
+    "surface": "skills/brigade/SCHEMAS.md",
+    "prompt": "Produce a minimal verdict artifact for a tiny review scenario: a one-line diff, a work packet with a single acceptance criterion, and a passing verify command. Follow the artifact registry's envelope rules for a verdict document exactly.",
+    "max_tokens": 4096,
+    "assertions": [
+      { "type": "not_contains", "value": "```yaml" },
+      { "type": "semantic", "value": "the frontmatter is bare --- delimited, not wrapped in a code fence" }
+    ]
+  }
+]
