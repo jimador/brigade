@@ -2445,11 +2445,14 @@ EOF
   grep -Fq '"name"' "$stderr_file" ||
     fail "brigade-eval --list error did not name the offending field: $(cat "$stderr_file")"
 
-  # (e) no key and no mock -> clean skip, exit 0. Never reaches discovery.
+  # (e) no key, no mock, no claude CLI -> clean skip, exit 0. Never reaches discovery.
+  # BRIGADE_EVAL_CLAUDE pins the cli lookup to a path that doesn't exist so this stays
+  # hermetic regardless of whether the machine running the suite happens to have a real
+  # `claude` on PATH.
   skip_fixture="$TMP_ROOT/eval-skip"
   mkdir -p "$skip_fixture"
-  out="$(BRIGADE_EVAL_ROOT="$skip_fixture" env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK \
-    "$ROOT/scripts/brigade-eval")"
+  out="$(BRIGADE_EVAL_ROOT="$skip_fixture" BRIGADE_EVAL_CLAUDE="$TMP_ROOT/no-such-claude" \
+    env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK "$ROOT/scripts/brigade-eval")"
   printf '%s\n' "$out" | grep -Fq "skipped" ||
     fail "brigade-eval no-key output did not mention skipped: $out"
 
@@ -2704,9 +2707,12 @@ if missing:
     raise SystemExit(f"missing surface files: {missing}")
 PY
 
-  # (c) run-mode skip is unchanged by the --list exemption: no key, no mock, a non-list
-  # invocation against the real repo root -> still a clean skip, exit 0.
-  runmode_out="$(cd "$ROOT" && env -u BRIGADE_EVAL_ROOT -u BRIGADE_EVAL_MOCK -u ANTHROPIC_API_KEY \
+  # (c) run-mode skip is unchanged by the --list exemption: no key, no mock, no claude CLI,
+  # a non-list invocation against the real repo root -> still a clean skip, exit 0.
+  # BRIGADE_EVAL_CLAUDE pins the lookup to a nonexistent path so this stays hermetic even
+  # though the machine running the suite may have a real `claude` on PATH.
+  runmode_out="$(cd "$ROOT" && BRIGADE_EVAL_CLAUDE="$TMP_ROOT/no-such-claude" \
+    env -u BRIGADE_EVAL_ROOT -u BRIGADE_EVAL_MOCK -u ANTHROPIC_API_KEY \
     "$ROOT/scripts/brigade-eval")" ||
     fail "brigade-eval run-mode (no key, no mock) exited non-zero: $runmode_out"
   printf '%s\n' "$runmode_out" | grep -Fq "skipped" ||
@@ -2810,6 +2816,183 @@ if case["status"] != "fail":
 PY
 }
 
+# Writes a fake `claude` executable: it logs its argv (one line, space-joined) to
+# $log_file, touches $sentinel_file (proves it was actually spawned), then prints one of
+# two canned JSON replies on stdout — the judge one ($judge_reply_file) when its own last
+# argv (the prompt) is a judge prompt (buildJudgePrompt always opens with "You are grading
+# an eval."), the subject one ($subject_reply_file) otherwise. Hermetic stand-in for the
+# real CLI — the fixture never puts anything claude-shaped on PATH, it's always selected
+# via BRIGADE_EVAL_CLAUDE.
+write_fake_claude() {
+  bin_path="$1"
+  log_file="$2"
+  sentinel_file="$3"
+  subject_reply_file="$4"
+  judge_reply_file="$5"
+  cat >"$bin_path" <<EOF
+#!/bin/bash
+echo "\$@" >>"$log_file"
+: >"$sentinel_file"
+last="\${@: -1}"
+case "\$last" in
+  "You are grading an eval."*)
+    cat "$judge_reply_file"
+    ;;
+  *)
+    cat "$subject_reply_file"
+    ;;
+esac
+EOF
+  chmod +x "$bin_path"
+}
+
+test_eval_cli_backend() {
+  fixture="$TMP_ROOT/eval-cli"
+  mkdir -p "$fixture/skills/x" "$fixture/bin"
+  printf 'A sample skill surface.\n' >"$fixture/skills/x/SKILL.md"
+  cat >"$fixture/skills/x/evals.json" <<'EOF'
+[
+  { "name": "cli-case", "surface": "skills/x/SKILL.md", "prompt": "say hello",
+    "assertions": [ {"type":"contains","value":"hello"}, {"type":"semantic","value":"is friendly"} ] }
+]
+EOF
+
+  # (a) keyless + fake claude (subject and judge both go through it, distinguished by
+  # prompt) -> case passes via cli; latest.json records backend "cli"; the fake's argv log
+  # shows the judge call used --model haiku and --output-format json.
+  log_file="$fixture/argv.log"
+  sentinel_file="$fixture/spawned"
+  subject_reply="$fixture/subject-reply.json"
+  judge_reply="$fixture/judge-reply.json"
+  printf '%s' '{"is_error":false,"result":"hello there, friend"}' >"$subject_reply"
+  printf '%s' '{"is_error":false,"result":"{\"pass\": true, \"reasoning\": \"friendly enough\"}"}' >"$judge_reply"
+  write_fake_claude "$fixture/bin/fake-claude" "$log_file" "$sentinel_file" "$subject_reply" "$judge_reply"
+  if out="$(BRIGADE_EVAL_ROOT="$fixture" BRIGADE_EVAL_CLAUDE="$fixture/bin/fake-claude" \
+    env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK "$ROOT/scripts/brigade-eval" --only cli-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] || fail "brigade-eval exited $status for a passing cli-backend case: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval cli-case result was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "pass":
+    raise SystemExit(f"expected status pass, got {case['status']!r}")
+if case["backend"] != "cli":
+    raise SystemExit(f"expected backend cli, got {case['backend']!r}")
+PY
+  latest="$fixture/.brigade/evals/latest.json"
+  [ -f "$latest" ] || fail "brigade-eval cli-case did not write latest.json"
+  grep -Fq '"backend": "cli"' "$latest" ||
+    fail "latest.json did not record backend cli: $(cat "$latest")"
+  grep -Fq -- "--model haiku" "$log_file" ||
+    fail "fake claude argv log did not show the judge call's --model haiku: $(cat "$log_file")"
+  grep -Fq -- "--output-format json" "$log_file" ||
+    fail "fake claude argv log did not show --output-format json: $(cat "$log_file")"
+
+  # (b) fake returns is_error:true -> case errors, exit 1. The subject call errors before
+  # the judge is ever reached, so only the subject reply matters here.
+  rm -f "$sentinel_file" "$log_file"
+  printf '%s' '{"is_error":true,"result":""}' >"$subject_reply"
+  write_fake_claude "$fixture/bin/fake-claude" "$log_file" "$sentinel_file" "$subject_reply" "$judge_reply"
+  if out="$(BRIGADE_EVAL_ROOT="$fixture" BRIGADE_EVAL_CLAUDE="$fixture/bin/fake-claude" \
+    env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK "$ROOT/scripts/brigade-eval" --only cli-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for an is_error:true cli reply: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval did not report the is_error:true reply as error"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "error":
+    raise SystemExit(f"expected status error, got {case['status']!r}")
+PY
+
+  # (c) fake prints invalid JSON -> case errors.
+  rm -f "$sentinel_file" "$log_file"
+  printf '%s' 'not json at all' >"$subject_reply"
+  write_fake_claude "$fixture/bin/fake-claude" "$log_file" "$sentinel_file" "$subject_reply" "$judge_reply"
+  if out="$(BRIGADE_EVAL_ROOT="$fixture" BRIGADE_EVAL_CLAUDE="$fixture/bin/fake-claude" \
+    env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK "$ROOT/scripts/brigade-eval" --only cli-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "brigade-eval exited $status for unparseable cli stdout: $out"
+  python3 - "$out" <<'PY' || fail "brigade-eval did not report unparseable cli stdout as error"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["status"] != "error":
+    raise SystemExit(f"expected status error, got {case['status']!r}")
+PY
+
+  # (d) keyless + BRIGADE_EVAL_CLAUDE pointing at a nonexistent binary -> skip line, exit 0.
+  out="$(BRIGADE_EVAL_ROOT="$fixture" BRIGADE_EVAL_CLAUDE="$fixture/bin/no-such-claude" \
+    env -u ANTHROPIC_API_KEY -u BRIGADE_EVAL_MOCK "$ROOT/scripts/brigade-eval")"
+  status=$?
+  [ "$status" -eq 0 ] || fail "brigade-eval exited $status when claude CLI did not resolve: $out"
+  printf '%s\n' "$out" | grep -Fq "skipped" ||
+    fail "brigade-eval did not skip cleanly when claude CLI did not resolve: $out"
+
+  # (e) mock mode with the sentinel-writing fake configured -> mock still wins, no spawn.
+  rm -f "$sentinel_file" "$log_file"
+  printf '%s' '{"is_error":false,"result":"hello there"}' >"$subject_reply"
+  write_fake_claude "$fixture/bin/fake-claude" "$log_file" "$sentinel_file" "$subject_reply" "$judge_reply"
+  mkdir -p "$fixture/mock"
+  printf 'Hello there, hello!\n' >"$fixture/mock/cli-case.txt"
+  printf '{"pass": true, "reasoning": "friendly enough"}' >"$fixture/mock/cli-case.judge.json"
+  if out="$(BRIGADE_EVAL_ROOT="$fixture" BRIGADE_EVAL_MOCK="$fixture/mock" \
+    BRIGADE_EVAL_CLAUDE="$fixture/bin/fake-claude" \
+    env -u ANTHROPIC_API_KEY "$ROOT/scripts/brigade-eval" --only cli-case --json)"; then
+    status=0
+  else
+    status=$?
+  fi
+  python3 - "$out" <<'PY' || fail "brigade-eval mock-mode result under a configured fake claude was wrong"
+import json, sys
+
+doc = json.loads(sys.argv[1])
+case = doc["cases"][0]
+if case["backend"] != "mock":
+    raise SystemExit(f"expected backend mock, got {case['backend']!r}")
+PY
+  if [ -f "$sentinel_file" ]; then
+    fail "mock mode spawned the fake claude (sentinel present)"
+  fi
+
+  # (f) selection precedence: a dummy ANTHROPIC_API_KEY plus a configured fake claude ->
+  # the fake is never invoked (sentinel absent) and the recorded backend is not cli. The
+  # api-path call itself has nothing real to talk to and may error — that's fine and not
+  # asserted here; only the two selection facts are.
+  rm -f "$sentinel_file" "$log_file"
+  printf '%s' '{"is_error":false,"result":"hello there"}' >"$subject_reply"
+  write_fake_claude "$fixture/bin/fake-claude" "$log_file" "$sentinel_file" "$subject_reply" "$judge_reply"
+  api_fixture="$TMP_ROOT/eval-cli-api-precedence"
+  mkdir -p "$api_fixture/skills/x"
+  printf 'A sample skill surface.\n' >"$api_fixture/skills/x/SKILL.md"
+  cat >"$api_fixture/skills/x/evals.json" <<'EOF'
+[ { "name": "api-precedence-case", "surface": "skills/x/SKILL.md", "prompt": "say hello",
+    "assertions": [ {"type":"contains","value":"hello"} ] } ]
+EOF
+  out="$(BRIGADE_EVAL_ROOT="$api_fixture" BRIGADE_EVAL_CLAUDE="$fixture/bin/fake-claude" \
+    ANTHROPIC_API_KEY="dummy-test-key-not-real" \
+    env -u BRIGADE_EVAL_MOCK "$ROOT/scripts/brigade-eval" --only api-precedence-case --json)" || true
+  if [ -f "$sentinel_file" ]; then
+    fail "api-key selection still invoked the fake claude (sentinel present)"
+  fi
+  if printf '%s\n' "$out" | grep -Fq '"backend": "cli"'; then
+    fail "api-key selection recorded backend cli: $out"
+  fi
+}
+
 test_plugin_manifests_validate
 test_post_cook_validate_hook
 test_coord_watch_transitions
@@ -2849,4 +3032,5 @@ test_risk_helper
 test_eval_core
 test_eval_judge
 test_eval_seed_cases
+test_eval_cli_backend
 echo "PASS: brigade operational regressions"

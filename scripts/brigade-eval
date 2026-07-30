@@ -10,12 +10,19 @@
 //   brigade-eval [--json] [--only <case-name>] [--list]
 //
 // Env:
-//   ANTHROPIC_API_KEY   needed for a live run; unset with no mock skips cleanly
-//   BRIGADE_EVAL_MOCK    a directory of canned responses — makes runs hermetic for tests
+//   ANTHROPIC_API_KEY   set -> calls go straight to the Messages API
+//   BRIGADE_EVAL_MOCK    a directory of canned responses — makes runs hermetic for tests;
+//                        wins over everything else below
+//   BRIGADE_EVAL_CLAUDE  overrides the `claude` binary path for the CLI fallback backend
+//                        (tests point this at a fake); unset means "look up `claude` on PATH"
 //   CLAUDE_PROJECT_DIR   repo root; falls back to cwd
 //   BRIGADE_EVAL_ROOT    overrides both of the above, for tests
+//
+// Backend, picked once at startup: BRIGADE_EVAL_MOCK -> mock, else ANTHROPIC_API_KEY -> api,
+// else a resolvable `claude` binary -> cli (headless `claude -p`), else skip cleanly.
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
 
 function repoRoot() {
   if (process.env.BRIGADE_EVAL_ROOT) return path.resolve(process.env.BRIGADE_EVAL_ROOT)
@@ -272,18 +279,128 @@ async function callMessagesAPI(body) {
   }
 }
 
-// ---- subject response (mock or live) ----
+// ---- backend selection ----
 
-// Mock is checked before any fetch construction — a mocked run never touches the network,
-// whatever env vars happen to be set.
-async function getSubjectResponse(testCase, mockDir, surfaceText, resolvedModel) {
-  if (mockDir) {
+// Which `claude` binary a cli-backend call should spawn — BRIGADE_EVAL_CLAUDE, when set, is
+// the literal path (tests point it at a fake, or at a nonexistent path to force a skip);
+// otherwise the plain name is looked up across PATH by hand (no shell, so no `command -v`).
+// Returns the resolved path, or null when nothing executable was found.
+function resolveClaudeBinary() {
+  const override = process.env.BRIGADE_EVAL_CLAUDE
+  if (override) {
+    try {
+      fs.accessSync(override, fs.constants.X_OK)
+      return override
+    } catch {
+      return null
+    }
+  }
+  const dirs = (process.env.PATH || '').split(path.delimiter)
+  for (const dir of dirs) {
+    if (!dir) continue
+    const candidate = path.join(dir, 'claude')
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK)
+      return candidate
+    } catch {
+      // keep looking
+    }
+  }
+  return null
+}
+
+// Picked once at startup, in this order: mock (hermetic tests) -> api (a live key) -> cli
+// (headless `claude -p`, keyless) -> skip. Each later check is only performed once the
+// earlier ones have ruled themselves out, so e.g. an API key present means the `claude`
+// binary is never even looked up.
+function resolveBackend(mockDir) {
+  if (mockDir) return { backend: 'mock', cliBinary: null }
+  if (process.env.ANTHROPIC_API_KEY) return { backend: 'api', cliBinary: null }
+  const cliBinary = resolveClaudeBinary()
+  if (cliBinary) return { backend: 'cli', cliBinary }
+  return { backend: 'skip', cliBinary: null }
+}
+
+// ---- cli transport (headless `claude -p`) ----
+
+const CLI_MODEL_ALIAS = {
+  'claude-haiku-4-5': 'haiku',
+  'claude-sonnet-5': 'sonnet',
+  'claude-opus-5': 'opus',
+}
+
+// A case's own custom model id (not one of the three production tiers) passes straight
+// through — only the tier ids need translating to the alias the CLI accepts.
+function cliModelAlias(resolvedModel) {
+  return CLI_MODEL_ALIAS[resolvedModel] || resolvedModel
+}
+
+// One headless `claude -p` call. argv is always an array (execFile, no shell) so newlines,
+// quotes, and backticks in system prompts or user prompts travel as literal bytes, never
+// shell syntax. Never throws: is_error:true, a non-zero exit, or stdout that isn't the
+// single JSON object the CLI promises are all surfaced as { error } with a snippet of what
+// actually came back, never a silent pass.
+function runClaudeCli(binary, { model, systemPrompt, prompt }) {
+  return new Promise((resolve) => {
+    execFile(
+      binary,
+      [
+        '-p',
+        '--model', model,
+        '--system-prompt', systemPrompt,
+        '--tools', '',
+        '--no-session-persistence',
+        '--setting-sources', '',
+        '--output-format', 'json',
+        prompt,
+      ],
+      { timeout: CALL_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const snippet = (stderr || stdout || err.message || '').toString().slice(0, 200)
+          resolve({ error: `claude cli exited with an error: ${snippet}` })
+          return
+        }
+        let parsed
+        try {
+          parsed = JSON.parse(stdout)
+        } catch (parseErr) {
+          resolve({ error: `claude cli printed unparseable stdout: ${stdout.slice(0, 200)}` })
+          return
+        }
+        if (parsed.is_error) {
+          resolve({ error: `claude cli reported is_error: ${JSON.stringify(parsed).slice(0, 200)}` })
+          return
+        }
+        if (typeof parsed.result !== 'string') {
+          resolve({ error: `claude cli response had no "result" string: ${stdout.slice(0, 200)}` })
+          return
+        }
+        resolve({ text: parsed.result })
+      }
+    )
+  })
+}
+
+// ---- subject response (mock, api, or cli) ----
+
+// Mock is checked before any fetch/spawn construction — a mocked run never touches the
+// network or a subprocess, whatever env vars happen to be set.
+async function getSubjectResponse(testCase, backend, mockDir, cliBinary, surfaceText, resolvedModel) {
+  if (backend === 'mock') {
     const file = path.join(mockDir, `${testCase.name}.txt`)
     try {
       return { text: fs.readFileSync(file, 'utf8') }
     } catch {
       return { error: `missing mock response file: ${file}` }
     }
+  }
+  if (backend === 'cli') {
+    return runClaudeCli(cliBinary, {
+      model: cliModelAlias(resolvedModel),
+      systemPrompt: surfaceText,
+      prompt: testCase.prompt,
+    })
   }
   const result = await callMessagesAPI({
     model: resolvedModel,
@@ -321,10 +438,10 @@ function parseJudgeReply(text) {
   return { error: false, pass: parsed.pass, reasoning: parsed.reasoning }
 }
 
-// Mock is checked before any fetch construction here too — same canary as the subject
-// side: an absent judge mock file is an assertion-level error, never a fetch attempt.
-async function getJudgeVerdict(criterion, subjectText, mockDir, caseName) {
-  if (mockDir) {
+// Mock is checked before any fetch/spawn construction here too — same canary as the subject
+// side: an absent judge mock file is an assertion-level error, never a live attempt.
+async function getJudgeVerdict(criterion, subjectText, backend, mockDir, cliBinary, caseName) {
+  if (backend === 'mock') {
     const file = path.join(mockDir, `${caseName}.judge.json`)
     let raw
     try {
@@ -333,6 +450,15 @@ async function getJudgeVerdict(criterion, subjectText, mockDir, caseName) {
       return { error: true, detail: `missing mock judge response file: ${file}` }
     }
     return parseJudgeReply(raw)
+  }
+  if (backend === 'cli') {
+    const result = await runClaudeCli(cliBinary, {
+      model: cliModelAlias('claude-haiku-4-5'),
+      systemPrompt: '',
+      prompt: buildJudgePrompt(criterion, subjectText),
+    })
+    if (result.error) return { error: true, detail: result.error }
+    return parseJudgeReply(result.text)
   }
   const result = await callMessagesAPI({
     model: 'claude-haiku-4-5',
@@ -348,7 +474,7 @@ async function getJudgeVerdict(criterion, subjectText, mockDir, caseName) {
 // Given an assertion and the subject's response text, decides pass/fail. The mechanical
 // types (contains/not_contains/regex) are pure, no I/O. Semantic needs an actual judge
 // call — mocked or live, per getJudgeVerdict above — so this is async throughout.
-async function evaluateAssertion(assertion, responseText, mockDir, caseName) {
+async function evaluateAssertion(assertion, responseText, backend, mockDir, cliBinary, caseName) {
   const { type, value, flags } = assertion
   if (type === 'contains') {
     const pass = responseText.includes(value)
@@ -375,7 +501,7 @@ async function evaluateAssertion(assertion, responseText, mockDir, caseName) {
     }
   }
   // type === 'semantic'
-  const verdict = await getJudgeVerdict(value, responseText, mockDir, caseName)
+  const verdict = await getJudgeVerdict(value, responseText, backend, mockDir, cliBinary, caseName)
   if (verdict.error) {
     return { type, value, pass: false, detail: verdict.detail, errored: true }
   }
@@ -385,19 +511,21 @@ async function evaluateAssertion(assertion, responseText, mockDir, caseName) {
 
 // ---- run one case ----
 
-// Resolves the model, fetches (or reads the mocked) subject response, then evaluates
-// every assertion against it — mechanical ones locally, semantic ones through the judge.
-async function runCase(testCase, root, mockDir) {
+// Resolves the model, fetches (or reads the mocked, or spawns the cli) subject response,
+// then evaluates every assertion against it — mechanical ones locally, semantic ones
+// through the judge.
+async function runCase(testCase, root, backend, mockDir, cliBinary) {
   const start = Date.now()
   const surfaceText = readSurfaceText(root, testCase.surface)
   const resolvedModel = resolveModel(testCase, surfaceText)
 
-  const subject = await getSubjectResponse(testCase, mockDir, surfaceText, resolvedModel)
+  const subject = await getSubjectResponse(testCase, backend, mockDir, cliBinary, surfaceText, resolvedModel)
   if (subject.error) {
     return {
       name: testCase.name,
       status: 'error',
       model: resolvedModel,
+      backend,
       duration_ms: Date.now() - start,
       assertions: [],
       detail: subject.error,
@@ -406,13 +534,14 @@ async function runCase(testCase, root, mockDir) {
 
   const assertions = []
   for (const a of testCase.assertions) {
-    assertions.push(await evaluateAssertion(a, subject.text, mockDir, testCase.name))
+    assertions.push(await evaluateAssertion(a, subject.text, backend, mockDir, cliBinary, testCase.name))
   }
   const status = assertions.some((a) => a.errored) ? 'error' : assertions.some((a) => !a.pass) ? 'fail' : 'pass'
   return {
     name: testCase.name,
     status,
     model: resolvedModel,
+    backend,
     duration_ms: Date.now() - start,
     assertions: assertions.map(({ type, value, pass, detail }) => ({ type, value, pass, detail })),
   }
@@ -445,18 +574,20 @@ async function main() {
   const { json, list, only } = parsed.flags
 
   const mockDir = process.env.BRIGADE_EVAL_MOCK ? path.resolve(process.env.BRIGADE_EVAL_MOCK) : null
+  const { backend, cliBinary } = resolveBackend(mockDir)
 
-  // Checked before discovery: no key and no mock means nothing here can run without
-  // reaching the network, so bail out clean rather than fail loud. --list never touches
-  // the network (it only validates and prints case names), so it's exempt from this skip.
-  if (!list && !process.env.ANTHROPIC_API_KEY && !mockDir) {
-    console.log('brigade-eval: skipped (no ANTHROPIC_API_KEY)')
+  // Checked before discovery: no key, no mock, and no `claude` on PATH means nothing here
+  // can run without reaching the network or a subprocess, so bail out clean rather than
+  // fail loud. --list never touches either (it only validates and prints case names), so
+  // it's exempt from this skip.
+  if (!list && backend === 'skip') {
+    console.log('brigade-eval: skipped (no ANTHROPIC_API_KEY and no claude CLI)')
     return 0
   }
 
-  // Live calls need a global fetch (Node 18+). A mocked run never reaches this — the mock
-  // branch is always checked first, for both the subject and judge calls.
-  if (!mockDir && typeof fetch === 'undefined') {
+  // Live API calls need a global fetch (Node 18+). Mock never reaches this (checked first,
+  // above) and cli spawns a subprocess instead of fetching, so this only guards the api path.
+  if (backend === 'api' && typeof fetch === 'undefined') {
     console.error('brigade-eval: live evals need Node 18+ (global fetch is not available)')
     return 2
   }
@@ -482,7 +613,7 @@ async function main() {
   }
 
   const results = []
-  for (const c of cases) results.push(await runCase(c, root, mockDir))
+  for (const c of cases) results.push(await runCase(c, root, backend, mockDir, cliBinary))
   const summary = {
     pass: results.filter((r) => r.status === 'pass').length,
     fail: results.filter((r) => r.status === 'fail').length,

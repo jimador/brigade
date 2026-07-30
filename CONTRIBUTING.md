@@ -63,9 +63,11 @@ claude plugin validate .claude-plugin/marketplace.json
 ```
 
 **Eval tier (opt-in).** `scripts/brigade-eval` runs prompt evals against skill and agent
-surfaces; it needs `ANTHROPIC_API_KEY` and Node 18+. Run `node scripts/brigade-eval` to try
-it — with no key set it skips cleanly (exit 0). Results land in `.brigade/evals/` and are
-never committed. A full sweep is operator-invoked, not part of the per-commit gate.
+surfaces; it needs either `ANTHROPIC_API_KEY` or an authenticated Claude Code CLI (`claude`
+on PATH) and Node 18+. Run `node scripts/brigade-eval` to try it — with neither a key nor
+the CLI available it skips cleanly (exit 0) and prints `brigade-eval: skipped (no
+ANTHROPIC_API_KEY and no claude CLI)`. Results land in `.brigade/evals/` and are never
+committed. A full sweep is operator-invoked, not part of the per-commit gate.
 
 `claude plugin validate` is the only check that reads the manifests and every skill,
 command, and agent the way the runtime does. It is how a command whose frontmatter fails
