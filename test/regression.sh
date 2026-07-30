@@ -2083,6 +2083,222 @@ PY
   BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" release shared "$owner_b" >/dev/null
 }
 
+test_coord_preflight() {
+  fixture="$TMP_ROOT/coord-preflight"
+  mkdir -p "$fixture"
+  git -C "$fixture" init -q
+  git -C "$fixture" config user.email "test@example.com"
+  git -C "$fixture" config user.name "Test"
+  echo "seed" >"$fixture/seed.txt"
+  git -C "$fixture" add seed.txt
+  git -C "$fixture" commit -q -m seed
+
+  mkdir -p "$fixture/.brigade/dishes/this-dish" "$fixture/.brigade/dishes/other-dish"
+  cat >"$fixture/.brigade/dishes/this-dish/PLAN.md" <<'EOF'
+---
+doc: plan
+items:
+  - slug: main
+    status: todo
+    files: [a.ts, b.ts]
+---
+EOF
+
+  # write_quiet_other_plan sets other-dish's items to all-done (never a file-overlap
+  # source) so later checks (local/remote-branch, gh, delivery-branch) run without
+  # file-overlap noise; $1 is an extra frontmatter line (e.g. delivery_branch), or ''.
+  write_quiet_other_plan() {
+    cat >"$fixture/.brigade/dishes/other-dish/PLAN.md" <<EOF
+---
+doc: plan
+$1
+items:
+  - slug: x
+    status: done
+    files: [a.ts]
+  - slug: y
+    status: done
+    files: [b.ts, c.ts]
+---
+EOF
+  }
+
+  # Other dish's item x is done (excluded), y overlaps on b.ts, and z is the
+  # zip-misalignment trap: its attempts list is interleaved BEFORE status, and it has no
+  # files field at all. z sits BETWEEN x and y (not last) on purpose — a naive
+  # implementation that reads "all statuses" and "all files" as two flat, independently
+  # queried arrays and zips them by position would see 3 statuses (x, y, z) but only 2
+  # files entries (x, y — z has none), so from z onward every index is off by one: it
+  # would hand y's real files to z and lose y's overlap entirely. Only per-entry parsing
+  # (each `- ` block's own status and files read together) gets y's conflict right here.
+  cat >"$fixture/.brigade/dishes/other-dish/PLAN.md" <<'EOF'
+---
+doc: plan
+items:
+  - slug: x
+    status: done
+    files: [a.ts]
+  - slug: z
+    attempts: [{ model: sonnet, trigger: fail-retry, result: failed },
+               { model: opus, trigger: escalation, result: done }]
+    status: todo
+  - slug: y
+    status: todo
+    files: [b.ts, c.ts]
+---
+EOF
+
+  # (a) file-overlap conflict, exit 1; only y's overlap surfaces; own dish never scanned.
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-a --json)"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "preflight file-overlap did not exit 1: $out"
+  python3 - "$out" <<'PY' || fail "preflight file-overlap detail was wrong"
+import json, sys
+doc = json.loads(sys.argv[1])
+overlaps = [c for c in doc["conflicts"] if c["kind"] == "file-overlap"]
+if len(overlaps) != 1:
+    raise SystemExit(f"expected exactly one file-overlap conflict, got {doc['conflicts']!r}")
+detail = overlaps[0]["detail"]
+if detail["other_dish"] != "other-dish" or detail["item"] != "y" or detail["files"] != ["b.ts"]:
+    raise SystemExit(f"wrong file-overlap detail (done item or files-less item leaked?): {detail!r}")
+if detail["other_dish"] == "this-dish":
+    raise SystemExit("own dish was not excluded from the file-overlap scan")
+PY
+
+  # (b) the overlapping item flips to done -> no file-overlap conflict, ok, exit 0.
+  write_quiet_other_plan ""
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-b --json)"
+  python3 - "$out" <<'PY' || fail "preflight should clear once the overlapping item went done"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["ok"] is not True or doc["conflicts"] != []:
+    raise SystemExit(f"expected ok with no conflicts, got {doc!r}")
+PY
+
+  # (c) local-branch conflict.
+  git -C "$fixture" branch feat/preflight-c
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-c --json)"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "preflight local-branch did not exit 1: $out"
+  printf '%s\n' "$out" | grep -Fq '"kind": "local-branch"' ||
+    fail "preflight local-branch conflict missing: $out"
+  git -C "$fixture" branch -D feat/preflight-c
+
+  # (e) no origin remote at all -> remote-branch and open-pr are UNCHECKED with reasons,
+  # never silently ok; unchecked alone does not fail the run. Text mode covered here too.
+  out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-e --json)"
+  python3 - "$out" <<'PY' || fail "preflight no-origin unchecked entries missing/wrong"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["conflicts"] != []:
+    raise SystemExit(f"expected no conflicts, got {doc['conflicts']!r}")
+kinds = {u["kind"] for u in doc["unchecked"]}
+if not {"remote-branch", "open-pr"} <= kinds:
+    raise SystemExit(f"expected remote-branch and open-pr unchecked, got {doc['unchecked']!r}")
+for u in doc["unchecked"]:
+    if not u.get("reason"):
+        raise SystemExit(f"unchecked entry missing reason: {u!r}")
+PY
+  text="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-e)"
+  printf '%s\n' "$text" | grep -Fq "unchecked: remote-branch" ||
+    fail "preflight text mode missing unchecked remote-branch line: $text"
+  printf '%s\n' "$text" | grep -Fq "preflight: ok" ||
+    fail "preflight text mode did not report ok with only unchecked entries: $text"
+
+  # (d) remote-branch: a real file:// bare remote with the branch pushed conflicts; the
+  # same remote without the branch does not. Once origin exists the open-pr check also
+  # fires as a side effect; point BRIGADE_COORD_GH at a nonexistent binary (same as (f)'s
+  # unresolvable-gh case) so this block never shells out to whatever real `gh` happens to
+  # be on the developer's or CI's PATH — it stays hermetic like (f) already is.
+  bin="$TMP_ROOT/coord-preflight-bin"
+  mkdir -p "$bin"
+  no_gh="$bin/does-not-exist"
+  bare="$TMP_ROOT/coord-preflight-bare.git"
+  git init -q --bare "$bare"
+  git -C "$fixture" remote add origin "file://$bare"
+  git -C "$fixture" push -q origin HEAD:refs/heads/main
+  git -C "$fixture" push -q origin HEAD:refs/heads/feat/preflight-d-pushed
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" BRIGADE_COORD_GH="$no_gh" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-d-pushed --json)"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "preflight remote-branch did not exit 1: $out"
+  printf '%s\n' "$out" | grep -Fq '"kind": "remote-branch"' ||
+    fail "preflight remote-branch conflict missing: $out"
+  out="$(BRIGADE_PROJECT_DIR="$fixture" BRIGADE_COORD_GH="$no_gh" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-d-not-pushed --json)"
+  if printf '%s\n' "$out" | grep -Fq '"kind": "remote-branch"'; then
+    fail "preflight falsely reported remote-branch conflict for an unpushed branch: $out"
+  fi
+
+  # (f) BRIGADE_COORD_GH precedence: one open PR conflicts and carries the URL; a failing
+  # or unresolvable gh is UNCHECKED rather than silently clean.
+  printf '#!/usr/bin/env bash\necho '"'"'[{"number": 7, "url": "https://example.invalid/pr/7"}]'"'"'\n' >"$bin/fake-gh-ok"
+  chmod +x "$bin/fake-gh-ok"
+  printf '#!/usr/bin/env bash\nexit 1\n' >"$bin/fake-gh-fail"
+  chmod +x "$bin/fake-gh-fail"
+
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" BRIGADE_COORD_GH="$bin/fake-gh-ok" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-f-a --json)"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "preflight open-pr did not exit 1: $out"
+  python3 - "$out" <<'PY' || fail "preflight open-pr conflict missing the PR URL"
+import json, sys
+doc = json.loads(sys.argv[1])
+prs = [c for c in doc["conflicts"] if c["kind"] == "open-pr"]
+if len(prs) != 1 or "https://example.invalid/pr/7" not in json.dumps(prs[0]["detail"]):
+    raise SystemExit(f"expected open-pr conflict carrying the URL, got {doc['conflicts']!r}")
+PY
+
+  out="$(BRIGADE_PROJECT_DIR="$fixture" BRIGADE_COORD_GH="$bin/fake-gh-fail" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-f-b --json)"
+  python3 - "$out" <<'PY' || fail "a failing gh should be unchecked, not silently ok"
+import json, sys
+doc = json.loads(sys.argv[1])
+kinds = {u["kind"]: u for u in doc["unchecked"]}
+if "open-pr" not in kinds or not kinds["open-pr"].get("reason"):
+    raise SystemExit(f"expected open-pr unchecked with reason, got {doc['unchecked']!r}")
+PY
+
+  out="$(BRIGADE_PROJECT_DIR="$fixture" BRIGADE_COORD_GH="$bin/does-not-exist" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-f-c --json)"
+  python3 - "$out" <<'PY' || fail "an unresolvable gh should be unchecked, not silently ok"
+import json, sys
+doc = json.loads(sys.argv[1])
+kinds = {u["kind"]: u for u in doc["unchecked"]}
+if "open-pr" not in kinds or not kinds["open-pr"].get("reason"):
+    raise SystemExit(f"expected open-pr unchecked with reason, got {doc['unchecked']!r}")
+PY
+
+  # (g) delivery-branch: another active dish's plan already claims the same branch.
+  write_quiet_other_plan "delivery_branch: feat/preflight-g"
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-g --json)"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "preflight delivery-branch did not exit 1: $out"
+  python3 - "$out" <<'PY' || fail "preflight delivery-branch conflict missing/wrong"
+import json, sys
+doc = json.loads(sys.argv[1])
+conflicts = [c for c in doc["conflicts"] if c["kind"] == "delivery-branch"]
+if len(conflicts) != 1 or conflicts[0]["detail"]["other_dish"] != "other-dish":
+    raise SystemExit(f"expected delivery-branch conflict naming other-dish, got {doc['conflicts']!r}")
+PY
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish --branch feat/preflight-g 2>&1)"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "preflight text mode delivery-branch did not exit 1: $out"
+  printf '%s\n' "$out" | grep -Fq "conflict: delivery-branch" ||
+    fail "preflight text mode missing delivery-branch conflict line: $out"
+  printf '%s\n' "$out" | grep -Fq "preflight: conflicts" ||
+    fail "preflight text mode missing conflicts summary line: $out"
+
+  # Usage: a bare `preflight` with no dish-slug at all must reach preflight's own exit-2
+  # usage guard, not the generic top-level exit-1 gate (F2 regression: preflight is now
+  # exempted from that gate the same way `watch` already was).
+  if out="$(BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight 2>&1)"; then status=0; else status=$?; fi
+  [ "$status" -eq 2 ] || fail "bare preflight did not exit 2: $out (status $status)"
+  printf '%s\n' "$out" | grep -Fq "usage: brigade-coord preflight <dish-slug> --branch <name> [--json]" ||
+    fail "bare preflight missing its own usage line: $out"
+
+  # Usage: the dish's own PLAN.md missing, and a missing --branch, both exit 2.
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight missing-dish --branch x >/dev/null 2>&1; then
+    fail "preflight succeeded against a missing PLAN.md"
+  else
+    [ "$?" -eq 2 ] || fail "preflight missing PLAN.md did not exit 2"
+  fi
+  if BRIGADE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-coord" preflight this-dish >/dev/null 2>&1; then
+    fail "preflight succeeded without --branch"
+  else
+    [ "$?" -eq 2 ] || fail "preflight missing --branch did not exit 2"
+  fi
+}
+
 test_helpers_share_project_root() {
   fixture="$TMP_ROOT/project-root"
   nested="$fixture/nested/path"
@@ -2999,6 +3215,7 @@ test_coord_watch_transitions
 test_coord_single_writer_and_handoff
 test_coord_recovers_malformed_lease
 test_coord_fences_stale_owner
+test_coord_preflight
 test_helpers_share_project_root
 test_status_inline_items
 test_status_block_items

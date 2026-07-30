@@ -465,7 +465,13 @@ single planning checkpoint. Release the dish lease before yielding for that conf
 ## Phase 3–5 — Execute the DAG (`brigade-execute` Workflow script)
 
 **Pre-flight.** Reacquire the dish lease, then reconcile PLAN.md, artifacts, branches,
-and worktrees before dispatch. Branches become PRs and history — name them for WHAT THEY DELIVER, in the
+and worktrees before dispatch. Before creating the delivery worktree, run
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" preflight <dish-slug> --branch <delivery-branch>`.
+Any conflict is a stop condition: report what's already in flight (the branch, the PR URL,
+or the other dish's overlapping items) and stop for the operator — never route around a
+collision by renaming the branch or proceeding, and never treat it as a merge problem to
+solve later. State UNCHECKED entries (offline, no `gh`) in the pre-flight report rather
+than assuming they're clean. Branches become PRs and history — name them for WHAT THEY DELIVER, in the
 repo's own convention, never for the process that made them (no "brigade" in any branch or
 worktree name). Pick a short delivery slug at plan time and record it in PLAN.md
 frontmatter as `delivery_branch:` — e.g. `feat/config-users`, `fix/async-401`,

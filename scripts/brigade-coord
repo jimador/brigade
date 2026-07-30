@@ -10,6 +10,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 
+const PREFLIGHT_TIMEOUT_MS = 10000
+
 function repoRoot() {
   const explicit = process.env.BRIGADE_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR ||
     process.env.CODEX_PROJECT_DIR
@@ -130,6 +132,85 @@ function planIdentity(file) {
     if (match) identity[match[1]] = unquote(match[2])
   }
   return identity
+}
+
+// The functions below read a PLAN.md's items the same careful way brigade-validate does
+// (precedent, not a shared import): each `- ` entry's own text block is kept together so
+// its status and files come from the SAME entry. Querying "all statuses" and "all files"
+// as separate flat arrays and zipping them by index would misalign the moment one entry
+// is missing a field — exactly the trap a plan's items list can spring.
+function splitFrontmatter(text) {
+  const lines = text.split(/\r?\n/)
+  if (lines[0] !== '---') return null
+  const end = lines.indexOf('---', 1)
+  if (end < 0) return null
+  return { fm: lines.slice(1, end), body: lines.slice(end + 1) }
+}
+
+function readFrontmatterLines(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+  const parts = splitFrontmatter(text)
+  return parts ? parts.fm : null
+}
+
+function listEntries(fm, listKey) {
+  const entries = []
+  let inList = false
+  let current = []
+  const flush = () => {
+    if (current.length > 0) entries.push(current.join(' '))
+    current = []
+  }
+  for (const line of fm) {
+    if (/^[a-z_]+:/.test(line)) {
+      flush()
+      inList = line.startsWith(`${listKey}:`)
+      continue
+    }
+    if (!inList) continue
+    if (/^\s*- /.test(line)) {
+      flush()
+      current = [line]
+    } else if (current.length > 0) {
+      current.push(line)
+    }
+  }
+  flush()
+  return entries
+}
+
+function parseItemEntry(entry) {
+  const slugMatch = entry.match(/(?:^|[\s{,])slug:\s*(\[[^\]]*\]|"[^"]*"|[^,}\s]+)/)
+  const statusMatch = entry.match(/(?:^|[\s{,])status:\s*(\[[^\]]*\]|"[^"]*"|[^,}\s]+)/)
+  const filesMatch = entry.match(/(?:^|[\s{,])files:\s*(\[[^\]]*\])/)
+  const files = filesMatch
+    ? filesMatch[1].replace(/[[\]]/g, '').split(',').map((f) => unquote(f.trim())).filter(Boolean)
+    : []
+  return {
+    slug: slugMatch ? unquote(slugMatch[1].trim()) : null,
+    // No status on an entry is treated as active (conservative) — only an explicit
+    // `done` excludes it from the file-overlap scan.
+    status: statusMatch ? unquote(statusMatch[1].trim()) : null,
+    files,
+  }
+}
+
+function planItems(file) {
+  const fm = readFrontmatterLines(file)
+  if (!fm) return []
+  return listEntries(fm, 'items').map(parseItemEntry)
+}
+
+function planDeliveryBranch(file) {
+  const fm = readFrontmatterLines(file)
+  if (!fm) return null
+  const line = fm.find((l) => l.startsWith('delivery_branch:'))
+  return line ? unquote(line.slice('delivery_branch:'.length)) : null
 }
 
 if (command === 'key') {
@@ -309,8 +390,10 @@ if (command === 'watch') {
       // A watch tick is never worth crashing the monitor over.
     }
   }, intervalSeconds * 1000)
-} else if (!dish) {
-  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|list|watch [...]')
+} else if (!dish && command !== 'preflight') {
+  // preflight's own usage guard (below) maps a missing dish-slug to exit code 2 per its
+  // contract, so it needs to run instead of this generic exit-1 gate.
+  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|list|watch|preflight [...]')
 }
 
 if (command === 'status') {
@@ -433,6 +516,124 @@ if (command === 'recover-lock') {
   process.exit(0)
 }
 
+if (command === 'preflight') {
+  // Zero-model-cost "is anything already in flight?" check for dish pre-flight: local and
+  // remote branch collisions, an open PR already on the branch, files another active
+  // dish's plan still has in flight, and two dishes racing to cut the same delivery
+  // branch before either has pushed it. Every check reports independently; a soft-fail
+  // (no remote, no gh) is recorded UNCHECKED with a reason, never silently ok.
+  if (!dish) fail('usage: brigade-coord preflight <dish-slug> --branch <name> [--json]', 2)
+  const rest = process.argv.slice(4)
+  const branchAt = rest.indexOf('--branch')
+  const branch = branchAt >= 0 ? rest[branchAt + 1] : undefined
+  if (!branch) fail('preflight requires --branch <name>', 2)
+  const asJson = rest.includes('--json')
+
+  const dishesRoot = path.join(root, '.brigade', 'dishes')
+  const ownPlan = path.join(dishesRoot, dish, 'PLAN.md')
+  if (!fs.existsSync(ownPlan)) fail(`no PLAN.md for dish ${dish}: ${ownPlan}`, 2)
+
+  const conflicts = []
+  const unchecked = []
+
+  // local-branch
+  let localExists = false
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd: root,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    localExists = true
+  } catch {
+    localExists = false
+  }
+  if (localExists) conflicts.push({ kind: 'local-branch', detail: branch })
+
+  // remote-branch + open-pr — both require an origin remote to mean anything.
+  let hasOrigin = true
+  try {
+    execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd: root,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+  } catch {
+    hasOrigin = false
+  }
+  if (!hasOrigin) {
+    unchecked.push({ kind: 'remote-branch', reason: 'no origin remote configured' })
+    unchecked.push({ kind: 'open-pr', reason: 'no origin remote to check PRs against' })
+  } else {
+    try {
+      const out = execFileSync('git', ['ls-remote', '--heads', 'origin', branch], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: PREFLIGHT_TIMEOUT_MS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      if (out.trim().length > 0) conflicts.push({ kind: 'remote-branch', detail: branch })
+    } catch (error) {
+      unchecked.push({ kind: 'remote-branch', reason: `git ls-remote failed: ${error.message}` })
+    }
+
+    const ghBin = process.env.BRIGADE_COORD_GH || 'gh'
+    try {
+      const out = execFileSync(
+        ghBin,
+        ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url'],
+        { cwd: root, encoding: 'utf8', timeout: PREFLIGHT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+      const prs = JSON.parse(out)
+      if (Array.isArray(prs) && prs.length > 0) {
+        conflicts.push({ kind: 'open-pr', detail: { number: prs[0].number, url: prs[0].url } })
+      }
+    } catch (error) {
+      unchecked.push({ kind: 'open-pr', reason: `${ghBin} pr list failed: ${error.message}` })
+    }
+  }
+
+  // file-overlap: every OTHER dish's non-done items, intersected with this dish's own
+  // items' files. delivery-branch: any OTHER dish's plan claiming the same branch.
+  const ownFiles = new Set()
+  for (const entry of planItems(ownPlan)) for (const f of entry.files) ownFiles.add(f)
+
+  if (fs.existsSync(dishesRoot)) {
+    for (const otherSlug of fs.readdirSync(dishesRoot)) {
+      if (otherSlug === dish) continue
+      const otherPlan = path.join(dishesRoot, otherSlug, 'PLAN.md')
+      if (!fs.existsSync(otherPlan)) continue
+
+      for (const entry of planItems(otherPlan)) {
+        if (entry.status === 'done') continue
+        const overlap = entry.files.filter((f) => ownFiles.has(f))
+        if (overlap.length > 0) {
+          conflicts.push({
+            kind: 'file-overlap',
+            detail: { other_dish: otherSlug, item: entry.slug, files: overlap },
+          })
+        }
+      }
+
+      const otherBranch = planDeliveryBranch(otherPlan)
+      if (otherBranch && otherBranch === branch) {
+        conflicts.push({
+          kind: 'delivery-branch',
+          detail: { other_dish: otherSlug, delivery_branch: otherBranch },
+        })
+      }
+    }
+  }
+
+  const ok = conflicts.length === 0
+  if (asJson) {
+    emit({ ok, conflicts, unchecked })
+  } else {
+    for (const c of conflicts) process.stdout.write(`conflict: ${c.kind} ${JSON.stringify(c.detail)}\n`)
+    for (const u of unchecked) process.stdout.write(`unchecked: ${u.kind} (${u.reason})\n`)
+    process.stdout.write(ok ? 'preflight: ok\n' : 'preflight: conflicts\n')
+  }
+  process.exit(ok ? 0 : 1)
+}
+
 if (command !== 'watch') {
-  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|recover-lock|list|watch [...]')
+  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|recover-lock|list|watch|preflight [...]')
 }
