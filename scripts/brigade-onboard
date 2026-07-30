@@ -4,12 +4,14 @@
 // gets committed by accident, a record of which plugin version last touched this
 // repo, and a board config file the onboarding skill walks a human through. `status`
 // reports state; `apply` converges the automatic steps and records the result;
-// `detect` is a stub a later work packet fills in.
+// `detect` reads repo signals (read-only) so the onboarding skill only has to ask
+// the operator what it can't infer.
 //
 // Usage:
 //   brigade-onboard status [--json]
-//   brigade-onboard apply   [--json]
-//   brigade-onboard detect           # not implemented yet (exit 2)
+//   brigade-onboard apply  [--json]
+//   brigade-onboard detect [--json]
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -245,6 +247,140 @@ function runApply(json) {
   return 0
 }
 
+// Runs a git subcommand for its exit status only (no output we care about) — true if
+// it succeeded, false on any failure. Used for existence checks like "does this ref
+// exist" or "is there an origin remote", where the exit code IS the answer.
+function gitOk(root, args) {
+  try {
+    execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Runs a git subcommand and returns its trimmed stdout, or null on any failure —
+// missing repo, no such ref, git not installed, whatever. Every caller treats null as
+// "couldn't tell" and falls back, so a git call here can never crash detect.
+function gitOut(root, args) {
+  try {
+    return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return null
+  }
+}
+
+// The repo's main branch: prefer what origin's HEAD actually points at, since that's
+// the branch PRs land on. Falling back to a local guess only happens for repos with no
+// (or no reachable) origin — try main, then master, then just say main since that's
+// the more common default in new repos.
+function detectMainBranch(root) {
+  const symbolic = gitOut(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+  if (symbolic) {
+    return symbolic.startsWith('origin/') ? symbolic.slice('origin/'.length) : symbolic
+  }
+  if (gitOk(root, ['show-ref', '--verify', '--quiet', 'refs/heads/main'])) return 'main'
+  if (gitOk(root, ['show-ref', '--verify', '--quiet', 'refs/heads/master'])) return 'master'
+  return 'main'
+}
+
+// Whether this repo has a remote to open a PR against — true iff `origin` resolves to
+// a URL at all, regardless of what kind (https, ssh, even a local file:// path in tests).
+function detectRemotePr(root) {
+  return gitOk(root, ['remote', 'get-url', 'origin'])
+}
+
+// Which file the repo already uses for agent instructions, if any. AGENTS.md wins when
+// both exist since it's the more specific, agent-facing name.
+function detectAgentsFile(root) {
+  if (fs.existsSync(path.join(root, 'AGENTS.md'))) return 'AGENTS.md'
+  if (fs.existsSync(path.join(root, 'CLAUDE.md'))) return 'CLAUDE.md'
+  return null
+}
+
+function readPackageJson(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+// The gate candidates the onboarding skill offers to the operator as "here's what
+// looks like your verification command", cheapest signal first: package.json scripts,
+// then Makefile targets, then this repo's own regression runner. Deduped by the
+// literal command (so a Makefile `test:` target after an `npm test` script doesn't show
+// up twice), capped at 8 so the interview stays skimmable.
+function detectGateCandidates(root) {
+  const candidates = []
+  const seen = new Set()
+  const add = (cmd, source) => {
+    if (seen.has(cmd)) return
+    seen.add(cmd)
+    candidates.push({ cmd, source })
+  }
+
+  const pkg = readPackageJson(root)
+  const scripts = pkg && typeof pkg.scripts === 'object' && pkg.scripts !== null ? pkg.scripts : {}
+  for (const name of ['test', 'lint', 'typecheck', 'types', 'check', 'build']) {
+    if (Object.prototype.hasOwnProperty.call(scripts, name)) {
+      add(name === 'test' ? 'npm test' : `npm run ${name}`, `package.json:scripts.${name}`)
+    }
+  }
+
+  let makefileText = null
+  try {
+    makefileText = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
+  } catch {
+    makefileText = null
+  }
+  if (makefileText) {
+    for (const line of makefileText.split('\n')) {
+      const match = line.match(/^(test|lint|check|build):/)
+      if (match) add(`make ${match[1]}`, 'Makefile')
+    }
+  }
+
+  const gatePath = path.join(root, 'test', 'regression.sh')
+  let executable = false
+  try {
+    fs.accessSync(gatePath, fs.constants.X_OK)
+    executable = fs.statSync(gatePath).isFile()
+  } catch {
+    executable = false
+  }
+  if (executable) add('./test/regression.sh', 'test/regression.sh')
+
+  return candidates.slice(0, 8)
+}
+
+// Read-only repo-signal detection: never writes anything, every underlying check is
+// wrapped so a git failure or missing file just falls back instead of crashing.
+function runDetect(json) {
+  const root = repoRoot()
+  const mainBranch = detectMainBranch(root)
+  const remotePr = detectRemotePr(root)
+  const agentsFile = detectAgentsFile(root)
+  const gateCandidates = detectGateCandidates(root)
+
+  if (json) {
+    console.log(JSON.stringify({
+      main_branch: mainBranch,
+      remote_pr: remotePr,
+      agents_file: agentsFile,
+      gate_candidates: gateCandidates,
+    }))
+  } else {
+    console.log(`main_branch: ${mainBranch}`)
+    console.log(`remote_pr: ${remotePr}`)
+    console.log(`agents_file: ${agentsFile ?? '(none)'}`)
+    for (const c of gateCandidates) {
+      console.log(`gate_candidate: ${c.cmd}  (${c.source})`)
+    }
+  }
+  return 0
+}
+
 function main() {
   const args = process.argv.slice(2)
   const json = args.includes('--json')
@@ -256,8 +392,7 @@ function main() {
     case 'apply':
       return runApply(json)
     case 'detect':
-      console.log('not implemented')
-      return 2
+      return runDetect(json)
     default:
       console.error('usage: brigade-onboard <status|apply|detect> [--json]')
       return 2

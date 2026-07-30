@@ -741,6 +741,96 @@ PY
     fail "onboard apply did not write onboard.json in a non-git fixture"
 }
 
+test_onboard_detect() {
+  fixture="$TMP_ROOT/onboard-detect"
+  plugroot="$TMP_ROOT/onboard-detect-plugroot"
+  mkdir -p "$fixture" "$plugroot"
+  (cd "$fixture" && git init -q)
+
+  # (a) package.json scripts + Makefile targets -> gate candidates in contract order,
+  # deduped, with a non-matching Makefile target excluded.
+  cat >"$fixture/package.json" <<'EOF'
+{ "scripts": { "test": "node t.js", "lint": "eslint ." } }
+EOF
+  cat >"$fixture/Makefile" <<'EOF'
+test:
+deploy:
+EOF
+
+  json="$(onboard_run "$fixture" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not report contract-shaped gate candidates"
+import json, sys
+doc = json.loads(sys.argv[1])
+cmds = [c["cmd"] for c in doc["gate_candidates"]]
+if "npm test" not in cmds:
+    raise SystemExit(f"expected npm test in candidates, got {cmds!r}")
+if "npm run lint" not in cmds:
+    raise SystemExit(f"expected npm run lint in candidates, got {cmds!r}")
+if "make test" not in cmds:
+    raise SystemExit(f"expected make test in candidates, got {cmds!r}")
+if "make deploy" in cmds:
+    raise SystemExit(f"expected make deploy excluded, got {cmds!r}")
+by_cmd = {c["cmd"]: c["source"] for c in doc["gate_candidates"]}
+if by_cmd.get("npm test") != "package.json:scripts.test":
+    raise SystemExit(f"wrong source for npm test: {by_cmd.get('npm test')!r}")
+if by_cmd.get("npm run lint") != "package.json:scripts.lint":
+    raise SystemExit(f"wrong source for npm run lint: {by_cmd.get('npm run lint')!r}")
+if by_cmd.get("make test") != "Makefile":
+    raise SystemExit(f"wrong source for make test: {by_cmd.get('make test')!r}")
+PY
+
+  # (b) remote_pr toggles on presence of an origin remote.
+  json="$(onboard_run "$fixture" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect reported remote_pr true with no origin remote"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["remote_pr"] is not False:
+    raise SystemExit(f"expected remote_pr false, got {doc['remote_pr']!r}")
+PY
+  (cd "$fixture" && git remote add origin file:///dev/null)
+  json="$(onboard_run "$fixture" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not report remote_pr true with an origin remote"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["remote_pr"] is not True:
+    raise SystemExit(f"expected remote_pr true, got {doc['remote_pr']!r}")
+PY
+
+  # (c) empty repo, no package.json/Makefile -> main_branch falls back to main,
+  # gate_candidates empty, agents_file null.
+  empty="$TMP_ROOT/onboard-detect-empty"
+  mkdir -p "$empty"
+  (cd "$empty" && git init -q)
+  json="$(onboard_run "$empty" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not fall back cleanly on an empty repo"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["main_branch"] != "main":
+    raise SystemExit(f"expected main_branch main, got {doc['main_branch']!r}")
+if doc["gate_candidates"] != []:
+    raise SystemExit(f"expected empty gate_candidates, got {doc['gate_candidates']!r}")
+if doc["agents_file"] is not None:
+    raise SystemExit(f"expected agents_file null, got {doc['agents_file']!r}")
+PY
+
+  # (d) both AGENTS.md and CLAUDE.md present -> AGENTS.md wins.
+  printf 'agents\n' >"$empty/AGENTS.md"
+  printf 'claude\n' >"$empty/CLAUDE.md"
+  json="$(onboard_run "$empty" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not prefer AGENTS.md over CLAUDE.md"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["agents_file"] != "AGENTS.md":
+    raise SystemExit(f"expected agents_file AGENTS.md, got {doc['agents_file']!r}")
+PY
+
+  # detect must never write anything to the repo it inspects.
+  before="$(find "$empty" -type f | sort)"
+  onboard_run "$empty" "$plugroot" detect >/dev/null
+  after="$(find "$empty" -type f | sort)"
+  [ "$before" = "$after" ] || fail "onboard detect wrote files to the repo"
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -2104,6 +2194,7 @@ test_config_doctor_catches_problems
 test_config_override_consumer_path
 test_onboard_status
 test_onboard_apply
+test_onboard_detect
 test_validate_ledger_artifacts
 test_validate_retro_readiness
 test_validate_analyst_modes
