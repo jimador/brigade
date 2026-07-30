@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// brigade-onboard — checks (and, later, applies) the one-time setup a repo needs
-// before the brigade fleet can run in it: a .git/info/exclude entry so .brigade/
-// scratch never gets committed by accident, a record of which plugin version last
-// touched this repo, and a board config file the onboarding skill walks a human
-// through. Right now this only reports state (`status`); `apply` and `detect` are
-// stubs that later work packets fill in.
+// brigade-onboard — checks and applies the one-time setup a repo needs before the
+// brigade fleet can run in it: a .git/info/exclude entry so .brigade/ scratch never
+// gets committed by accident, a record of which plugin version last touched this
+// repo, and a board config file the onboarding skill walks a human through. `status`
+// reports state; `apply` converges the automatic steps and records the result;
+// `detect` is a stub a later work packet fills in.
 //
 // Usage:
 //   brigade-onboard status [--json]
-//   brigade-onboard apply            # not implemented yet (exit 2)
+//   brigade-onboard apply   [--json]
 //   brigade-onboard detect           # not implemented yet (exit 2)
 import fs from 'node:fs'
 import path from 'node:path'
@@ -52,6 +52,10 @@ function hasGitDir(root) {
   return fs.existsSync(path.join(root, '.git'))
 }
 
+function nowIso() {
+  return new Date().toISOString()
+}
+
 function gitExcludeHasEntry(root) {
   const excludePath = path.join(root, '.git', 'info', 'exclude')
   let text
@@ -75,7 +79,24 @@ function buildSteps(root) {
         if (!hasGitDir(root)) return 'na'
         return gitExcludeHasEntry(root) ? 'ok' : 'pending'
       },
-      apply: null,
+      // Appends a .brigade/ line to .git/info/exclude, creating the info/ dir and
+      // the exclude file if either is missing. Only ever called when check() has
+      // already reported 'pending', so the line is known absent — no dedup needed.
+      // Never touches the tracked .gitignore.
+      apply() {
+        const infoDir = path.join(root, '.git', 'info')
+        fs.mkdirSync(infoDir, { recursive: true })
+        const excludePath = path.join(infoDir, 'exclude')
+        let text = ''
+        try {
+          text = fs.readFileSync(excludePath, 'utf8')
+        } catch {
+          text = ''
+        }
+        const sep = text.length === 0 || text.endsWith('\n') ? '' : '\n'
+        fs.writeFileSync(excludePath, `${text}${sep}.brigade/\n`)
+        return 'appended .brigade/ to .git/info/exclude'
+      },
     },
     {
       id: 'version-record',
@@ -85,6 +106,9 @@ function buildSteps(root) {
         if (record && record.plugin_version === installed) return 'ok'
         return 'pending'
       },
+      // The actual write happens in runApply (it needs to see what every other
+      // step just did, so it can stamp only the steps that changed this run and
+      // carry forward everything else) — this step's own apply body is unused.
       apply: null,
     },
     {
@@ -144,6 +168,83 @@ function runStatus(json) {
   return 0
 }
 
+// Runs every pending auto step's apply(), in registry order, then writes
+// .brigade/onboard.json once with the installed version and per-step timestamps.
+// version-record always writes last so that single write captures whatever the
+// other steps just converged, plus its own timestamps carried forward from any
+// prior record. Interactive steps (board-config) are never touched here.
+function runApply(json) {
+  const root = repoRoot()
+  const plugRoot = pluginRoot()
+  const installed = installedVersion(plugRoot)
+  const steps = buildSteps(root)
+  const priorRecord = readOnboardRecord(root)
+  const priorSteps =
+    priorRecord && priorRecord.steps && typeof priorRecord.steps === 'object' ? priorRecord.steps : {}
+
+  const applied = []
+  const newTimestamps = {}
+
+  for (const step of steps) {
+    if (step.kind !== 'auto' || step.id === 'version-record') continue
+    let state
+    try {
+      state = step.check(installed)
+    } catch (err) {
+      console.error(`error checking ${step.id}: ${err.message}`)
+      return 1
+    }
+    if (state !== 'pending') continue
+    try {
+      const detail = step.apply()
+      newTimestamps[step.id] = nowIso()
+      applied.push({ id: step.id, detail })
+    } catch (err) {
+      console.error(`error applying ${step.id}: ${err.message}`)
+      return 1
+    }
+  }
+
+  const versionStep = steps.find((s) => s.id === 'version-record')
+  const versionState = versionStep.check(installed)
+  const needsWrite = versionState === 'pending' || applied.length > 0
+
+  if (!needsWrite) {
+    if (json) {
+      console.log(JSON.stringify({ applied: [], recorded_version: installed }))
+    } else {
+      console.log('converged — nothing to apply')
+    }
+    return 0
+  }
+
+  try {
+    fs.mkdirSync(path.join(root, '.brigade'), { recursive: true })
+    if (versionState === 'pending') {
+      newTimestamps['version-record'] = nowIso()
+      applied.push({ id: 'version-record', detail: `recorded plugin_version ${installed}` })
+    }
+    const mergedSteps = { ...priorSteps, ...newTimestamps }
+    const record = {
+      schema: 1,
+      plugin_version: installed,
+      updated_at: nowIso(),
+      steps: mergedSteps,
+    }
+    fs.writeFileSync(onboardRecordPath(root), `${JSON.stringify(record, null, 2)}\n`)
+  } catch (err) {
+    console.error(`error applying version-record: ${err.message}`)
+    return 1
+  }
+
+  if (json) {
+    console.log(JSON.stringify({ applied, recorded_version: installed }))
+  } else {
+    for (const a of applied) console.log(`applied ${a.id}: ${a.detail}`)
+  }
+  return 0
+}
+
 function main() {
   const args = process.argv.slice(2)
   const json = args.includes('--json')
@@ -153,6 +254,7 @@ function main() {
     case 'status':
       return runStatus(json)
     case 'apply':
+      return runApply(json)
     case 'detect':
       console.log('not implemented')
       return 2

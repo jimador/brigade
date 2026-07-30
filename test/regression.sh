@@ -644,6 +644,103 @@ if states.get("git-exclude") != "na":
 PY
 }
 
+test_onboard_apply() {
+  fixture="$TMP_ROOT/onboard-apply"
+  plugroot="$TMP_ROOT/onboard-apply-plugroot"
+  mkdir -p "$fixture" "$plugroot/.claude-plugin"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "9.9.9" }
+EOF
+
+  # tracked .gitignore must never be touched by apply.
+  printf 'node_modules/\n' >"$fixture/.gitignore"
+  (cd "$fixture" && git add .gitignore &&
+    git -c user.email=test@example.com -c user.name=test commit -q -m init)
+  gitignore_before="$(cat "$fixture/.gitignore")"
+
+  # (a) fresh repo: apply converges git-exclude and version-record.
+  out="$(onboard_run "$fixture" "$plugroot" apply)"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "onboard apply exited $rc on fresh repo"
+  printf '%s\n' "$out" | grep -Fq "applied git-exclude:" ||
+    fail "onboard apply did not report applying git-exclude"
+  printf '%s\n' "$out" | grep -Fq "applied version-record:" ||
+    fail "onboard apply did not report applying version-record"
+  grep -Fq '.brigade/' "$fixture/.git/info/exclude" ||
+    fail "onboard apply did not append .brigade/ to .git/info/exclude"
+
+  json="$(cat "$fixture/.brigade/onboard.json")"
+  python3 - "$json" <<'PY' || fail "onboard.json did not record fresh apply state"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["plugin_version"] != "9.9.9":
+    raise SystemExit(f"expected plugin_version 9.9.9, got {doc['plugin_version']!r}")
+for step_id in ("git-exclude", "version-record"):
+    if step_id not in doc["steps"]:
+        raise SystemExit(f"expected a timestamp for {step_id}, got {doc['steps']!r}")
+PY
+
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report converged apply as drift-free with board-config pending"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not False:
+    raise SystemExit(f"expected drift false after apply, got {doc['drift']!r}")
+states = {s["id"]: s["state"] for s in doc["steps"]}
+if states.get("board-config") != "pending":
+    raise SystemExit(f"expected board-config still pending, got {states.get('board-config')!r}")
+PY
+
+  # (b) idempotency: second run is a no-op.
+  out2="$(onboard_run "$fixture" "$plugroot" apply)"
+  printf '%s\n' "$out2" | grep -Fq "converged" ||
+    fail "onboard apply second run did not report converged"
+  count="$(grep -c '^\.brigade/$' "$fixture/.git/info/exclude")"
+  [ "$count" -eq 1 ] || fail "onboard apply second run duplicated the exclude line (count=$count)"
+
+  # (d) plugin version bump: apply again converges to the new version.
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "10.0.0" }
+EOF
+  json="$(onboard_run "$fixture" "$plugroot" apply --json)"
+  python3 - "$json" <<'PY' || fail "onboard apply did not converge a version bump"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["recorded_version"] != "10.0.0":
+    raise SystemExit(f"expected recorded_version 10.0.0, got {doc['recorded_version']!r}")
+PY
+  count="$(grep -c '^\.brigade/$' "$fixture/.git/info/exclude")"
+  [ "$count" -eq 1 ] || fail "onboard apply version bump duplicated the exclude line (count=$count)"
+
+  # (f) tracked .gitignore is never touched.
+  gitignore_after="$(cat "$fixture/.gitignore")"
+  [ "$gitignore_before" = "$gitignore_after" ] ||
+    fail "onboard apply modified the tracked .gitignore"
+
+  # (c) exclude line already present but onboard.json absent: no duplicate line,
+  # record gets written.
+  fixture2="$TMP_ROOT/onboard-apply-partial"
+  mkdir -p "$fixture2/.git/info"
+  (cd "$fixture2" && git init -q)
+  printf '.brigade/\n' >>"$fixture2/.git/info/exclude"
+  onboard_run "$fixture2" "$plugroot" apply >/dev/null
+  count="$(grep -c '^\.brigade/$' "$fixture2/.git/info/exclude")"
+  [ "$count" -eq 1 ] || fail "onboard apply duplicated a pre-existing exclude line (count=$count)"
+  [ -f "$fixture2/.brigade/onboard.json" ] ||
+    fail "onboard apply did not write onboard.json when the exclude line pre-existed"
+
+  # (e) non-git fixture: apply exits 0, no exclude write, record still written.
+  nogit="$TMP_ROOT/onboard-apply-nogit"
+  mkdir -p "$nogit"
+  out3="$(onboard_run "$nogit" "$plugroot" apply)"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "onboard apply exited $rc on a non-git fixture"
+  [ -e "$nogit/.git" ] && fail "onboard apply created a .git directory in a non-git fixture"
+  [ -f "$nogit/.brigade/onboard.json" ] ||
+    fail "onboard apply did not write onboard.json in a non-git fixture"
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -2006,6 +2103,7 @@ test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_config_override_consumer_path
 test_onboard_status
+test_onboard_apply
 test_validate_ledger_artifacts
 test_validate_retro_readiness
 test_validate_analyst_modes
