@@ -169,8 +169,9 @@ nested keys prefixed `codex`; never consume or rewrite them.
 ## Setup and workspaces (`SETUP.md`)
 
 First run in a repo (no `.brigade/config.md`), or a session cwd that matches a
-`~/.brigade/workspaces.md` workspace: read `SETUP.md` (next to this SKILL) and follow its
-init interview and `.brigade/` layout before anything else. Two rules hold whether or not
+`~/.brigade/workspaces.md` workspace: run `/brigade:onboard` (preferred) — or, as a manual
+fallback, read `SETUP.md` (next to this SKILL) and follow its init interview and
+`.brigade/` layout — before anything else. Two rules hold whether or not
 you read it: never commit `.brigade/` (keep it in `.git/info/exclude`), and
 `brigade-config layers` + `doctor` are free — run them before touching config by hand.
 Dish artifacts live under `.brigade/dishes/<dish-slug>/` (`PLAN.md`, `briefs/`,

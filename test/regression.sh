@@ -567,6 +567,307 @@ assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHea
 NODE
 }
 
+onboard_run() { # brigade-onboard against a fixture repo and a fake plugin root
+  fixture="$1"
+  plugroot="$2"
+  shift 2
+  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" "$ROOT/scripts/brigade-onboard" "$@"
+}
+
+test_onboard_status() {
+  fixture="$TMP_ROOT/onboard-status"
+  plugroot="$TMP_ROOT/onboard-plugroot"
+  mkdir -p "$fixture" "$plugroot/.claude-plugin"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "9.9.9" }
+EOF
+
+  # (a) fresh repo: nothing set up yet.
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report fresh-repo drift"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not True:
+    raise SystemExit(f"expected drift true, got {doc['drift']!r}")
+if doc["recorded_version"] is not None:
+    raise SystemExit(f"expected recorded_version null, got {doc['recorded_version']!r}")
+states = {s["id"]: s["state"] for s in doc["steps"]}
+if states.get("git-exclude") != "pending":
+    raise SystemExit(f"expected git-exclude pending, got {states.get('git-exclude')!r}")
+if states.get("board-config") != "pending":
+    raise SystemExit(f"expected board-config pending, got {states.get('board-config')!r}")
+PY
+
+  # (b) fully onboarded: exclude line + config.md + matching version record.
+  mkdir -p "$fixture/.brigade" "$fixture/.git/info"
+  printf '.brigade/\n' >>"$fixture/.git/info/exclude"
+  printf '' >"$fixture/.brigade/config.md"
+  cat >"$fixture/.brigade/onboard.json" <<'EOF'
+{ "schema": 1, "plugin_version": "9.9.9", "updated_at": "2026-01-01T00:00:00Z", "steps": {} }
+EOF
+
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report a fully onboarded repo as clean"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not False:
+    raise SystemExit(f"expected drift false, got {doc['drift']!r}")
+states = {s["id"]: s["state"] for s in doc["steps"]}
+for step_id in ("git-exclude", "version-record", "board-config"):
+    if states.get(step_id) != "ok":
+        raise SystemExit(f"expected {step_id} ok, got {states.get(step_id)!r}")
+PY
+
+  # (c) corrupt onboard.json must never crash the command.
+  printf '{not json' >"$fixture/.brigade/onboard.json"
+  out="$(onboard_run "$fixture" "$plugroot" status --json)"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "onboard status exited $rc on corrupt onboard.json"
+  python3 - "$out" <<'PY' || fail "onboard status did not report drift for corrupt onboard.json"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not True:
+    raise SystemExit(f"expected drift true with corrupt record, got {doc['drift']!r}")
+PY
+
+  # (d) no .git directory at all -> git-exclude is not-applicable.
+  nogit="$TMP_ROOT/onboard-status-nogit"
+  mkdir -p "$nogit"
+  json="$(onboard_run "$nogit" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report git-exclude na without a .git directory"
+import json, sys
+doc = json.loads(sys.argv[1])
+states = {s["id"]: s["state"] for s in doc["steps"]}
+if states.get("git-exclude") != "na":
+    raise SystemExit(f"expected git-exclude na, got {states.get('git-exclude')!r}")
+PY
+}
+
+test_onboard_apply() {
+  fixture="$TMP_ROOT/onboard-apply"
+  plugroot="$TMP_ROOT/onboard-apply-plugroot"
+  mkdir -p "$fixture" "$plugroot/.claude-plugin"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "9.9.9" }
+EOF
+
+  # tracked .gitignore must never be touched by apply.
+  printf 'node_modules/\n' >"$fixture/.gitignore"
+  (cd "$fixture" && git add .gitignore &&
+    git -c user.email=test@example.com -c user.name=test commit -q -m init)
+  gitignore_before="$(cat "$fixture/.gitignore")"
+
+  # (a) fresh repo: apply converges git-exclude and version-record.
+  out="$(onboard_run "$fixture" "$plugroot" apply)"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "onboard apply exited $rc on fresh repo"
+  printf '%s\n' "$out" | grep -Fq "applied git-exclude:" ||
+    fail "onboard apply did not report applying git-exclude"
+  printf '%s\n' "$out" | grep -Fq "applied version-record:" ||
+    fail "onboard apply did not report applying version-record"
+  grep -Fq '.brigade/' "$fixture/.git/info/exclude" ||
+    fail "onboard apply did not append .brigade/ to .git/info/exclude"
+
+  json="$(cat "$fixture/.brigade/onboard.json")"
+  python3 - "$json" <<'PY' || fail "onboard.json did not record fresh apply state"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["plugin_version"] != "9.9.9":
+    raise SystemExit(f"expected plugin_version 9.9.9, got {doc['plugin_version']!r}")
+for step_id in ("git-exclude", "version-record"):
+    if step_id not in doc["steps"]:
+        raise SystemExit(f"expected a timestamp for {step_id}, got {doc['steps']!r}")
+PY
+
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY' || fail "onboard status did not report converged apply as drift-free with board-config pending"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["drift"] is not False:
+    raise SystemExit(f"expected drift false after apply, got {doc['drift']!r}")
+states = {s["id"]: s["state"] for s in doc["steps"]}
+if states.get("board-config") != "pending":
+    raise SystemExit(f"expected board-config still pending, got {states.get('board-config')!r}")
+PY
+
+  # (b) idempotency: second run is a no-op.
+  out2="$(onboard_run "$fixture" "$plugroot" apply)"
+  printf '%s\n' "$out2" | grep -Fq "converged" ||
+    fail "onboard apply second run did not report converged"
+  count="$(grep -c '^\.brigade/$' "$fixture/.git/info/exclude")"
+  [ "$count" -eq 1 ] || fail "onboard apply second run duplicated the exclude line (count=$count)"
+
+  # (d) plugin version bump: apply again converges to the new version.
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "10.0.0" }
+EOF
+  json="$(onboard_run "$fixture" "$plugroot" apply --json)"
+  python3 - "$json" <<'PY' || fail "onboard apply did not converge a version bump"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["recorded_version"] != "10.0.0":
+    raise SystemExit(f"expected recorded_version 10.0.0, got {doc['recorded_version']!r}")
+PY
+  count="$(grep -c '^\.brigade/$' "$fixture/.git/info/exclude")"
+  [ "$count" -eq 1 ] || fail "onboard apply version bump duplicated the exclude line (count=$count)"
+
+  # (f) tracked .gitignore is never touched.
+  gitignore_after="$(cat "$fixture/.gitignore")"
+  [ "$gitignore_before" = "$gitignore_after" ] ||
+    fail "onboard apply modified the tracked .gitignore"
+
+  # (c) exclude line already present but onboard.json absent: no duplicate line,
+  # record gets written.
+  fixture2="$TMP_ROOT/onboard-apply-partial"
+  mkdir -p "$fixture2/.git/info"
+  (cd "$fixture2" && git init -q)
+  printf '.brigade/\n' >>"$fixture2/.git/info/exclude"
+  onboard_run "$fixture2" "$plugroot" apply >/dev/null
+  count="$(grep -c '^\.brigade/$' "$fixture2/.git/info/exclude")"
+  [ "$count" -eq 1 ] || fail "onboard apply duplicated a pre-existing exclude line (count=$count)"
+  [ -f "$fixture2/.brigade/onboard.json" ] ||
+    fail "onboard apply did not write onboard.json when the exclude line pre-existed"
+
+  # (e) non-git fixture: apply exits 0, no exclude write, record still written.
+  nogit="$TMP_ROOT/onboard-apply-nogit"
+  mkdir -p "$nogit"
+  out3="$(onboard_run "$nogit" "$plugroot" apply)"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "onboard apply exited $rc on a non-git fixture"
+  [ -e "$nogit/.git" ] && fail "onboard apply created a .git directory in a non-git fixture"
+  [ -f "$nogit/.brigade/onboard.json" ] ||
+    fail "onboard apply did not write onboard.json in a non-git fixture"
+}
+
+test_onboard_detect() {
+  fixture="$TMP_ROOT/onboard-detect"
+  plugroot="$TMP_ROOT/onboard-detect-plugroot"
+  mkdir -p "$fixture" "$plugroot"
+  (cd "$fixture" && git init -q)
+
+  # (a) package.json scripts + Makefile targets -> gate candidates in contract order,
+  # deduped, with a non-matching Makefile target excluded.
+  cat >"$fixture/package.json" <<'EOF'
+{ "scripts": { "test": "node t.js", "lint": "eslint ." } }
+EOF
+  cat >"$fixture/Makefile" <<'EOF'
+test:
+deploy:
+EOF
+
+  json="$(onboard_run "$fixture" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not report contract-shaped gate candidates"
+import json, sys
+doc = json.loads(sys.argv[1])
+cmds = [c["cmd"] for c in doc["gate_candidates"]]
+if "npm test" not in cmds:
+    raise SystemExit(f"expected npm test in candidates, got {cmds!r}")
+if "npm run lint" not in cmds:
+    raise SystemExit(f"expected npm run lint in candidates, got {cmds!r}")
+if "make test" not in cmds:
+    raise SystemExit(f"expected make test in candidates, got {cmds!r}")
+if "make deploy" in cmds:
+    raise SystemExit(f"expected make deploy excluded, got {cmds!r}")
+by_cmd = {c["cmd"]: c["source"] for c in doc["gate_candidates"]}
+if by_cmd.get("npm test") != "package.json:scripts.test":
+    raise SystemExit(f"wrong source for npm test: {by_cmd.get('npm test')!r}")
+if by_cmd.get("npm run lint") != "package.json:scripts.lint":
+    raise SystemExit(f"wrong source for npm run lint: {by_cmd.get('npm run lint')!r}")
+if by_cmd.get("make test") != "Makefile":
+    raise SystemExit(f"wrong source for make test: {by_cmd.get('make test')!r}")
+PY
+
+  # (b) remote_pr toggles on presence of an origin remote.
+  json="$(onboard_run "$fixture" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect reported remote_pr true with no origin remote"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["remote_pr"] is not False:
+    raise SystemExit(f"expected remote_pr false, got {doc['remote_pr']!r}")
+PY
+  (cd "$fixture" && git remote add origin file:///dev/null)
+  json="$(onboard_run "$fixture" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not report remote_pr true with an origin remote"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["remote_pr"] is not True:
+    raise SystemExit(f"expected remote_pr true, got {doc['remote_pr']!r}")
+PY
+
+  # (c) empty repo, no package.json/Makefile -> main_branch falls back to main,
+  # gate_candidates empty, agents_file null.
+  empty="$TMP_ROOT/onboard-detect-empty"
+  mkdir -p "$empty"
+  (cd "$empty" && git init -q)
+  json="$(onboard_run "$empty" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not fall back cleanly on an empty repo"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["main_branch"] != "main":
+    raise SystemExit(f"expected main_branch main, got {doc['main_branch']!r}")
+if doc["gate_candidates"] != []:
+    raise SystemExit(f"expected empty gate_candidates, got {doc['gate_candidates']!r}")
+if doc["agents_file"] is not None:
+    raise SystemExit(f"expected agents_file null, got {doc['agents_file']!r}")
+PY
+
+  # (d) both AGENTS.md and CLAUDE.md present -> AGENTS.md wins.
+  printf 'agents\n' >"$empty/AGENTS.md"
+  printf 'claude\n' >"$empty/CLAUDE.md"
+  json="$(onboard_run "$empty" "$plugroot" detect --json)"
+  python3 - "$json" <<'PY' || fail "onboard detect did not prefer AGENTS.md over CLAUDE.md"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["agents_file"] != "AGENTS.md":
+    raise SystemExit(f"expected agents_file AGENTS.md, got {doc['agents_file']!r}")
+PY
+
+  # detect must never write anything to the repo it inspects.
+  before="$(find "$empty" -type f | sort)"
+  onboard_run "$empty" "$plugroot" detect >/dev/null
+  after="$(find "$empty" -type f | sort)"
+  [ "$before" = "$after" ] || fail "onboard detect wrote files to the repo"
+}
+
+test_hook_onboard_drift() {
+  fixture="$TMP_ROOT/hook-onboard-drift"
+  plugroot="$TMP_ROOT/hook-onboard-drift-plugroot"
+  mkdir -p "$fixture/.brigade" "$plugroot/.claude-plugin"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "9.9.9" }
+EOF
+
+  # (a) drifted fixture: no onboard.json yet, so the hook auto-applies and reports it.
+  out="$(CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "hook exited $rc on a drifted onboard fixture"
+  printf '%s\n' "$out" | grep -Fq "onboarding upgrade applied" ||
+    fail "hook did not report the onboarding upgrade heading: $out"
+  printf '%s\n' "$out" | grep -Fq "applied" ||
+    fail "hook did not report an applied step: $out"
+  [ -f "$fixture/.brigade/onboard.json" ] ||
+    fail "hook did not converge onboard.json for the drifted fixture"
+
+  # (b) converged fixture: second run stays silent on the upgrade heading (the
+  # board-config pointer line is still allowed since board-config is interactive).
+  out2="$(CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "hook exited $rc on a converged onboard fixture"
+  printf '%s\n' "$out2" | grep -Fq "onboarding upgrade applied" &&
+    fail "hook re-reported the onboarding upgrade heading on a converged fixture: $out2"
+
+  # (c) no .brigade/ dir at all: existing outer gate stays untouched.
+  nobrigade="$TMP_ROOT/hook-onboard-drift-nobrigade"
+  mkdir -p "$nobrigade"
+  out3="$(CLAUDE_PROJECT_DIR="$nobrigade" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "hook exited $rc on a non-brigade fixture"
+  [ -z "$out3" ] || fail "hook produced output in a non-brigade repo: $out3"
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -1928,6 +2229,10 @@ test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
 test_config_doctor_catches_problems
 test_config_override_consumer_path
+test_onboard_status
+test_onboard_apply
+test_onboard_detect
+test_hook_onboard_drift
 test_validate_ledger_artifacts
 test_validate_retro_readiness
 test_validate_analyst_modes
