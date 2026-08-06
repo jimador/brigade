@@ -46,7 +46,12 @@ to it, or proceed degraded and say so.
 `brigade-cook` elsewhere.
 
 **Escalation ladder** is the rework path after an inspector FAIL — each arrow is the next
-attempt, ending at the planner.
+attempt, ending at the planner. Two floors override the row. Config-resolution and
+ORM/schema packets start at sonnet even when they clear the haiku bar — the cheap model went
+0/4 across two bar-compliant packets of exactly that shape (enum-on-array semantics, tsconfig
+`exclude` scoping) while sonnet fixed both first try. And when a FAIL is about *framework
+semantics* rather than a slip, skip the same-model retry rung and escalate immediately;
+retrying the model that misunderstood the framework yielded 0/2.
 
 **Plan check** gates the adversarial pre-dispatch review: always at ★★★, on triggers at
 ★★, never at ★ (self-check list only).

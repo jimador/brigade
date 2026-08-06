@@ -345,7 +345,14 @@ candidate/area with web sourcing), `heavy` (opus, ≤ 400 lines, decision-grade 
 rubric scoring). Depth sets the researcher's model and the report's budget, independent of
 the service tier. Dispatch in waves like cooks (≤ 4 at a time; when siblings score against
 a shared rubric, the rubric-producing item goes in an earlier wave), and the planner
-writes the synthesis itself.
+writes the synthesis itself. Two rules for that rubric and that synthesis: a build-vs-buy or
+tool-choice rubric carries a weighted **governance/longevity** criterion (maintenance
+activity, bus factor, single-vendor rot risk) alongside the technical-fit axes, or a
+well-executed custom build scores as a ceiling the rubric can't discount; and convergence
+between researchers counts as independent validation only when the converging reports did
+not share the inputs that would explain it — same rubric, same grounding briefs, same source
+docs. State what they shared, and call material overlap "consistent with shared grounding"
+rather than confirmation.
 
 ## Phase 2 — Decompose (your most important job)
 
@@ -375,7 +382,23 @@ against the base branch itself — sibling artifacts written alongside the chang
 tests, comments) validate each other circularly and prove nothing; and a coverage claim
 ("existing tests already cover X") carries the covering test's name/line or the grep
 output that proves it — two sibling packets in one dish repeated the same unverified
-coverage claim that a one-line grep disproved.
+coverage claim that a one-line grep disproved. A fourth class deserves its own reflex: a
+**propagation** claim — "existing records pick this up automatically", "the profile change
+flows through" — is read off the actual resolver before it is written down, because data
+denormalized at write time never retro-updates; when it doesn't propagate, the item carries
+the backfill or seed-migration step rather than a hope.
+
+**Before proposing any new listener, sync, trigger, or handler class, grep for the thing
+that already receives that event and read its doc comment.** If you still want a new one,
+the item note cites the existing handler either as the thing being extended or as the thing
+being deliberately bypassed, with the reason. A new mechanism with no such citation is an
+unfinished plan — one Planner drafted four duplicate mechanisms across two dishes on the
+same branch, and every one was caught downstream instead of at drafting time.
+
+**A gate the plan schedules at a wave boundary is pasted verbatim into the Verify block of
+the packet that closes that wave.** A gate that lives only in plan prose is a gate nobody
+runs — a promised post-wave production build never ran, and a blocking prerender regression
+survived every per-item gate.
 
 **Disjointness is the spine.** Two work items in the same wave must not touch the same
 files — doc files included. Anything that genuinely overlaps is sequenced with a
@@ -394,7 +417,10 @@ every hop of the chain the real consumer traverses (leaf → panel → section �
 invocation topology (who mounts this, how do the existing tests mount it) whenever behavior
 routes through a central handler, middleware, or DI. And a shared facade/re-export that ≥2
 sibling items import is created by the producing item's own files list — never left for the
-first downstream cook to discover missing.
+first downstream cook to discover missing. When the shared artifact is also compiled against
+by *another in-flight dish*, widen it behind a temporary backward-compatible overload so the
+other branches keep building, and record removing that scaffolding as an explicit cleanup
+item in PLAN.md — an untracked bridge becomes permanent API.
 
 **The haiku bar** (the bar every first-attempt packet must clear, whatever model cooks
 it). Every work item must satisfy ALL of:
@@ -453,7 +479,13 @@ own shell shims). When two sibling packets assert the same runtime string or out
 packet embeds a payload from a scout brief, the plan check executes that shared case once
 and pastes the literal captured output into every packet that asserts it — packet authors
 never re-derive or analogize it (an analogized deny message burned a full escalation
-ladder). You fold in what's right (you own the
+ladder). When the check raises a blocking contradiction between a sourced scout claim and an
+assumption your plan overrides, and the assumption is cheap to test empirically, the
+resolution is a live probe run before dispatch — never an unsourced assertion from either
+side. And when another active dish shares this dish's delivery branch, paste that dish's
+item file lists into the plan-check packet with an explicit overlap instruction: a file both
+plans touch is a blocking coordination point, not something commit ordering can be trusted
+to sort out. You fold in what's right (you own the
 plan; the check is information, not instruction). A bad decomposition costs far more than
 one sonnet pass, but not every dish can afford the pass — that trade is what the tier
 already decided.
@@ -520,10 +552,14 @@ itself a finding. For each item: mirror `status` and `attempts` into PLAN.md; re
 `landedRange` next to it when present; if the item is also a board ticket, transition it
 live per Status mapping below (in-progress → done, or → blocked) — never batched. Then run
 the retro-readiness check: every `done` item has a populated `attempts:` entry in PLAN.md
-AND a `reports/<item>-verdict.md` on disk — subagents have returned verdicts to the ledger
+AND both a surviving `reports/<item>-cook.md` and `reports/<item>-verdict.md` on disk —
+the items most worth auditing are exactly the ones whose trail goes missing — subagents have returned verdicts to the ledger
 without writing the file, leaving resume and retro blind. Reconstruct any missing artifact
 from the ledger's structured data (attributed as a reconstruction) before the dish counts
-as retro-ready. Then act on status:
+as retro-ready — and report it as healed, never folded into a clean pass. A reconstructed
+verdict that gated a heavy or otherwise high-risk item gets a real re-inspection: rebuilding
+it from telemetry drops precisely the gate-rerun evidence that made the verdict worth
+anything. Then act on status:
 
 - `done` — landed and cleaned up; nothing further.
 - `skipped` — was already `status: done` in PLAN.md when the script started (resume).
@@ -538,7 +574,9 @@ as retro-ready. Then act on status:
   cook-reported readiness/underspecified-value block, an escalation ladder exhausted with no
   PASS, and an item that never got a cook dispatched because the circuit breaker had already
   tripped before its turn. The first two need a **decision-ready question** — name the exact
-  value needed, never guess one to keep moving. An **escalation ladder exhausted with no
+  value needed, never guess one to keep moving; a cook that blocked on an impossible packet
+  step instead of inventing a workaround did its job, so rule on the question and fix the
+  packet rather than re-dispatching the same contradiction. An **escalation ladder exhausted with no
   PASS** is the Planner's rung-3: fix it yourself (announce it, keep the diff minimal),
   re-run the Inspector on your fix, then land it yourself the same way. The breaker-already-
   tripped case needs neither — it's subsumed by `stoppedEarly` below, which is where you
@@ -595,7 +633,11 @@ When all items are merged:
    passed every per-item inspection). A dish where one config or data value is written by
    one item and consumed by a different item runs the whole-feature review regardless of
    tier — per-item inspection cannot see the boundary (proven twice more: a silent
-   override drop and an every-tier crash each PASSed all their per-item reviews).
+   override drop and an every-tier crash each PASSed all their per-item reviews). The
+   whole-feature review's dispatch prompt spells out the per-criterion evidence table below
+   — VERIFIED / COVERED-BY-GATE / NOT VERIFIED, one row per criterion — as a mechanical
+   requirement of the deliverable; an evidence format that no dispatch prompt demands is a
+   format nobody produces.
 2. **The pass — verify on a real stage before the PR** (when the repo deploys per-developer
    stages). Build an acceptance checklist — one row per acceptance criterion across all
    items, plus ticket-level success criteria — then deploy the integration branch to your
@@ -609,6 +651,15 @@ When all items are merged:
    missing, seed it (fold the seed into the repo's seed scripts) or fall back to the
    integration-suite output as the authoritative evidence, and say which. Auth-gated ACs
    that can't be driven live are COVERED-BY-GATE, stated explicitly per criterion.
+   **When the deliverable RUNS** — a service, a pack, a pipeline — the pass is a live fire:
+   boot from the documented empty state, drive the runbook, and watch the runtime path
+   actually resolve and fire, writing a conforming report into `reports/`. Suites that prove
+   it compiles and installs prove nothing about the runtime path; one live-fire pass caught
+   three demo-blocking defects that every test layer and two adversarial review stages had
+   missed. Finally, re-read every deferral the intake or plan recorded against the diff the
+   dish actually landed: a deferral is a judgment about reachability under the code as it
+   was, and this dish changed that code. If your fix made the deferred bug reachable,
+   likelier, or worse, fold it in or block on it — it is not deferrable any more.
 3. Open the single human-review PR `<delivery-branch> → main` (`gh pr create`)
    with: summary, item list, Evidence highlights, risks. If there is no remote/`gh`, tell
    the user the integration branch is ready for local review instead. If the base branch has
@@ -693,6 +744,21 @@ an optional batched progress comment on the parent, not a status thrash.
 - The Planner never implements (except escalation rung 3, announced) and never explores.
 - No work item merges without a Inspector PASS and real Evidence (actual gate output in the
   Cook's report — "it should pass" is not Evidence).
+- **Every diff that lands carries a verdict or a recorded review.** Three paths skip the
+  gate quietly: a commit you made directly to the integration branch, a fix produced by
+  overriding a PASS into rework, and a docs-only item you self-verified instead of
+  dispatching an inspector. Each is legitimate; each gets a short verdict-shaped note beside
+  the cook report naming the commit, what you checked it against, and what you corrected —
+  silent fixes leave the item unscoreable and rest the finding's closure on whoever made the
+  mistake. A diff-conformance spot-check replaces a full inspector pass only when all three
+  hold: the diff is annotation/comment/constant/doc-only, every file it touches already
+  PASSed inspection this dish, and the item's own Verify commands were re-run green. Record
+  the deviation in PLAN.md.
+- **Never claim an outcome before its artifact exists.** A review result, a gate result, a
+  verification — in a ticket comment, a PR body, or a handoff — is claimed only once the
+  artifact is on disk, and the claim cites that path. A handoff comment once announced a
+  passing review 23 minutes before the PASS file existed, while the only artifact on disk was
+  the FAIL it superseded.
 - Cooks stay inside their packet's file list. An out-of-scope edit is a Inspector finding, not
   a favor.
 - Same-wave items never share files. Conflicts are decomposition defects → `LEARNINGS.md`.

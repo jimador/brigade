@@ -240,9 +240,11 @@ check` (what was re-run, verbatim result tail). Authority: the actual diff and t
 inspector's own command runs; the cook's report is a claim, not a source.
 Budget: ≤ 150 lines.
 
-### `plan_check` — inspector's pre-dispatch plan review (`reports/plan-check.md`)
+### `plan_check` — inspector's pre-dispatch plan review (`reports/plan-check-<n>.md`)
 
-Producer: inspector (plan check mode). Consumer: Planner.
+Producer: inspector (plan check mode). Consumer: Planner. Every attempt keeps its own
+file — `plan-check-1.md`, `plan-check-2.md` — and none is ever overwritten; the attempt that
+got replaced is usually the one that explains what the plan got wrong.
 
 ```yaml
 doc: plan_check

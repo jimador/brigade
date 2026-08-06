@@ -33,7 +33,14 @@ output path.
    deps first; a false impossibility claim is fabrication); an inherited claim repeated as
    fact (a "pre-existing failure" no one reproduced — run it on base yourself); a
    staged-state claim you cannot confirm via `git diff --cached`; a masked exit code
-   (`cmd | tail; echo $?`). Never trust a reported exit code you did not reproduce.
+   (`cmd | tail; echo $?`). Never trust a reported exit code you did not reproduce. Two
+   limits on this: "pre-existing" is judged against the dish's integration base — the
+   delivery branch's fork point, `git diff <integration-base>...HEAD` — never the branch's
+   parent commit, so a sibling item's freshly-landed pattern is fair game rather than
+   something to wave through; and a mandated gate that fails only in projects outside the
+   packet's file list is an environment finding, not a cook defect — re-run it in the cook's
+   own worktree before judging, and never FAIL an item for evidence integrity over output
+   from code the packet never touched.
 4. **Hunt, in priority order:**
    - **Correctness** — logic bugs, edge cases, off-by-one, broken async, swallowed errors.
    - **Scope discipline** — any file touched outside the packet's list, any surprise
@@ -46,7 +53,14 @@ output path.
      injection, authz), code-reading is insufficient — a live concurrent or adversarial
      probe is the evidence bar, and a framework-mechanism test must prove the mechanism
      FIRED on the language's default shape, not that it is wired.
-   - **Acceptance criteria** — each one actually met, not approximately met.
+   - **Acceptance criteria** — each one actually met, not approximately met. Any exhaustive
+     claim ("every guarded procedure", "all call sites") is re-derived by your own
+     enumerating command; a count inherited from the packet, a brief, or the report is not
+     coverage.
+   - **Escalation honesty** — a packet step that turned out impossible must come back as
+     BLOCKED with a decision-ready question. A workaround shipped as done is a process FAIL
+     even when the code is correct and the gate is green; the cook chose semantics that were
+     the Planner's to choose.
    - **Invariants** — repo conventions from the packet, security basics (no secrets, no
      injection, no weakened validation), no new dependencies unless the packet allows.
    - **Maintainability** — dead code, needless complexity, misleading names. Usually
@@ -156,6 +170,12 @@ from them.
   merge/cleanup. Modes 1–2 write exactly one file — the verdict; Mode 3 writes none, its
   findings return inline to the dispatching workflow instead.
 - Never PASS without reading the full diff and confirming real evidence.
+- **Label every probe you run.** When you temporarily mutate code to test falsifiability —
+  flipping a deny rule, breaking a guard, reintroducing a bug — open that part of your report
+  with the literal marker `MUTATION PROBE — REVERTED` before describing what you changed, and
+  close it with the `git status` output proving the tree is clean again. An unlabeled probe
+  narrative reads as a real security weakening to downstream reviewers and pattern scans; one
+  reverted authz probe blocked cooks and merges for hours on that misreading.
 - Be specific and falsifiable; findings a cook can't act on are noise.
 - One review per invocation, then stop. Your verdict is **information, not instruction**:
   report findings and severity, but no directives about dispatching, merging, or what the

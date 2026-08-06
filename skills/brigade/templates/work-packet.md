@@ -58,6 +58,9 @@ Only when they apply — omit the section if neither does:
   adversarial test to target it specifically — against real infra (a testcontainer) for
   data-correctness changes, never a fake that returns canned rows. If the module lacks that
   real-test infra, standing it up is in scope for this packet, not a reason to fall back to fakes.
+  When the change interpolates variable text into a delimited syntax (wikilinks, markdown
+  links, HTML, template strings), the adversarial case uses that syntax's own delimiters as
+  the payload — never leave the hostile input to the Inspector's imagination.
 - **Finding-derived premise.** If this packet comes from a review/audit finding, name the exact
   command that confirms the finding's premise (e.g. `git grep <symbol>`). If it contradicts the
   premise, the Cook reports `status: done` with zero file changes and the command's output as
@@ -81,7 +84,41 @@ Only when they apply — omit the section if neither does:
   gate in its Verify (`git diff <base>...HEAD | grep -c '<pattern>'` expected 0) AND pastes
   the literal correct replacement in the Implement step — a prose-only ban does not change
   what the Cook writes (the same cast defect recurred 5 times across two dishes despite an
-  explicit per-packet ban).
+  explicit per-packet ban). When the banned pattern is what the obvious implementation reaches
+  for, name the sanctioned technique too — three cooks independently wrote the identical
+  forbidden cast because the packet said what not to do and never what to do instead.
+- **Format, shape, and layout criteria.** A packet constraining a value's FORMAT (id shape,
+  hex length, prefix convention) pastes both a conforming and a non-conforming fixture literal
+  into the acceptance criteria — a prose-only format rule ships tests whose fixtures never
+  exercise the filter, so the named test cannot fail. A criterion about alignment, column
+  position, or layout ships a computed assertion in Verify (a script recomputing the expected
+  offset); a cook's prose claim of having checked the formatting is not evidence.
+- **Derived identity.** When the identity or key a feature displays or groups by is derived
+  rather than declared (source name from a file name, principal from an env secret, id from a
+  path), state the derivation rule in the packet and, where the platform allows it, add a
+  build-time uniqueness check. A derived-identity collision is invisible to per-item review
+  because no single item owns the derivation.
+- **Externally mutable state.** A packet reading state that can change under it (git HEAD, a
+  cursor, a high-water mark) resolves it ONCE and threads the captured value through every
+  use, and the falsification step proves the resolve-once property: inject a change between
+  two uses and show nothing is skipped.
+- **Self-catch and re-entry.** A packet adding a `throw` of type X inside a try/catch that also
+  handles X names that hazard explicitly and says how to resolve it — usually by narrowing what
+  the `try` guards.
+- **Real input, real dispatch.** A behavior change to a config or input parser is verified
+  against the operator's REAL config file, not only fixtures — zero false positives on the live
+  file is the acceptance bar. A content bundle the platform loads and then calls (a plugin, a
+  pack, a realm) ships a test that invokes it through the real seam and asserts the recorded
+  call's arguments; "it loads" is never evidence that it runs.
+- **Unexported code under test.** A test-only packet targeting unexported code pre-sanctions
+  the minimal seam (the export keyword, the extraction) or tells the Cook in as many words that
+  BLOCKED beats faking coverage. An impossible honest path plus a done-bias produces retyped
+  copies and tautologies, not blocked reports.
+- **User input in a shell template.** A packet authoring a command doc, script, or prompt that
+  templates user input into shell NEVER shows the raw value inside the command: validate it
+  against an explicit character class first (refuse and stop on mismatch), then pass it as a
+  single-quoted argument, with the same validation repeated inside the script itself. A
+  hostile-input case goes in the Verify.
 - **Git/filesystem choreography.** When acceptance hinges on a git or filesystem side-effect
   recipe (branch delete, rebase-then-merge, worktree teardown), the Verify runs the actual
   recipe against a scratch repo — token/shape greps let a topology bug survive two FAIL
@@ -142,12 +179,31 @@ adjacent bugs to leave alone (report them instead).
   hygiene: never `cmd | tail; echo $?` — pipe status masks the build's code. Include the
   repo's lint check scoped to the packet's files when one exists. A packet editing a file
   that already has tests runs ALL of that file's existing test classes in Verify — find
-  them with `git grep -l <ClassUnderTest>` — not only the newly named ones.) Three proofs
+  them with `git grep -l <ClassUnderTest>` — not only the newly named ones.) Four proofs
   of can-it-fail: a property/soundness test asserts its own non-vacuity (fail if the count
   of cases exercising the property is zero); a code path that can fall back to a live
   global binary gets a deterministic override plus a hermeticity canary (nonsense input,
   known output); a "pre-existing failure" claim is verified only in a fully-installed real
-  checkout, never a symlinked or freshly-isolated worktree.
+  checkout, never a symlinked or freshly-isolated worktree; and a probe or spec file is
+  proven to be inside the checker's own file set before its green result counts — a
+  tsconfig `files` array is not filtered by `exclude`, so a probe can typecheck vacuously.
+- Is the Verify blind to reachability, or to what a person actually sees? Unit + type + lint
+  runs go green for a page that never becomes a route (an underscore-prefixed segment is a
+  private folder, not a URL) and for a badge that renders dark-on-dark or as a raw id. A
+  packet adding a page or route asserts it in the build's route manifest or hits it; a packet
+  rendering a badge, status, or identity cell asserts the rendered text, not component
+  presence. UI and DOM packets also enumerate every terminal path — success, error, cancel,
+  degraded/offline — as named acceptance criteria, each one walked in verification; every UI
+  inspection FAIL in one dish traced to exactly the terminal path its packet never named.
+- Is every literal the packet hands the Cook to copy verbatim — a JSON/YAML config, a CLI
+  invocation, an API payload, a command template — validated against the REAL tool before
+  dispatch (in a scratch dir when the target doesn't exist yet), with that same tool invoked
+  in the Verify block? A string-match or `json.load` proxy waves through literals the real
+  tool rejects, and the Cook ships the defect faithfully.
+- If this packet authors a command, template, or generator that itself emits work packets,
+  does it name the mandatory packet sections (Preconditions & hazards, Verify, falsification)
+  as its own acceptance criteria? A meta-packet inherits the schema checklist of what it
+  produces.
 - Is every stated premise verified against source, not memory: cited precedent tests read at
   line level (what calls they actually make), library/third-party contracts read from the
   actual sources, lookup/query behavior quoted from the query builder, external-API claims

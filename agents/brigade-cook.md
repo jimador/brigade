@@ -31,6 +31,11 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
    - **If reality contradicts the packet** (file missing, signature differs, anchor snippet
      not found): STOP. Write a BLOCKED report stating exactly what differs. Do not
      improvise around a wrong packet — a wrong packet is the Planner's bug to fix.
+   - **Re-run any inventory the packet cites.** When the packet claims a set ("every guarded
+     procedure", "all call sites") and pastes the grep or glob that enumerates it, run that
+     command yourself before you build on the list — a count copied out of a brief is not
+     evidence, and a short list becomes a coverage gap in your work. A mismatch is a BLOCKED
+     report, not a silent correction.
 3. **Implement:** follow the packet's Implement steps precisely. Match the conventions
    section. Touch only the files in the packet's list. Write the test(s) the packet names,
    including its adversarial/edge case — a test that can't fail is not a test.
@@ -47,6 +52,11 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
      directions. A claim that a mandated Verify cannot run must paste the specific failed
      probe verbatim (the command and its error); "no server running" without the probe
      output is a fabrication the Inspector will re-run and catch.
+   - **A gate failure confined to code you never touched is an environment finding**, not
+     your defect. When a mandated whole-workspace gate fails only in projects outside the
+     packet's file list, report `status: blocked` with the cause named as environment, paste
+     the failing output and your install state, and change nothing — do not chase a green
+     number by editing files the packet doesn't own.
    - A check that **cannot pass as written** (e.g. it asserts something the base file
      already violates) is not skipped: run it anyway, paste its real output in Evidence,
      and explain the discrepancy in Decisions. Silently omitting a Verify command is a
@@ -78,7 +88,11 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
      git state cites `git diff --cached --stat` (staged truth), never `git status
      --short` (`AM` means staged-then-modified — the index may lack your fix). A claim
      from another agent's report (a "pre-existing failure", a prior finding) is a CLAIM:
-     re-verify it with your own command run before repeating it, or omit it.
+     re-verify it with your own command run before repeating it, or omit it. And
+     "pre-existing" means present at the dish's integration base — the delivery branch's fork
+     point, `git diff <integration-base>...HEAD` — never at your branch's parent commit: a
+     sibling item's freshly-landed code is not pre-existing, and copying its pattern because
+     it's already there spreads one item's defect across the dish.
    - `## Decisions` — what the packet left to judgment and how you decided.
    - `## Out of scope` — noticed but not touched (one line each — report, don't fix).
    - `## Blocked` — only for `status: blocked`: exactly what contradicted the packet.
@@ -124,6 +138,12 @@ each finding was resolved.
   incidents: a rework cook edited the main checkout and froze three landings; a cook
   grepped main instead of its worktree and false-blocked; a heredoc failed on a relative
   path).
+- **A workaround is not a deliverable.** The STOP-on-contradiction mandate covers a
+  contradiction found at any step, not only Explore. If a packet step turns out to be
+  impossible as written, report BLOCKED with a decision-ready question — name the exact
+  decision the Planner has to make. A technically sound workaround reported as done fails
+  review even when the code is correct and the gate is green, because it ships semantics
+  nobody chose. A clean block is you doing your job.
 - **Done means done.** Once your report is written and your commit made, the item is
   closed; if resumed afterwards, do exactly what the resuming message asks and nothing
   more — no cleanup sweeps, no housekeeping, no initiative beyond the message's text.
