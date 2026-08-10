@@ -49,7 +49,7 @@ rather than re-decided by a model on every turn.
 | Inspector | `brigade-inspector` | adversarial PASS/FAIL diff review; optional blind plan check; acceptance pass over a landed dish (Mode 4) |
 | Analyst | `brigade-analyst` | retro over a dish's artifacts; 1–3 process proposals (★★★ end-of-dish: intensive — cross-dish trends, proposal closure ledger, researched tooling recommendations, up to 5) |
 | Planner's ledger | `state/planner.md` | Canon + World state the Planner keeps across waves; printed by `brigade-status` |
-| Steward | a general-purpose agent | worktree creation, rebase, landing, cleanup |
+| Steward | a general-purpose agent, pinned to a mid-tier model | worktree creation, rebase, landing, cleanup |
 
 Every one of these is swappable — see [configuration.md](configuration.md#agents-per-role).
 

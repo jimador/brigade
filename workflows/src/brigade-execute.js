@@ -504,6 +504,7 @@ async function runItem(item, promises) {
         schema: SCHEMA_STEWARD_RETURN,
         agentType: POLICY.agents.steward,
         effort: STEWARD.effort,
+        model: POLICY.stewardModel,
       }))
       if (!creation || !creation.ok) {
         status = 'blocked'
@@ -598,6 +599,7 @@ async function runItem(item, promises) {
         schema: SCHEMA_STEWARD_RETURN,
         agentType: POLICY.agents.steward,
         effort: STEWARD.effort,
+        model: POLICY.stewardModel,
       },
     )))
 
