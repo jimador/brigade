@@ -105,6 +105,12 @@ cheaper steward, without editing the workflow scripts.
 The escalation ladder still comes from the tier; these keys only decide *which agent*
 fills each rung.
 
+Every brigade agent but the steward picks its own model in its frontmatter. The steward is
+a general-purpose agent with no model of its own, so brigade pins it to a mid-tier one —
+otherwise it inherits the session's, and a dish planned on the top-tier model runs its
+`git worktree add` calls there too. Point `steward` at your own agent and that pin drops
+away, leaving your agent's frontmatter in charge.
+
 ### Circuit breaker
 
 ```json
