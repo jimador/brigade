@@ -3196,6 +3196,42 @@ for cmd, want in kinds.items():
   echo "EVIDENCE SCOPE OK"
 }
 
+test_planner_model_config() {
+  # plannerModel selects the model the Planner session runs on (fable for a frontier
+  # setup). It is a top-level key, so it has to be in KNOWN_TOP_LEVEL or doctor rejects
+  # every config that sets it -- which is exactly how a documented key becomes unusable.
+  fixture="$TMP_ROOT/planner-model"
+  mkdir -p "$fixture/.brigade"
+  printf '{"plannerModel": "fable"}\n' >"$fixture/.brigade/config.local.json"
+
+  json="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-config" resolve --json)" ||
+    fail "brigade-config resolve failed with plannerModel set"
+  printf '%s' "$json" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+cfg = doc.get("config", doc)
+if cfg.get("plannerModel") != "fable":
+    raise SystemExit("plannerModel did not survive resolution: " + repr(cfg.get("plannerModel")))
+' || fail "plannerModel did not resolve"
+
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-config" doctor >/dev/null 2>&1 ||
+    fail "brigade-config doctor rejected a config setting plannerModel"
+
+  # Default stays null so an unset plannerModel keeps the tier's planning row.
+  empty="$TMP_ROOT/planner-model-default"
+  mkdir -p "$empty/.brigade"
+  json="$(CLAUDE_PROJECT_DIR="$empty" "$ROOT/scripts/brigade-config" resolve --json)" ||
+    fail "brigade-config resolve failed with no plannerModel"
+  printf '%s' "$json" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+cfg = doc.get("config", doc)
+if cfg.get("plannerModel") is not None:
+    raise SystemExit("expected plannerModel null by default, got " + repr(cfg.get("plannerModel")))
+' || fail "plannerModel default is not null"
+  echo "PLANNER MODEL CONFIG OK"
+}
+
 test_eval_cli_backend() {
   fixture="$TMP_ROOT/eval-cli"
   mkdir -p "$fixture/skills/x" "$fixture/bin"
@@ -3387,4 +3423,5 @@ test_eval_cli_backend
 test_hook_matchers
 test_subagent_line_model
 test_evidence_scope
+test_planner_model_config
 echo "PASS: brigade operational regressions"

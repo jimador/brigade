@@ -2,6 +2,8 @@
   "_comment": "Copy to ~/.brigade/config.json. Personal settings that follow you into every repo. Anything a repo does not override comes from here. Remove the _comment keys before use.",
 
   "tier": "two-star",
+  "_plannerModel_comment": "Model the Planner session should be on for this repo. A model alias or full id (fable | opus | sonnet | haiku | claude-...), NOT an agent type. null = take the tier's planning row from TIERS.md. The session-model handshake at dish intake compares against this.",
+  "plannerModel": null,
   "maxParallel": 4,
   "workingMemory": true,
 

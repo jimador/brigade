@@ -10,14 +10,22 @@ configured default (★★ out of the box), **brigade light** for ★.
 | --- | --- | --- | --- |
 | say | "brigade heavy" | "brigade" | "brigade light" |
 | call sensitivity | low — spend for quality | balanced | high — every expensive call justified |
-| planning (normal) | frontier (Fable / Opus-max) | opus | sonnet |
-| planning (difficult) | frontier | frontier (Fable; else Opus-max) | opus |
+| planning (normal) | frontier — `fable`, else `opus` at max effort | `opus` | `sonnet` |
+| planning (difficult) | frontier | frontier — `fable`, else `opus` at max effort | `opus` |
 | scouts | haiku, ≤ 6/dish; planner may read pivotal files itself | haiku, ≤ 4/dish | haiku, ≤ 2/dish, merge questions |
 | first-attempt cook | brigade-cook-heavy (sonnet) | brigade-cook (haiku) | brigade-cook (haiku) |
 | escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
 | plan check | always | on triggers | never (self-check list only) |
 | analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish or on request |
 | code review depth | 8 dimensions, verify blocking+high ×2 | 4 groups (+product with source), verify blocking ×1 | 1 merged pass, no verify |
+
+**Overriding the planning model.** The tier's planning row is the default, not a lock. Set
+`plannerModel` in any config layer (global, team, or repo-local JSON) to the model this
+repo's Planner should run on — a model alias or full id (`fable`, `opus`, `sonnet`,
+`haiku`, `claude-...`), never an agent type. The session-model handshake at dish intake
+compares the live session model against `plannerModel` when set, and against this table's
+planning row otherwise. `fable` is the intended value for a frontier-planning setup;
+nothing in the fleet hard-codes a planning model, so it is a config choice, not a fork.
 
 The machine-readable mirror of this table (cook attempt ladders, scout caps, plan-check
 policy, retro cadence) is `workflows/config.js` — the Workflow scripts are bundled

@@ -75,8 +75,10 @@ Model policy is a service tier, defined in `TIERS.md`: ★★★ three-star (say
 dish's tier in PLAN.md frontmatter `tier:`.
 
 **Session-model handshake.** The Planner IS the session. At dish intake, compare the
-session model to the tier's planning row in `TIERS.md`: if they differ, tell the operator
-which model to `/model` to, or proceed degraded and say so. When a difficult-planning
+session model to the resolved `plannerModel` when a config layer sets one, else to the
+tier's planning row in `TIERS.md` (`fable` is the intended frontier value; nothing
+hard-codes a planning model). If they differ, tell the operator which model to `/model` to,
+or proceed degraded and say so. When a difficult-planning
 trigger fires (the trigger list is in `TIERS.md`), escalate the planning checkpoint to the
 tier's difficult-planning model the same way, then drop back.
 
