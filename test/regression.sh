@@ -3141,6 +3141,61 @@ for family in ("haiku", "sonnet", "opus", "fable"):
   echo "SUBAGENT LINE MODEL OK"
 }
 
+test_evidence_scope() {
+  # A green exit says nothing about scope. These fixtures pin both directions: an honest
+  # full gate must never read as targeted (or the check cries wolf and gets ignored), and
+  # a narrowed suite must never read as full (which is the defect the helper exists for).
+  ev="$ROOT/scripts/brigade-evidence"
+
+  json="$("$ev" classify --json \
+    "npm test" "cargo test" "go test ./..." "pytest" "make check" "tsc --noEmit" \
+    "npm test src/auth/login.test.ts" "pytest tests/unit/test_a.py" \
+    "pnpm --filter web test" "jest --testNamePattern=auth" "pytest -k auth")" ||
+    fail "brigade-evidence classify failed"
+
+  printf '%s' "$json" | python3 -c '
+import json, sys
+
+byc = {c["command"]: c for c in json.load(sys.stdin)["commands"]}
+
+full = ["npm test", "cargo test", "go test ./...", "pytest", "make check", "tsc --noEmit"]
+targeted = ["npm test src/auth/login.test.ts", "pytest tests/unit/test_a.py",
+            "pnpm --filter web test", "jest --testNamePattern=auth", "pytest -k auth"]
+
+for cmd in full:
+    got = byc[cmd]["scope"]
+    if got != "full":
+        raise SystemExit("expected full scope for " + repr(cmd) + ", got " + got)
+for cmd in targeted:
+    got = byc[cmd]["scope"]
+    if got != "targeted":
+        raise SystemExit("expected targeted scope for " + repr(cmd) + ", got " + got)
+
+# Kind drives which claim a command can satisfy, so a misread kind is as bad as a misread
+# scope. cargo check must not read as a test run.
+kinds = {"npm test": "test", "tsc --noEmit": "typecheck", "make check": "check",
+         "go test ./...": "test"}
+for cmd, want in kinds.items():
+    if byc[cmd]["kind"] != want:
+        raise SystemExit("expected kind " + want + " for " + repr(cmd) + ", got " + byc[cmd]["kind"])
+' || fail "brigade-evidence scope/kind classification regressed"
+
+  # cover: an honest gate passes.
+  "$ev" cover --claim test,lint,typecheck -- "npm test" "npm run lint" "tsc --noEmit" >/dev/null ||
+    fail "brigade-evidence cover rejected an honest full gate"
+
+  # cover: a targeted run must NOT satisfy a full-scope claim, and must exit non-zero.
+  if "$ev" cover --claim test -- "npm test src/auth/login.test.ts" >/dev/null 2>&1; then
+    fail "brigade-evidence cover accepted a targeted run as repo green"
+  fi
+
+  # cover: a claimed kind nobody ran at all is also a failure, not a silent pass.
+  if "$ev" cover --claim test,lint -- "npm test" >/dev/null 2>&1; then
+    fail "brigade-evidence cover accepted a claim with no command run for it"
+  fi
+  echo "EVIDENCE SCOPE OK"
+}
+
 test_eval_cli_backend() {
   fixture="$TMP_ROOT/eval-cli"
   mkdir -p "$fixture/skills/x" "$fixture/bin"
@@ -3331,4 +3386,5 @@ test_eval_seed_cases
 test_eval_cli_backend
 test_hook_matchers
 test_subagent_line_model
+test_evidence_scope
 echo "PASS: brigade operational regressions"
