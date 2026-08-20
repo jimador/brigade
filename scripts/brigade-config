@@ -35,6 +35,11 @@ const SOURCE_TYPES = ['static-file', 'mcp', 'skill', 'command']
 const DEFAULTS = {
   tier: 'two-star',
   mainBranch: 'main',
+  // The model the session-model handshake expects the Planner to be on for this repo.
+  // The Planner is the session, not a subagent, so this is a model alias or full model id
+  // (fable | opus | sonnet | haiku | claude-...), NOT an agent type like the models.* keys.
+  // null = take the tier's planning row from TIERS.md.
+  plannerModel: null,
   maxParallel: 4,
   workingMemory: true,
   gate: [],

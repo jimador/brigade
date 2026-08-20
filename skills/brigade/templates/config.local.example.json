@@ -2,6 +2,8 @@
   "_comment": "Copy to <repo>/.brigade/config.local.json. Your own settings for this one repo — never committed (.brigade/ lives in .git/info/exclude). This layer wins over everything else.",
 
   "tier": "three-star",
+  "_plannerModel_comment": "Model the Planner session should be on for this repo. A model alias or full id (fable | opus | sonnet | haiku | claude-...), NOT an agent type. null = take the tier's planning row from TIERS.md. The session-model handshake at dish intake compares against this.",
+  "plannerModel": null,
   "maxParallel": 2,
 
   "circuitBreaker": {

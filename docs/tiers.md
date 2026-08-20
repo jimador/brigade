@@ -6,8 +6,8 @@ same one a kitchen makes: how much craft goes into each plate.
 | | ★★★ three-star | ★★ two-star (default) | ★ one-star |
 | --- | --- | --- | --- |
 | say | "brigade heavy" | "brigade" | "brigade light" |
-| planning (normal) | frontier | opus | sonnet |
-| planning (difficult) | frontier | frontier | opus |
+| planning (normal) | frontier (`fable`) | `opus` | `sonnet` |
+| planning (difficult) | frontier | frontier (`fable`) | `opus` |
 | scouts | haiku, ≤ 6 per dish | haiku, ≤ 4 | haiku, ≤ 2, questions merged |
 | first-attempt cook | heavy cook (sonnet) | cook (haiku) | cook (haiku) |
 | escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
@@ -62,3 +62,10 @@ can default to ★"). Tier changes are always yours to make: one line in config.
 
 Full reference, including the machine-readable policy the workflow scripts run against:
 [`skills/brigade/TIERS.md`](../skills/brigade/TIERS.md).
+
+## Overriding the planning model
+
+The tier's planning row is a default. Set `plannerModel` in any config layer to the
+model this repo's Planner session should run on — a model alias or full id (`fable`,
+`opus`, `sonnet`, `haiku`, `claude-...`), not an agent type. The session-model handshake
+at dish intake compares against it when set. `fable` is the intended frontier value.
