@@ -81,7 +81,8 @@ trigger fires (the trigger list is in `TIERS.md`), escalate the planning checkpo
 tier's difficult-planning model the same way, then drop back.
 
 **Mechanical helpers** — `brigade-status`, `brigade-config`, `brigade-validate`,
-`brigade-coord` — live at `${CLAUDE_PLUGIN_ROOT}/scripts/` (SessionStart echoes the
+`brigade-coord`, `brigade-risk`, `brigade-evidence` — live at
+`${CLAUDE_PLUGIN_ROOT}/scripts/` (SessionStart echoes the
 resolved path in brigade repos). They are NOT on PATH: whenever this document names one,
 run it from that directory. They cost zero model tokens.
 
@@ -382,9 +383,18 @@ scout claim is an inference to re-derive, not a fact to paste.
 - **P1 — Source-level reads.** Quote the actual library signature, the precedent's actual
   calls, the query builder's WHERE/label clause, or the primary doc. Never paste a contract
   you have only read *about*.
-- **P2 — Dry-run every gate.** Run each distinct gate command and self-check grep on the
-  base branch before dispatch, and prove the full-suite command actually enumerates every
-  workspace package — a suite that silently skips a package's tests exits 0 too.
+- **P2 — Dry-run every gate, and classify what it proves.** Run each distinct gate command
+  and self-check grep on the base branch before dispatch. Then classify them — a green exit
+  says nothing about scope on its own:
+
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-evidence" classify --json <gate-cmd>...
+  ```
+
+  Anything it reports `targeted` proves one file or one package, not the repo. A suite
+  silently narrowed by `--filter`, `--project`, `-k`, or a path argument exits 0 exactly
+  like the full suite. Record each gate's `scope` in the packet's Verify block so the cook,
+  the inspector, and Phase 6 all know what a pass there is worth.
 - **P3 — Exhaustiveness claims are re-derived.** "All call sites", "all files with X" is
   produced by your own grep at packet-write time, never copied from a brief or a review.
   Every copied list so far has been short.
@@ -657,7 +667,16 @@ be pasted and exact.
 When all items are merged:
 
 1. Run the full verification gate once on the integration branch (dispatch a Cook to run it
-   if output is long; you only need the pass/fail tail). When the dish assembled one
+   if output is long; you only need the pass/fail tail). Before any handoff text calls that
+   gate green, prove the commands that actually ran cover every claimed kind at full scope:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-evidence" cover --claim test,lint,typecheck -- <commands actually run>
+   ```
+
+   A non-zero exit means a claimed kind was covered only by a targeted run. **Never upgrade
+   a targeted check into repo green** — fix the coverage or say plainly, per kind, what was
+   and was not proven. When the dish assembled one
    feature incrementally across items (a resolver, dispatcher, pipeline) or contains a
    heavy data-correctness item, also run a whole-feature adversarial review scoped to the
    assembled behavior — per-item reviews are structurally blind to properties that span
@@ -777,6 +796,11 @@ an optional batched progress comment on the parent, not a status thrash.
 - The Planner never implements (except escalation rung 3, announced) and never explores.
 - No work item merges without a Inspector PASS and real Evidence (actual gate output in the
   Cook's report — "it should pass" is not Evidence).
+- **A targeted check is never repo green.** Evidence carries a scope as well as an exit
+  code: a suite pointed at one file, or narrowed by `--filter`/`--project`/`-k`, exits 0
+  exactly like the full run. Classify with `brigade-evidence` (zero tokens) rather than
+  reading the checkmark, and state the scope wherever the claim is made — packet Verify
+  block, cook report Evidence, handoff comment, PR body.
 - **Every diff that lands carries a verdict or a recorded review.** Three paths skip the
   gate quietly: a commit you made directly to the integration branch, a fix produced by
   overriding a PASS into rework, and a docs-only item you self-verified instead of

@@ -1,0 +1,189 @@
+#!/usr/bin/env node
+// brigade-evidence — classify what a verification command actually PROVES, so a green
+// exit never gets read as more than it is.
+//
+// The failure this exists for: a gate that passes on one file, or on one workspace
+// package, exits 0 exactly like a gate that passed on the whole repo. Brigade already
+// knows this burns people — Phase 2 rule P2 says "prove the full-suite command actually
+// enumerates every workspace package (a suite that silently skips a package's tests
+// exits 0 too)" — but that rule was a reminder, and reminders lose to a green checkmark.
+// This makes it mechanical: every command gets a kind and a scope, and a `full` claim
+// backed only by `targeted` commands is a hard failure, not a judgment call.
+//
+// Zero model tokens. Static string inspection only — nothing here executes a command.
+//
+// Usage:
+//   brigade-evidence classify [--json] <command> [<command>...]
+//   brigade-evidence cover    [--json] --claim <kind>[,<kind>...] -- <command> [<command>...]
+//
+//   classify  what each command proves: {kind, scope, targets, narrowedBy}
+//   cover     do the commands actually run cover each claimed kind at FULL scope?
+//             exit 1 when a claimed kind is missing or only covered by a targeted run.
+//
+// Exit codes: 0 = clean, 1 = coverage failure or bad usage.
+
+// Kind is decided from the whole command string, most specific first — `cargo check`
+// must not read as a test run, and `lint:fix` must not read as a format run.
+const KINDS = [
+  ['lint', /\blint\b|eslint|ruff\s+check|clippy|rubocop|golangci|flake8|stylelint/i],
+  ['typecheck', /\btypecheck\b|\btsc\b|\bmypy\b|\bpyright\b|\btype-check\b/i],
+  ['build', /\bbuild\b|\bcompile\b/i],
+  ['format', /\bfmt\b|\bformat\b|prettier|gofmt|\bblack\b/i],
+  ['check', /\bcheck\b/i],
+  ['test', /\btests?\b|\bspec\b|pytest|jest|vitest|mocha|rspec|go\s+test|cargo\s+test/i],
+]
+
+// A flag that silently narrows a suite to a subset. These are the dangerous ones: the
+// command still looks like the full gate, still exits 0, and proves a fraction of it.
+const NARROWING_FLAGS = new Set([
+  '--filter', '--workspace', '--project', '--projects', '--scope', '--package',
+  '--only', '--grep', '--testnamepattern', '--testpathpattern', '--shard', '-k',
+])
+
+const SOURCE_EXT = /\.(py|js|jsx|ts|tsx|mjs|cjs|rs|go|java|rb|php|c|cc|cpp|h|hpp|swift|kt|scala|ex|exs)$/i
+
+// Runner binaries and subcommand words. `npm test` names the script, it does not point
+// the suite at something — treating that bare word as a target would call every honest
+// full gate "targeted" and make the whole check cry wolf.
+const NEVER_TARGET = new Set([
+  'npm', 'pnpm', 'yarn', 'bun', 'npx', 'cargo', 'go', 'make', 'just', 'task', 'uv',
+  'python', 'python3', 'node', 'deno', 'dotnet', 'mvn', 'gradle', 'bundle', 'rake',
+  'pytest', 'jest', 'vitest', 'mocha', 'rspec', 'tsc', 'mypy', 'pyright', 'ruff',
+  'eslint', 'prettier', 'clippy', 'gofmt', 'black', 'golangci-lint',
+  'run', 'exec', 'test', 'tests', 'build', 'check', 'lint', 'fmt', 'format',
+  'typecheck', 'type-check', 'spec', 'e2e', 'unit', 'integration', 'ci', 'all', 'verify',
+])
+
+// Idioms that mean "everything", not "this one thing" — Go's ./... most of all.
+const FULL_SCOPE_IDIOMS = new Set(['.', '...', './...', './', '*', 'all'])
+
+function tokenize(command) {
+  // Shell-ish split that respects quotes. Never evaluates — this is inspection only.
+  const out = []
+  let cur = ''
+  let quote = null
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = null
+      else cur += ch
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if (/\s/.test(ch)) {
+      if (cur) { out.push(cur); cur = '' }
+    } else {
+      cur += ch
+    }
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+function kindFor(command) {
+  for (const [kind, re] of KINDS) {
+    if (re.test(command)) return kind
+  }
+  return 'unknown'
+}
+
+// A bare positional that names a file, directory, or test id — the classic way a gate
+// gets pointed at one thing while still reading as "the suite passed".
+function looksLikeTarget(arg) {
+  if (!arg || arg.startsWith('-') || arg.includes('=')) return false
+  const bare = arg.toLowerCase()
+  if (FULL_SCOPE_IDIOMS.has(bare) || NEVER_TARGET.has(bare)) return false
+  return (
+    arg.includes('/') ||
+    arg.includes('\\') ||
+    arg.includes('::') ||
+    SOURCE_EXT.test(arg) ||
+    /^(test_|__tests__)/.test(arg)
+  )
+}
+
+function classify(command) {
+  const tokens = tokenize(command)
+  // Skip the runner itself; everything after it can narrow the run.
+  const args = tokens.slice(1)
+  const targets = args.filter(looksLikeTarget)
+  const narrowedBy = []
+  for (let i = 0; i < args.length; i++) {
+    const bare = args[i].split('=')[0].toLowerCase()
+    if (NARROWING_FLAGS.has(bare)) narrowedBy.push(args[i])
+  }
+  const scope = targets.length || narrowedBy.length ? 'targeted' : 'full'
+  return { command, kind: kindFor(command), scope, targets, narrowedBy }
+}
+
+function parseArgs(argv) {
+  const mode = argv[0]
+  const rest = argv.slice(1)
+  const flags = { json: false, claim: [], commands: [] }
+  let sawSeparator = false
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]
+    if (!sawSeparator && a === '--json') flags.json = true
+    else if (!sawSeparator && a === '--claim') {
+      flags.claim.push(...String(rest[++i] || '').split(',').map((s) => s.trim()).filter(Boolean))
+    } else if (!sawSeparator && a === '--') sawSeparator = true
+    else flags.commands.push(a)
+  }
+  return { mode, flags }
+}
+
+function main() {
+  const { mode, flags } = parseArgs(process.argv.slice(2))
+
+  if (mode !== 'classify' && mode !== 'cover') {
+    console.error('usage: brigade-evidence classify|cover [--json] [--claim k1,k2 --] <command>...')
+    process.exit(1)
+  }
+  if (flags.commands.length === 0) {
+    console.error('brigade-evidence: no commands given')
+    process.exit(1)
+  }
+
+  const results = flags.commands.map(classify)
+
+  if (mode === 'classify') {
+    if (flags.json) console.log(JSON.stringify({ commands: results }, null, 2))
+    else {
+      for (const r of results) {
+        const why = r.narrowedBy.length ? ` (narrowed by ${r.narrowedBy.join(' ')})`
+          : r.targets.length ? ` (targets ${r.targets.join(' ')})` : ''
+        console.log(`${r.scope.padEnd(8)} ${r.kind.padEnd(10)} ${r.command}${why}`)
+      }
+    }
+    return
+  }
+
+  // cover: every claimed kind needs at least one FULL-scope command that passed for it.
+  const claims = flags.claim.length ? flags.claim : [...new Set(results.map((r) => r.kind))]
+  const problems = []
+  for (const kind of claims) {
+    const forKind = results.filter((r) => r.kind === kind)
+    if (forKind.length === 0) {
+      problems.push({ kind, reason: 'no command run for this kind', commands: [] })
+      continue
+    }
+    if (!forKind.some((r) => r.scope === 'full')) {
+      problems.push({
+        kind,
+        reason: 'only targeted runs — a targeted pass is not repo green',
+        commands: forKind.map((r) => r.command),
+      })
+    }
+  }
+
+  const doc = { claims, commands: results, problems, ok: problems.length === 0 }
+  if (flags.json) console.log(JSON.stringify(doc, null, 2))
+  else if (doc.ok) console.log(`OK   ${claims.join(', ')} each covered at full scope`)
+  else {
+    for (const p of problems) {
+      console.log(`FAIL ${p.kind}: ${p.reason}`)
+      for (const c of p.commands) console.log(`       ${c}`)
+    }
+  }
+  if (!doc.ok) process.exit(1)
+}
+
+main()

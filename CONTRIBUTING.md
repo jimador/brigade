@@ -15,7 +15,7 @@ settings.json       plugin defaults — currently just the subagent status line
 monitors/           background coord watch (starts on brigade skill invoke)
 CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
 scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
-                    brigade-coord, brigade-subagent-line
+                    brigade-coord, brigade-subagent-line, brigade-risk, brigade-evidence
 hooks/              SessionStart state injection, PreToolUse git guard,
                     SubagentStop artifact-validate gate
 workflows/src/      hand-edited Workflow script sources
@@ -54,6 +54,7 @@ node --check scripts/brigade-subagent-line
 node --check scripts/brigade-onboard
 node --check scripts/brigade-risk
 node --check scripts/brigade-eval
+node --check scripts/brigade-evidence
 node --check workflows/config.js
 for f in workflows/src/*.js workflows/brigade-*.js; do node --check "$f" || exit 1; done
 scripts/brigade-bundle --check

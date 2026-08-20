@@ -56,6 +56,14 @@ Numbered units (`W1.` …), each tagged:
 Supersede by striking (`~~old text~~`) and adding a new unit `(supersedes Wn)` — never
 delete. ≤ 30 live units; on overflow move struck/stale units to `## Archive`.
 
+**Defrag the archive, don't just grow it.** The whole ledger is re-read by the next attempt
+and by the Inspector, so an archive that only ever accumulates is a per-attempt tax that
+rises with every rework round — exactly the cost the ledger exists to avoid. When `## Archive`
+passes ~20 units, replace it in place with a single `## Archive summary` paragraph: what was
+tried, what it proved, what was ruled out. That paragraph is derived material and compresses
+well. Canon never enters it and live World-state units never enter it — only already-struck
+and already-stale ones, which is what makes the rewrite safe.
+
 ## Cadence — event-anchored, never optional
 
 Counting tool calls gets skipped under pressure; these events don't:

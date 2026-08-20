@@ -163,6 +163,7 @@ and [docs/overrides.md](docs/overrides.md).
 | `scripts/brigade-config` | resolves the config layers and prompt-override stacks; `doctor` validates |
 | `scripts/brigade-coord` | atomic per-dish Claude/Codex ownership and handoff leases |
 | `scripts/brigade-validate` | zero-token schema conformance checker for dish artifacts |
+| `scripts/brigade-evidence` | zero-token verification-scope classifier — stops a targeted pass being read as repo green |
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
