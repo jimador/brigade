@@ -37,6 +37,16 @@ function compactTokens(n) {
   return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`
 }
 
+// The resolved model id the row actually runs on, squeezed to the family name. A tier
+// promises a model; an org's availableModels allowlist can substitute a different one
+// underneath, and the tier label alone would never show that. Absent until Claude Code
+// resolves the model, so callers must treat '' as "not known yet", not "no model".
+function compactModel(id) {
+  if (typeof id !== 'string' || !id) return ''
+  const family = id.replace(/^.*?(claude-)/, '').replace(/^claude-/, '').match(/^(opus|sonnet|haiku|fable)/i)
+  return family ? family[1].toLowerCase() : ''
+}
+
 function subject(task) {
   // Workflow labels are already packet-shaped ("cook:auth-guard"), so they beat the
   // agent's long prose description. Strip the role prefix the row already shows.
@@ -52,6 +62,9 @@ function render(task, columns) {
 
   const what = subject(task)
   if (what) parts.push(what)
+
+  const model = compactModel(task.model)
+  if (model) parts.push(model)
 
   if (typeof task.tokenCount === 'number' && typeof task.contextWindowSize === 'number' && task.contextWindowSize > 0) {
     parts.push(`${Math.round((task.tokenCount / task.contextWindowSize) * 100)}% ctx`)
