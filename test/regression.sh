@@ -2890,21 +2890,31 @@ test_eval_seed_cases() {
   list_out="$(cd "$ROOT" && env -u BRIGADE_EVAL_ROOT -u BRIGADE_EVAL_MOCK -u ANTHROPIC_API_KEY \
     "$ROOT/scripts/brigade-eval" --list --json)" ||
     fail "brigade-eval --list failed keyless against the real repo root: $list_out"
-  python3 - "$list_out" <<'PY' || fail "brigade-eval --list did not report all six seed cases"
+  python3 - "$list_out" <<'PY' || fail "brigade-eval --list did not report the seed cases"
 import json, sys
 
 doc = json.loads(sys.argv[1])
-names = sorted(c["name"] for c in doc)
-expected = sorted([
+names = [c["name"] for c in doc]
+
+# The original six pin the discovery path across both case files. Assert they are PRESENT,
+# not that they are all there is -- an equality check here turns every new eval case into a
+# regression failure, which is exactly backwards for a suite meant to grow.
+required = {
     "planner-never-explores",
     "planner-never-implements",
     "packet-bar-verify-required",
     "packet-bar-rejects-vague",
     "verdict-envelope-shape",
     "verdict-no-fenced-frontmatter",
-])
-if names != expected:
-    raise SystemExit(f"expected {expected}, got {names}")
+}
+missing = sorted(required - set(names))
+if missing:
+    raise SystemExit(f"seed cases missing from --list: {missing} (got {sorted(names)})")
+
+# Names address a case for --only, so a duplicate silently shadows one.
+dupes = sorted({n for n in names if names.count(n) > 1})
+if dupes:
+    raise SystemExit(f"duplicate eval case names: {dupes}")
 PY
 
   # (b) every seed case's surface path is a real file in the repo (each case file's own

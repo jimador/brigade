@@ -1,6 +1,8 @@
 ---
 name: brigade
-description: Coordinate a fleet of cheap parallel coding agents from any ticket source (Notion, ClickUp, Obsidian vault boards, or a local folder of markdown files). Use when the user wants to start a working session against a task board, work their assigned tickets, swag/design a ticket without cooking, break a ticket or idea into granular parallel work items, run them in git worktrees with tier-selected executors, review with an adversarial gate, and move tickets through statuses. Triggers on "brigade", "brigade heavy", "brigade light", "three star", "one star", "work my tickets", "work my board", "swag this ticket", "flesh out the design", "parallelize this ticket", "run the fleet". For grooming/organizing a board without cooking, see the companion groom skill.
+description: Coordinate a fleet of cheap parallel coding agents from any ticket source (Notion, ClickUp, Obsidian vault boards, or a local folder of markdown files). Runs a board-first session: research a ticket with scouts, decompose it into a DAG of tiny disjoint work items, cook them in parallel git worktrees on tier-selected models, gate every diff through an adversarial inspector, land them in dependency order, and hand off one PR. For grooming or organizing a board without cooking, use the companion groom skill instead.
+when_to_use: Starting a working session against a task board, working assigned tickets, swagging or designing a ticket without cooking, breaking a ticket or idea into parallel work items, or resuming a dish. Triggers on "brigade", "brigade heavy", "brigade light", "three star", "one star", "work my tickets", "work my board", "swag this ticket", "flesh out the design", "parallelize this ticket", "run the fleet".
+argument-hint: "[ticket-id|dish-slug] [heavy|light]"
 ---
 
 # Brigade
@@ -356,74 +358,86 @@ rather than confirmation.
 
 ## Phase 2 — Decompose (your most important job)
 
-If the groomed ticket carries a `## Proposed breakdown` (a human's suggested split, often
-absorbed from board child tasks), treat it as a **hint, not a contract**: check each
-proposed piece against the scout briefs and the disjointness/granularity rules below, keep
-what holds, split or merge what doesn't, and note material deviations from the hint in
-`PLAN.md` so the ticket author can see why the shape changed.
+Every rule below is numbered so a retro, a plan check, or an analyst report can cite it
+(`P3`, `D5`) instead of restating it in prose. Each carries the evidence that earned it —
+that clause is why the rule survives contact with a plausible-sounding exception.
 
-Write `.brigade/dishes/<dish-slug>/PLAN.md` conforming to the `plan` type in `SCHEMAS.md`
-— frontmatter carries the ticket, intake decisions, and the machine-readable item list
-(slug, status, depends_on, heavy, files); the body carries one work packet per item
-(format in `templates/work-packet.md`).
+### Write the plan
 
-**Premises get verified, not trusted.** Any contract a packet states as fact — a library
-API signature, a "mirror this test" precedent, a resolver/lookup behavior, an external-API
-wire shape — is read at source level before dispatch: quote the signature, the precedent's
-actual calls, the query builder's WHERE/label clause, or the primary doc. An unanchored
-scout claim is an inference to re-derive, not a fact to paste. Dry-run every distinct gate
-command and self-check grep on the base branch before dispatch — and prove the full-suite
-command actually enumerates every workspace package (a suite that silently skips a
-package's tests exits 0 too). Three claim classes get
-extra teeth: an exhaustiveness list ("all call sites", "all files with X") is re-derived
-by your own grep at packet-write time, never copied from a brief or review (every copied
-list so far has been short); a parity claim ("matches today's behavior") is verified
-against the base branch itself — sibling artifacts written alongside the change (docs,
-tests, comments) validate each other circularly and prove nothing; and a coverage claim
-("existing tests already cover X") carries the covering test's name/line or the grep
-output that proves it — two sibling packets in one dish repeated the same unverified
-coverage claim that a one-line grep disproved. A fourth class deserves its own reflex: a
-**propagation** claim — "existing records pick this up automatically", "the profile change
-flows through" — is read off the actual resolver before it is written down, because data
-denormalized at write time never retro-updates; when it doesn't propagate, the item carries
-the backfill or seed-migration step rather than a hope.
+Write `.brigade/dishes/<dish-slug>/PLAN.md` conforming to the `plan` type in `SCHEMAS.md`:
+frontmatter carries the ticket, intake decisions, and the machine-readable item list (slug,
+status, depends_on, heavy, files); the body carries one work packet per item (format in
+`templates/work-packet.md`).
 
-**Before proposing any new listener, sync, trigger, or handler class, grep for the thing
-that already receives that event and read its doc comment.** If you still want a new one,
-the item note cites the existing handler either as the thing being extended or as the thing
-being deliberately bypassed, with the reason. A new mechanism with no such citation is an
-unfinished plan — one Planner drafted four duplicate mechanisms across two dishes on the
-same branch, and every one was caught downstream instead of at drafting time.
+A groomed ticket's `## Proposed breakdown` is a **hint, not a contract**. Check each
+proposed piece against the scout briefs and the rules below, keep what holds, split or
+merge what doesn't, and note material deviations in `PLAN.md` so the ticket author can see
+why the shape changed.
 
-**A gate the plan schedules at a wave boundary is pasted verbatim into the Verify block of
-the packet that closes that wave.** A gate that lives only in plan prose is a gate nobody
-runs — a promised post-wave production build never ran, and a blocking prerender regression
-survived every per-item gate.
+### P — Verify every premise before it goes in a packet
 
-**Disjointness is the spine.** Two work items in the same wave must not touch the same
-files — doc files included. Anything that genuinely overlaps is sequenced with a
-dependency edge, not parallelized. A merge conflict later means the decomposition was
-wrong — record it in `LEARNINGS.md` and sequence such work next time. And any rewrite of
-a file that already carries an inspector PASS invalidates that verdict: the rewriting
-item needs a re-verdict covering the new content before merge.
+Any contract a packet states as fact is read at source level before dispatch. An unanchored
+scout claim is an inference to re-derive, not a fact to paste.
 
-**Shared contracts own their blast radius.** A work item that edits a shared type, schema,
-or interface owns every consumer that must compile against it — name those consumers in its
-scope, and put it first in the DAG so dependents branch from the merged contract. The same
-ownership runs along call chains: an item adding a leaf API, callback, or config flag names
-every hop of the chain the real consumer traverses (leaf → panel → section → host; producer
-→ resolver → policy) and verifies through the consumer end, not the producer in isolation —
-"the mechanism exists" is not "callers actually traverse it", so a scout question must cover
-invocation topology (who mounts this, how do the existing tests mount it) whenever behavior
-routes through a central handler, middleware, or DI. And a shared facade/re-export that ≥2
-sibling items import is created by the producing item's own files list — never left for the
-first downstream cook to discover missing. When the shared artifact is also compiled against
-by *another in-flight dish*, widen it behind a temporary backward-compatible overload so the
-other branches keep building, and record removing that scaffolding as an explicit cleanup
-item in PLAN.md — an untracked bridge becomes permanent API.
+- **P1 — Source-level reads.** Quote the actual library signature, the precedent's actual
+  calls, the query builder's WHERE/label clause, or the primary doc. Never paste a contract
+  you have only read *about*.
+- **P2 — Dry-run every gate.** Run each distinct gate command and self-check grep on the
+  base branch before dispatch, and prove the full-suite command actually enumerates every
+  workspace package — a suite that silently skips a package's tests exits 0 too.
+- **P3 — Exhaustiveness claims are re-derived.** "All call sites", "all files with X" is
+  produced by your own grep at packet-write time, never copied from a brief or a review.
+  Every copied list so far has been short.
+- **P4 — Parity claims are checked against base.** "Matches today's behavior" is verified
+  against the base branch itself. Sibling artifacts written alongside the change (docs,
+  tests, comments) validate each other circularly and prove nothing.
+- **P5 — Coverage claims carry proof.** "Existing tests already cover X" cites the covering
+  test's name and line, or the grep output that proves it. Two sibling packets in one dish
+  repeated the same unverified coverage claim that a one-line grep disproved.
+- **P6 — Propagation claims are read off the resolver.** "Existing records pick this up
+  automatically", "the profile change flows through" — data denormalized at write time never
+  retro-updates. When it doesn't propagate, the item carries the backfill or seed-migration
+  step rather than a hope.
+- **P7 — Grep for the existing receiver before adding a new one.** Before proposing any new
+  listener, sync, trigger, or handler class, find the thing that already receives that event
+  and read its doc comment. If you still want a new one, the item note cites the existing
+  handler as the thing being extended or deliberately bypassed, with the reason. A new
+  mechanism with no such citation is an unfinished plan — one Planner drafted four duplicate
+  mechanisms across two dishes on the same branch, every one caught downstream instead of at
+  drafting time.
 
-**The haiku bar** (the bar every first-attempt packet must clear, whatever model cooks
-it). Every work item must satisfy ALL of:
+### D — Shape the DAG
+
+- **D1 — Disjointness is the spine.** Two items in the same wave must not touch the same
+  files, doc files included. Anything that genuinely overlaps is sequenced with a dependency
+  edge, not parallelized. A merge conflict later means the decomposition was wrong — record
+  it in `LEARNINGS.md` and sequence such work next time.
+- **D2 — A rewrite invalidates a verdict.** Any rewrite of a file that already carries an
+  inspector PASS needs a re-verdict covering the new content before merge.
+- **D3 — Shared contracts own their blast radius.** An item that edits a shared type, schema,
+  or interface names every consumer that must compile against it in its scope, and goes first
+  in the DAG so dependents branch from the merged contract.
+- **D4 — Ownership runs the whole call chain.** An item adding a leaf API, callback, or config
+  flag names every hop the real consumer traverses (leaf → panel → section → host; producer →
+  resolver → policy) and verifies through the consumer end, not the producer in isolation.
+  "The mechanism exists" is not "callers actually traverse it", so a scout question covers
+  invocation topology — who mounts this, how do the existing tests mount it — whenever behavior
+  routes through a central handler, middleware, or DI.
+- **D5 — The producing item creates the shared facade.** A shared facade or re-export that ≥2
+  sibling items import is in the producing item's own files list, never left for the first
+  downstream cook to discover missing.
+- **D6 — Cross-dish shared artifacts get a tracked bridge.** When a shared artifact is also
+  compiled against by another in-flight dish, widen it behind a temporary backward-compatible
+  overload so the other branches keep building, and record removing that scaffolding as an
+  explicit cleanup item in PLAN.md. An untracked bridge becomes permanent API.
+- **D7 — A wave-boundary gate is pasted into a packet.** A gate the plan schedules at a wave
+  boundary goes verbatim into the Verify block of the packet that closes that wave. A gate
+  that lives only in plan prose is a gate nobody runs — a promised post-wave production build
+  never ran, and a blocking prerender regression survived every per-item gate.
+
+### The haiku bar
+
+The bar every first-attempt packet must clear, whatever model cooks it. All of:
 
 - Touches **1–3 named files** (plus its own new test file).
 - **≤ ~150 changed lines** expected.
@@ -435,64 +449,82 @@ it). Every work item must satisfy ALL of:
   Count-style checks assert the **delta against base** (new occurrences, changed lines),
   never an absolute count of a term the base file already contains.
 
-An item that can't meet the bar gets **split further**. If it's irreducible and still hard
-(cross-cutting, concurrency, security, data correctness, subtle contracts — plus the
-proven cheap-model failure classes: comparisons across two serialization/hash domains,
-soundness/under-approximation proofs, packets pasting verbatim external
-signatures/citations, precision-text work demanding literal placeholder text,
-byte-faithful extraction/mirroring, or exact alignment, and any packet that must NAME a
-specific data-structure alignment / ordering / drop-semantics hazard and require the cook
-to hold it in mind rather than a gate that mechanically enforces it, and any test packet
-that asserts an EXACT error/output message (haiku repeatedly fabricates the expected
-string or swaps the case rather than reporting the mismatch — a prose ban has not held) —
-a named-but-self-enforced hazard is the cheap-model failure class, cheap cooks went 0/4
-across it, and same-model retries fixed nothing), mark it `heavy: true` in the plan — it dispatches to the heavy Cook from the start, at any tier.
-Plain verbatim insertion at an exact quoted anchor is NOT in this class — cheap cooks
-paste-at-anchor cleanly (proven first-attempt clean where reformatting went 0/4); leave
-those `heavy: false`.
+An item that can't meet the bar gets **split further**.
 
-**Mechanical risk check.** At packet-write time, run
-`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk" --json --files <item's files>` over every
-item's files list; the table lives in `policies/risk-escalation.md`. An `escalate: true`
-result forces `heavy: true` in the item's frontmatter entry as a plain value — NEVER an
-inline `#` comment inside the flow mapping, or `brigade-validate`'s manual parser breaks
-— and records the matching categories in the item's packet header line (`**heavy:** true
-— table: auth`). Table flags are add-only: your own judgment may add heavy flags, but
-never removes one the table triggered.
-Heavy items should be the exception; if more than ~1 in 5 items is heavy, your
-decomposition is too coarse — that guideline counts judgment-based flags only, table-
-triggered flags are exempt.
+### Heavy flags
 
-**Adversarial plan check (policy set by the tier — `TIERS.md`: ★★★ always; ★★ when the
-dish has ≥ 6 items, touches a shared contract, or burned you last time; ★ never — run the
-packet-quality self-check against the bar above instead).** When it runs: before showing
-the user the plan, dispatch
-`brigade-inspector` in **plan check mode**: it first sketches its own decomposition from the
-ticket + scout briefs *without reading your plan* (blind, to break groupthink), then reads
-`PLAN.md` and writes a comparison — coverage differences, per-divergence which version is
-stronger and why, and concrete merge recommendations. It **executes** the packet's pasted
-Verify commands and premise-probes against the real tree — never just reads them; every
-executing plan check this fleet has run caught a defect a reading pass would have shipped
-(an invalid-JSON repro payload, a second latent bug under the stated one, a hard-FAIL that
-would brick a complete historical dish, a Verify command that dies on this environment's
-own shell shims). When two sibling packets assert the same runtime string or output, or a
-packet embeds a payload from a scout brief, the plan check executes that shared case once
-and pastes the literal captured output into every packet that asserts it — packet authors
-never re-derive or analogize it (an analogized deny message burned a full escalation
-ladder). When the check raises a blocking contradiction between a sourced scout claim and an
-assumption your plan overrides, and the assumption is cheap to test empirically, the
-resolution is a live probe run before dispatch — never an unsourced assertion from either
-side. And when another active dish shares this dish's delivery branch, paste that dish's
-item file lists into the plan-check packet with an explicit overlap instruction: a file both
-plans touch is a blocking coordination point, not something commit ordering can be trusted
-to sort out. You fold in what's right (you own the
-plan; the check is information, not instruction). A bad decomposition costs far more than
-one sonnet pass, but not every dish can afford the pass — that trade is what the tier
-already decided.
+An item that is irreducible and still hard is marked `heavy: true` in the plan and dispatches
+to the heavy Cook from the start, at any tier. Hard means one of:
 
-Show the user the plan (item titles, DAG edges, wave layout, heavy flags, and the plan
-check verdict if one ran) and get one confirmation before creating branches. This is the
-single planning checkpoint. Release the dish lease before yielding for that confirmation.
+- Cross-cutting, concurrency, security, data correctness, or subtle contracts.
+- **A proven cheap-model failure class:** comparisons across two serialization/hash domains;
+  soundness or under-approximation proofs; packets pasting verbatim external signatures or
+  citations; precision-text work demanding literal placeholder text; byte-faithful extraction
+  or mirroring; exact alignment.
+- **A named-but-self-enforced hazard** — any packet that must NAME a specific data-structure
+  alignment, ordering, or drop-semantics hazard and require the cook to hold it in mind
+  rather than a gate that mechanically enforces it. Cheap cooks went 0/4 across this class and
+  same-model retries fixed nothing.
+- **An exact-message assertion** — any test packet asserting an EXACT error or output string.
+  Haiku repeatedly fabricates the expected string or swaps the case rather than reporting the
+  mismatch; a prose ban has not held.
+
+Plain verbatim insertion at an exact quoted anchor is **not** in this class — cheap cooks
+paste-at-anchor cleanly (proven first-attempt clean where reformatting went 0/4). Leave those
+`heavy: false`.
+
+**Mechanical risk check.** At packet-write time run
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk" --json --files <item's files>` over every item's
+files list; the table lives in `policies/risk-escalation.md`. An `escalate: true` result forces
+`heavy: true` in the item's frontmatter entry **as a plain value** — never an inline `#` comment
+inside the flow mapping, or `brigade-validate`'s manual parser breaks — and records the matching
+categories in the packet header line (`**heavy:** true — table: auth`). Table flags are add-only:
+your judgment may add heavy flags, never remove one the table triggered.
+
+Heavy items are the exception. More than ~1 in 5 means the decomposition is too coarse — that
+guideline counts judgment-based flags only; table-triggered flags are exempt.
+
+### Adversarial plan check
+
+Policy is set by the tier (`TIERS.md`: ★★★ always; ★★ when the dish has ≥ 6 items, touches a
+shared contract, or burned you last time; ★ never — run the packet-quality self-check against
+the bar above instead).
+
+When it runs, before showing the user the plan, dispatch `brigade-inspector` in **plan check
+mode**: it first sketches its own decomposition from the ticket + scout briefs *without reading
+your plan* (blind, to break groupthink), then reads `PLAN.md` and writes a comparison —
+coverage differences, per-divergence which version is stronger and why, and concrete merge
+recommendations.
+
+It **executes** the packet's pasted Verify commands and premise-probes against the real tree,
+never just reads them. Every executing plan check this fleet has run caught a defect a reading
+pass would have shipped: an invalid-JSON repro payload, a second latent bug under the stated
+one, a hard-FAIL that would brick a complete historical dish, a Verify command that dies on this
+environment's own shell shims.
+
+Three things the check resolves rather than reports:
+
+- When two sibling packets assert the same runtime string or output, or a packet embeds a
+  payload from a scout brief, the check executes that shared case **once** and pastes the
+  literal captured output into every packet that asserts it. Packet authors never re-derive or
+  analogize it — an analogized deny message burned a full escalation ladder.
+- When it raises a blocking contradiction between a sourced scout claim and an assumption your
+  plan overrides, and the assumption is cheap to test, the resolution is a **live probe run
+  before dispatch** — never an unsourced assertion from either side.
+- When another active dish shares this dish's delivery branch, paste that dish's item file
+  lists into the plan-check packet with an explicit overlap instruction. A file both plans
+  touch is a blocking coordination point, not something commit ordering can be trusted to sort
+  out.
+
+You fold in what's right. You own the plan; the check is information, not instruction. A bad
+decomposition costs far more than one sonnet pass, but not every dish can afford the pass —
+that trade is what the tier already decided.
+
+### The planning checkpoint
+
+Show the user the plan (item titles, DAG edges, wave layout, heavy flags, and the plan check
+verdict if one ran) and get one confirmation before creating branches. This is the single
+planning checkpoint. Release the dish lease before yielding for that confirmation.
 
 ## Phase 3–5 — Execute the DAG (`brigade-execute` Workflow script)
 
@@ -694,9 +726,10 @@ silently at any tier**: if you must defer a due pass, say so to the user explici
 Before dispatching `brigade-analyst`, applying its report, offering heuristics to the
 KB, or running a brain-upgrade pass, read `RETRO.md` (next to this SKILL) — the dispatch
 inputs, the ★★★ intensive mode, the heuristic store, and the brain-upgrade protocol live
-there. Two invariants hold regardless: KB writes are the operator's call (one yes/no per
-retro, never automatic), and a brain upgrade edits the plugin **source**, never the
-installed copy.
+there. Three invariants hold regardless: KB writes are the operator's call (one yes/no per
+retro, never automatic); a brain upgrade edits the plugin **source**, never the installed
+copy; and a brain upgrade that adds a rule also **compacts the section it touched** —
+absorbing without compacting is what turns this brain into prose nobody can scan.
 
 ## Resuming a dish (any session, any time)
 
@@ -779,52 +812,27 @@ an optional batched progress comment on the parent, not a status thrash.
   environment). If a future skill (e.g. for mise itself) enters the toolbox, check its
   vocabulary against brigade's and rename on the brigade side if they collide.
 
-## Files in this plugin
+## Companion files
 
-- `SCHEMAS.md` (next to this SKILL) — the artifact type registry (envelope, per-type
-  frontmatter, body sections, length budgets, authority rules). Read it before producing
-  any artifact.
-- `SETUP.md` (next to this SKILL) — first-run init interview, the `.brigade/` layout,
-  and multi-repo workspace rules. Read on first run in a repo or in a workspace cwd.
-- `../../CONNECTORS.md` (plugin root) — the connector categories brigade binds to
-  (`~~tickets` board source, `~~kb` knowledge base) and how the binding is recorded.
-- `REVIEW.md` (next to this SKILL) — the standalone `/brigade:review` contract:
-  invocation args, input contract, per-tier depth, return shape, review-dispatch.
-  Read before dispatching a review.
-- `RETRO.md` (next to this SKILL) — the self-improvement stack: analyst dispatch,
-  intensive mode, heuristic store, brain upgrade. Read when a retro is due.
-- `TIERS.md` (next to this SKILL) — the service tiers (three-star / two-star / one-star):
-  per-tier model policy, scout caps, plan-check policy, the escalation ladder as
-  implemented by `brigade-execute`, retro cadence, difficult-planning triggers.
-- `MEMORY.md` (next to this SKILL) — the cook working-memory ledger protocol: who gets
-  one (heavy items, rework attempts), the Canon/World-state format, cadence, and the
-  Inspector audit.
-- `GRAPHITE.md` (next to this SKILL) — optional Graphite mode: `graphite_restack`
-  (gt-driven landing/rework rebases, local-only) and `graphite_platform` (stacked-PR
-  handoff via `gt submit`). Both off by default; read it only when the repo config
-  enables one.
-- `../../workflows/` — the three generated Workflow scripts: `brigade-research.js`
-  (Phase 1), `brigade-execute.js` (Phases 3–5), and `brigade-review.js` (`/brigade:review`,
-  above) — all built from `workflows/src/*.js` by `scripts/brigade-bundle`. `workflows/config.js`
-  mirrors the tier policy and schemas already defined in `TIERS.md`/`SCHEMAS.md` for the
-  scripts to read at runtime (they can't import) — edit the `.md` files and rerun the
-  bundle, never hand-edit `config.js` alone.
-- `../../commands/` — mechanical slash commands: status, config, tier, retro, validate,
-  design, review, review-dispatch.
-- `../../scripts/brigade-config` — resolves the four config layers and the prompt-override
-  stacks. Run it instead of reading config files.
-- `../../scripts/brigade-coord` — atomic per-dish leases shared by Claude and Codex.
-- `hooks/guard.sh` — PreToolUse git-hygiene guard.
-- `../groom/SKILL.md` — the board-grooming session: cluster by product feature,
-  split/merge/sharpen tickets via scout + inspector review. Run it for whole-board work,
-  tickets that predate brigade, or anything failing intake readiness.
-- `sources/notion.md` — the Notion adapter (MCP-first, curl fallback).
-- `sources/clickup.md` — the ClickUp adapter (MCP-first, curl fallback).
-- `sources/local.md` — a local folder of markdown files as the board (no service, no
-  token).
-- `sources/TEMPLATE.md` — the four-operation contract for writing a new source adapter.
-- `templates/config.md` — the per-repo board-wiring template installed by init.
-- `templates/config.{global,team,local}.example.json` — one example per settings layer.
-- `templates/work-packet.md` — the work packet format (read it before writing PLAN.md).
-- Agents ship in the plugin's `agents/` directory: `brigade-scout`, `brigade-cook`,
-  `brigade-cook-heavy`, `brigade-inspector`, `brigade-analyst`.
+Everything below sits next to this SKILL unless noted. The phases above already say when to
+read each one; this table is the index, not a second set of instructions.
+
+| File | Read it when |
+| --- | --- |
+| `SCHEMAS.md` | Before producing or consuming any artifact. The type registry — envelope, per-type frontmatter, body sections, length budgets, authority rules. |
+| `templates/work-packet.md` | Before writing PLAN.md packets. |
+| `TIERS.md` | At dish intake, to bind the tier: model policy, scout caps, plan-check policy, escalation ladder, retro cadence, difficult-planning triggers. |
+| `policies/risk-escalation.md` | The heavy-flag table `brigade-risk` enforces. |
+| `SETUP.md` | First run in a repo, or a workspace cwd — init interview, `.brigade/` layout, multi-repo rules. Prefer `/brigade:onboard`. |
+| `REVIEW.md` | Before `/brigade:review` or `/brigade:review-dispatch`. Do not build the Workflow args from memory. |
+| `RETRO.md` | When a retro is due, before applying its report, or before a brain upgrade. |
+| `MEMORY.md` | When a heavy item or rework attempt runs — the cook working-memory ledger protocol. |
+| `GRAPHITE.md` | Only when repo config enables `graphite_restack` or `graphite_platform`. Both off by default. |
+| `sources/*.md` | Binding a board: `notion`, `clickup`, `local`, `obsidian`, plus `TEMPLATE.md` for a new adapter. |
+| `../groom/SKILL.md` | Whole-board work, tickets that predate brigade, anything failing intake readiness. |
+| `../../CONNECTORS.md` | The connector categories brigade binds to (`~~tickets`, `~~kb`). |
+
+**Generated code.** `../../workflows/brigade-*.js` are built from `workflows/src/*.js` and
+`workflows/config.js` by `scripts/brigade-bundle` — Workflow scripts cannot import at runtime.
+`config.js` mirrors tier policy and schemas already defined in `TIERS.md`/`SCHEMAS.md`; edit
+those and rerun the bundle, never hand-edit `config.js` alone.

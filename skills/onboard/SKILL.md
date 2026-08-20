@@ -1,6 +1,7 @@
 ---
 name: onboard
-description: Set up brigade in a repo, or repair/upgrade an existing setup. Use when the operator wants to onboard this repo, get brigade working here, finish board wiring, fix a broken .brigade/config.md, or upgrade after a plugin update leaves drift. Triggers on "onboard this repo", "set up brigade", "repair brigade setup", "finish board wiring", "brigade doctor said drift".
+description: Set up brigade in a repo, or repair and upgrade an existing setup. Runs the init interview, writes the .brigade/ layout and board wiring, and reconciles drift left by a plugin update.
+when_to_use: Onboarding a repo, getting brigade working here, finishing board wiring, fixing a broken .brigade/config.md, or resolving drift after a plugin update. Triggers on "onboard this repo", "set up brigade", "repair brigade setup", "finish board wiring", "brigade doctor said drift".
 ---
 
 # Onboard
