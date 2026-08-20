@@ -3062,6 +3062,75 @@ EOF
   chmod +x "$bin_path"
 }
 
+test_hook_matchers() {
+  # Claude Code compiles a matcher as an exact-match list only when it contains nothing
+  # outside [A-Za-z0-9_- ,|]; any other character (a plugin scope colon) makes it an
+  # unanchored RegExp. Pin both matchers against every value the fleet actually produces,
+  # so a scoped-name change can never silently unhook the validate gate.
+  python3 - "$ROOT/hooks/hooks.json" <<'HOOKPY' || fail "hooks.json matchers do not cover the fleet"
+import json, re, sys
+
+EXACT_ONLY = re.compile(r"^[A-Za-z0-9_\- ,|]*$")
+
+def matches(matcher, value):
+    if EXACT_ONLY.match(matcher):
+        return value in [part.strip() for part in re.split(r"[,|]", matcher)]
+    return re.search(matcher, value) is not None
+
+doc = json.load(open(sys.argv[1]))["hooks"]
+
+session = doc["SessionStart"][0]["matcher"]
+for start in ("startup", "resume", "clear", "compact", "fork"):
+    if not matches(session, start):
+        raise SystemExit(f"SessionStart matcher {session!r} misses start type {start!r}")
+
+subagent = doc["SubagentStop"][0]["matcher"]
+# Every agent that writes a dish artifact must reach the validator.
+for agent in ("brigade:brigade-cook", "brigade:brigade-cook-heavy", "brigade:brigade-inspector"):
+    if not matches(subagent, agent):
+        raise SystemExit(f"SubagentStop matcher {subagent!r} misses agent {agent!r}")
+# cook-heavy must be named outright, not caught as a prefix of brigade-cook.
+if "brigade:brigade-cook-heavy" not in subagent:
+    raise SystemExit("SubagentStop matcher must list brigade:brigade-cook-heavy explicitly")
+# Agents that write no dish artifact must not pay for a validate pass.
+for agent in ("brigade:brigade-scout", "brigade:brigade-analyst", "brigade:brigade-design"):
+    if matches(subagent, agent):
+        raise SystemExit(f"SubagentStop matcher {subagent!r} wrongly covers {agent!r}")
+HOOKPY
+  echo "HOOK MATCHERS OK"
+}
+
+test_subagent_line_model() {
+  # The agent-panel row names the resolved model, so an availableModels substitution shows
+  # instead of hiding behind the tier's promised model. A row whose model is not resolved
+  # yet, and every non-brigade row, must render exactly as before.
+  printf '%s' '{"columns":80,"tasks":[
+    {"id":"t1","name":"brigade-cook","status":"running","label":"cook:a","model":"claude-haiku-4-5-20251001","tokenCount":12000,"contextWindowSize":200000},
+    {"id":"t2","name":"brigade-cook-heavy","status":"running","label":"cook:b","model":"claude-sonnet-5","tokenCount":900},
+    {"id":"t3","name":"brigade-scout","status":"completed","label":"scout:c","tokenCount":400},
+    {"id":"t4","name":"general-purpose","status":"running","label":"other"}]}' \
+    | node "$ROOT/scripts/brigade-subagent-line" \
+    | python3 -c '
+import json, sys
+
+rows = {}
+for line in sys.stdin.read().splitlines():
+    if line.strip():
+        row = json.loads(line)
+        rows[row["id"]] = row["content"]
+
+if "t4" in rows:
+    raise SystemExit("non-brigade rows must keep their default rendering")
+if "haiku" not in rows["t1"] or "sonnet" not in rows["t2"]:
+    raise SystemExit(f"resolved model missing from rows: {rows!r}")
+unresolved = rows["t3"]
+for family in ("haiku", "sonnet", "opus", "fable"):
+    if family in unresolved:
+        raise SystemExit("unresolved model must render nothing, got " + repr(unresolved))
+' || fail "brigade-subagent-line model rendering regressed"
+  echo "SUBAGENT LINE MODEL OK"
+}
+
 test_eval_cli_backend() {
   fixture="$TMP_ROOT/eval-cli"
   mkdir -p "$fixture/skills/x" "$fixture/bin"
@@ -3250,4 +3319,6 @@ test_eval_core
 test_eval_judge
 test_eval_seed_cases
 test_eval_cli_backend
+test_hook_matchers
+test_subagent_line_model
 echo "PASS: brigade operational regressions"

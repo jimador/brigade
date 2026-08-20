@@ -165,7 +165,7 @@ and [docs/overrides.md](docs/overrides.md).
 | `scripts/brigade-validate` | zero-token schema conformance checker for dish artifacts |
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
-| `hooks/` | SessionStart state injection and a PreToolUse git-hygiene guard |
+| `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
 
 ## Requirements
 

@@ -2,7 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
             "type": "command",
@@ -13,7 +13,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "brigade:brigade-cook|brigade:brigade-inspector",
+        "matcher": "brigade:brigade-cook|brigade:brigade-cook-heavy|brigade:brigade-inspector",
         "hooks": [
           {
             "type": "command",

@@ -16,7 +16,8 @@ monitors/           background coord watch (starts on brigade skill invoke)
 CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
 scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
                     brigade-coord, brigade-subagent-line
-hooks/              SessionStart state injection, PreToolUse git guard
+hooks/              SessionStart state injection, PreToolUse git guard,
+                    SubagentStop artifact-validate gate
 workflows/src/      hand-edited Workflow script sources
 workflows/config.js policy consts + config merging, spliced into all three scripts
 workflows/*.js      GENERATED — never hand-edit
