@@ -1,6 +1,8 @@
 ---
 name: groom
-description: Board grooming session for the brigade fleet. Use when the user wants to groom their board, organize/clean up tickets, break down features into tickets, split or merge tickets, or get a board ready for brigade work. Triggers on "groom my board", "organize my tickets", "break down this feature", "clean up the backlog".
+description: Board grooming session for the brigade fleet. Clusters tickets by product feature, splits multi-behavior tickets, merges duplicates, and sharpens goals and acceptance criteria with scout and inspector review, iterating with the user. Never cooks — a dish starts only when the user picks a groomed ticket and says go.
+when_to_use: Grooming a board, organizing or cleaning up tickets, breaking a feature down into tickets, splitting or merging tickets, or getting a board ready for brigade work. Triggers on "groom my board", "organize my tickets", "break down this feature", "clean up the backlog".
+argument-hint: "[board|feature]"
 ---
 
 # Groom the board

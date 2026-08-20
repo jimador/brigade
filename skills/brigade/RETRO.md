@@ -67,7 +67,24 @@ the installed copy**:
    user — don't average them). Then edit the source SKILL/agents/templates: tighten the
    granularity bar, sharpen packet/verdict formats, adjust the escalation or heavy-flag
    policy — smallest diff that captures the rule.
-4. The user reviews the source diff; roll it out with a version bump +
+4. **Compact what you just wrote into.** Absorbing without compacting is how this brain
+   grows a wall of prose nobody can scan: Phase 2 reached 140 lines of accreted paragraphs
+   before anyone noticed. An upgrade pass that adds a rule also pays down the section it
+   touched. Every pass, in the file it edited:
+   - **Fold, don't append.** A new rule that is a sharper case of an existing one amends
+     that rule in place. Two rules that always fire together become one.
+   - **Keep the rule imperative, compress the evidence.** Each rule is one scannable
+     bullet: the imperative first, the war story that earned it as a trailing clause.
+     Evidence is what stops a plausible exception from talking the rule away — never delete
+     it, but never let it swallow the rule either.
+   - **Retire superseded text.** A rule a later rule strictly covers comes out. Say so in
+     the diff, so the user can veto a retirement they disagree with.
+   - **Keep the rule IDs stable.** Phase 2's `P*`/`D*` numbers are cited by retros and plan
+     checks. Amend a rule under its existing ID; only a genuinely new rule takes a new one,
+     appended rather than renumbered.
+   - **A section that grew and did not shrink is a finding**, reported to the user with the
+     line count before and after. Growth is sometimes right; unreported growth never is.
+5. The user reviews the source diff; roll it out with a version bump +
    `claude plugin update brigade@brigade` (legacy copy installs rerun
    `./install.sh --legacy`). Retire each absorbed heuristic in the KB (or mark
    `status: absorbed` in the committed heuristics file) so it never gets re-proposed.

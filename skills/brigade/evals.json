@@ -2,11 +2,17 @@
   {
     "name": "planner-never-explores",
     "surface": "skills/brigade/SKILL.md",
-    "prompt": "You are the Planner in a coding fleet. A user hands you a vague ticket — \"improve error handling in the payments module\" — and tells you the repo is checked out and available in your working directory. Before doing anything else, what is the very first concrete action you take? Describe it in detail.",
+    "prompt": "You are the Planner in a coding fleet. A user hands you a vague ticket \u2014 \"improve error handling in the payments module\" \u2014 and tells you the repo is checked out and available in your working directory. Before doing anything else, what is the very first concrete action you take? Describe it in detail.",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "semantic", "value": "the response dispatches a scout/research step or consults briefs rather than opening or reading source files itself" },
-      { "type": "semantic", "value": "the response does NOT itself read, open, or grep source files to get oriented" }
+      {
+        "type": "semantic",
+        "value": "the response dispatches a scout/research step or consults briefs rather than opening or reading source files itself"
+      },
+      {
+        "type": "semantic",
+        "value": "the response does NOT itself read, open, or grep source files to get oriented"
+      }
     ]
   },
   {
@@ -15,7 +21,10 @@
     "prompt": "You are the Planner in a coding fleet, midway through one work item's escalation ladder. A cheap-model cook attempt and a heavy-model cook attempt have both failed the same work item's inspector review. Investigation shows the actual fix is tiny: a one-line correction to a mistyped config key in a settings file. What do you do next? Describe your exact next action and why.",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "semantic", "value": "implements only as the announced last-rung escalation (announces it, minimal diff, re-runs the inspector) or dispatches instead — never silently edits code" }
+      {
+        "type": "semantic",
+        "value": "implements only as the announced last-rung escalation (announces it, minimal diff, re-runs the inspector) or dispatches instead \u2014 never silently edits code"
+      }
     ]
   },
   {
@@ -24,9 +33,18 @@
     "prompt": "A user asks you to write a work packet for a small feature: add a `retryCount` optional field to an existing `RequestOptions` type and thread it through one call site that constructs a `RequestOptions` value. Write the complete work packet.",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "regex", "value": "### Steps" },
-      { "type": "regex", "value": "Verify" },
-      { "type": "semantic", "value": "the packet ends with a Verify step with exact runnable commands, pastes contracts/anchors rather than referencing files, and stays within 1-3 files" }
+      {
+        "type": "regex",
+        "value": "### Steps"
+      },
+      {
+        "type": "regex",
+        "value": "Verify"
+      },
+      {
+        "type": "semantic",
+        "value": "the packet ends with a Verify step with exact runnable commands, pastes contracts/anchors rather than referencing files, and stays within 1-3 files"
+      }
     ]
   },
   {
@@ -35,7 +53,70 @@
     "prompt": "A teammate wrote the following work packet for a Cook to execute:\n\n\"look around the codebase and improve error handling where appropriate\"\n\nDoes this packet meet the quality bar for dispatch? Give your verdict and explain your reasoning.",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "semantic", "value": "the response rejects the packet as below the bar, citing zero-exploration and mechanical verifiability" }
+      {
+        "type": "semantic",
+        "value": "the response rejects the packet as below the bar, citing zero-exploration and mechanical verifiability"
+      }
+    ]
+  },
+  {
+    "name": "premise-exhaustiveness-rederived",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner writing work packets. A scout brief you dispatched earlier states: \"There are exactly three call sites of `resolveTenant()`: api/handler.ts, jobs/sync.ts, and cli/run.ts.\" You are about to write a packet whose scope is \"update every call site of resolveTenant() for the new signature\". What exactly do you put in the packet's file list, and what do you do first?",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the response re-derives the call-site list with its own grep at packet-write time rather than copying the scout brief's list, treating the brief's enumeration as an inference to verify"
+      }
+    ]
+  },
+  {
+    "name": "premise-coverage-claim-needs-proof",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner. While decomposing, you are about to write into a work packet: \"No new test is needed here \u2014 the existing suite already covers the empty-input case.\" Before that sentence goes into the packet, what must be true, and what do you do?",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the coverage claim must cite the covering test's name/line or the grep output proving it, verified before the claim is written, not asserted from the suite's general existence"
+      }
+    ]
+  },
+  {
+    "name": "heavy-flag-exact-message-assertion",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner sizing one irreducible work item: add a unit test asserting that a permission failure raises an error whose message is exactly \"Access denied: insufficient scope for resource\". The item touches one test file and is about 30 lines. Do you mark it heavy? Answer and justify.",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the item is marked heavy because it asserts an EXACT error/output message, a known cheap-model failure class, despite clearing the size and file-count bar"
+      }
+    ]
+  },
+  {
+    "name": "disjointness-same-wave-files",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner laying out waves. Two work items both need to edit `docs/configuration.md` \u2014 one adds a section about retries, the other adds a section about timeouts. They are otherwise independent. Can they run in the same wave? Answer and explain what you do.",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "they cannot share a wave because same-wave items must not touch the same file, doc files included; they are sequenced with a dependency edge instead of parallelized"
+      }
+    ]
+  },
+  {
+    "name": "brain-upgrade-compacts",
+    "surface": "skills/brigade/RETRO.md",
+    "prompt": "You are running a brain-upgrade pass on the brigade plugin source. The evidence base supports adding one new decomposition rule to the Phase 2 section of SKILL.md, which is already long. Describe exactly what you change in the source and what you report to the user.",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the pass compacts the section it edits as well as adding the rule \u2014 folding the new rule into an existing one where it is a sharper case, compressing evidence into trailing clauses, retiring superseded text, keeping rule IDs stable, and reporting the section's line count before and after"
+      }
     ]
   }
 ]
