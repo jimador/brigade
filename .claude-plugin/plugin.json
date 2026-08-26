@@ -12,6 +12,9 @@
     "./workflows/brigade-execute.js",
     "./workflows/brigade-review.js"
   ],
+  "experimental": {
+    "monitors": "./monitors/monitors.json"
+  },
   "keywords": [
     "agents",
     "fleet",
