@@ -62,6 +62,12 @@ sections in order (a well-groomed ticket makes Phase 0–2 dramatically cheaper)
   files/areas it's believed to touch. This is a **decomposition hint for the Planner, not
   a contract** — Phase 2 re-derives the real work items and packets from fresh scout
   research, honoring the hint where it holds and recording where it didn't.
+- `## UI samples` — *optional, written by the Designer*: one `### <state-name>` per agreed
+  visual state, each with: the sample embed/link (see the adapter's § UI samples for the
+  path form), `Layout:` one paragraph, `Components:` list, `Tokens:` names from
+  `.impeccable/design.json` (never raw values), `Interactions:` incl. terminal paths
+  (success / error / empty / loading), `A11y:` one line. Implementers get the image path AND
+  this text; the text alone must be enough for a cook without vision.
 - `## Original request` — the verbatim original text when a grooming pass restructured
   the ticket; never delete what a human wrote.
 
@@ -328,10 +334,22 @@ test: a question goes in `## Open questions` when it can be **stated precisely n
 if unanswerable yet); in `## Not yet specified` when it can't be phrased that sharply.
 `## Out of scope` never graduates. Refer to questions by **name**, never by index. Types:
 `research` (AFK — scout), `grilling` (HITL — ask the operator), `prototype` (HITL —
-throwaway artifact linked from the question), `task` (manual precondition — checklist).
+throwaway artifact linked from the question), `task` (manual precondition — checklist). A
+`prototype` pointer may be a UI sample path produced by the Designer (`/brigade:ui`).
 
 Must **not** claim the ticket, set `worker`, create packets, or promote to `todo`. The
 ledger is an index: a decision lives where its pointer points, and the file only gists it.
+
+### `design_language` — the project's design system (external, impeccable-owned)
+
+Producer: `impeccable-documenter` (the impeccable plugin). Consumers: Designer
+(`/brigade:ui`), implementer cooks, inspectors. Brigade keeps **no** copy: the record is
+the project's root `DESIGN.md` (impeccable schema v2 — frontmatter `name`, `description`,
+`colors`, `typography`, `components`; body sections Overview, Colors, Typography, Layout,
+Elevation & Depth, Shapes, Components, Do's and Don'ts) plus the sidecar
+`.impeccable/design.json` (`schemaVersion: 2`, tokens, tonal ramps, component HTML/CSS).
+Packets and UI samples reference tokens by their design.json **names**, never raw values.
+Missing → the Designer runs `/impeccable init` with the operator before any capture.
 
 ### `review_report` — standalone code review (`.brigade/reviews/<slug>/report.md`)
 
