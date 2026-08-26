@@ -157,8 +157,8 @@ and [docs/overrides.md](docs/overrides.md).
 | `skills/brigade/sources/` | one adapter per ticket source, plus the four-operation template for writing your own |
 | `skills/brigade/templates/` | per-repo board config, one example per settings layer, and the work-packet format |
 | `skills/groom/SKILL.md` | board-grooming session: cluster, split, merge, sharpen. Never cooks |
-| `agents/` | scout, cook, heavy cook, inspector, analyst, design |
-| `commands/` | `/brigade:status`, `/brigade:config`, `/brigade:validate`, `/brigade:tier`, `/brigade:retro`, `/brigade:design`, `/brigade:review` |
+| `agents/` | scout, cook, heavy cook, inspector, analyst, design, designer |
+| `commands/` | `/brigade:status`, `/brigade:config`, `/brigade:validate`, `/brigade:tier`, `/brigade:retro`, `/brigade:design`, `/brigade:ui`, `/brigade:review` |
 | `scripts/brigade-status` | zero-token dish-state summary; `--json` for tooling |
 | `scripts/brigade-config` | resolves the config layers and prompt-override stacks; `doctor` validates |
 | `scripts/brigade-coord` | atomic per-dish Claude/Codex ownership and handoff leases |
