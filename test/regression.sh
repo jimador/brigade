@@ -564,6 +564,9 @@ assert.strictEqual(p.circuitBreaker.maxTotalFails, 9, 'circuitBreaker override l
 assert.strictEqual(p.agents.inspector, 'custom:my-inspector', 'models.inspector override lost')
 assert.ok(p.attempts.includes('custom:my-cook'), 'models.cook override missing from attempt ladder')
 assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHeavy override missing from heavy ladder')
+// No layer here sets models.designer, so this pins the DEFAULTS entry itself: without it,
+// the key is missing (undefined) rather than present-and-null.
+assert.strictEqual(envelope.config.models.designer, null, 'models.designer should default to null when no layer sets it')
 NODE
 }
 
@@ -916,6 +919,140 @@ EOF
     "$fixture/.brigade/dishes/sample/state/bad.md" >/dev/null 2>&1; then
     fail "brigade-validate passed an invalid ledger"
   fi
+}
+
+test_validate_design_ledger() {
+  fixture="$TMP_ROOT/validate-design-ledger"
+  mkdir -p "$fixture/.brigade/dishes/sample"
+
+  # Create a conforming DESIGN.md fixture — all ten contract sections present.
+  cat >"$fixture/.brigade/dishes/sample/good-DESIGN.md" <<'EOF'
+---
+doc: design_swag
+schema: 1
+dish: sample
+role: design
+model: sonnet
+created: 2026-08-26T00:00:00Z
+ticket: sample
+source: local
+readiness: swaggable
+size_swag: S
+revisits: 1
+sources:
+  - path/to/file:1-2
+---
+
+## What this seems to be
+
+A one-line gist of the ticket.
+
+## Likely shape of work
+
+A one-line shape estimate.
+
+## Codebase grounding
+
+A one-line grounding pointer.
+
+## Decisions so far
+
+- **name**: gist — pointer
+
+## Open questions
+
+- **name** — `research` · AFK — the question. Blocked by: none
+
+## Not yet specified
+
+A one-line unresolved fog item.
+
+## Out of scope
+
+A one-line excluded item.
+
+## Risks & unknowns
+
+A one-line risk.
+
+## Readiness
+
+A one-line readiness call.
+
+## Original request
+
+A one-line paraphrase of the request.
+EOF
+
+  # Create a nonconforming fixture — same body, minus "## Decisions so far".
+  cat >"$fixture/.brigade/dishes/sample/bad-DESIGN.md" <<'EOF'
+---
+doc: design_swag
+schema: 1
+dish: sample
+role: design
+model: sonnet
+created: 2026-08-26T00:00:00Z
+ticket: sample
+source: local
+readiness: swaggable
+size_swag: S
+revisits: 1
+sources:
+  - path/to/file:1-2
+---
+
+## What this seems to be
+
+A one-line gist of the ticket.
+
+## Likely shape of work
+
+A one-line shape estimate.
+
+## Codebase grounding
+
+A one-line grounding pointer.
+
+## Open questions
+
+- **name** — `research` · AFK — the question. Blocked by: none
+
+## Not yet specified
+
+A one-line unresolved fog item.
+
+## Out of scope
+
+A one-line excluded item.
+
+## Risks & unknowns
+
+A one-line risk.
+
+## Readiness
+
+A one-line readiness call.
+
+## Original request
+
+A one-line paraphrase of the request.
+EOF
+
+  # Test good-DESIGN.md — should validate successfully.
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/good-DESIGN.md" 2>&1)"
+  printf '%s\n' "$output" | grep -Fq "ok" &&
+    printf '%s\n' "$output" | grep -Fq "(design_swag)" ||
+    fail "brigade-validate did not report ok for a conforming DESIGN.md: $output"
+
+  # Test bad-DESIGN.md — should fail validation, naming the missing section.
+  if bad_output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/bad-DESIGN.md" 2>&1)"; then
+    fail "brigade-validate passed a DESIGN.md missing a required section: $bad_output"
+  fi
+  printf '%s\n' "$bad_output" | grep -Fq 'missing "## Decisions so far"' ||
+    fail "brigade-validate did not name the missing section: $bad_output"
 }
 
 test_execute_ledger_wiring() {
@@ -1457,6 +1594,17 @@ test_guard_arithmetic() {
   # (the nested $( keeps the span un-neutralized; substitutions() refuses it as
   # ambiguous rather than reaching ALLOW — a deny either way, never a bypass).
   assert_guard_blocks 'echo "$(( $(git add -A) ))"'
+}
+
+test_guard_quoted_substitution() {
+  # A single-quoted argument inside $(...) is data; the substitution stays balanced.
+  assert_guard_allows "echo \"\$t: \$(grep -m1 '^status:' f.md)\""
+  assert_guard_allows "sed -n \"\$(grep -n 'design_swag' f | head -1 | cut -d: -f1),+60p\" f"
+  assert_guard_allows "for t in a b; do echo \"\$t: \$(grep -m1 '^status:' \$t.md)\"; done"
+  # SECURITY: quoted text around a real substitution never hides it.
+  assert_guard_blocks "echo 'a' \$(git add .) 'b'"
+  assert_guard_blocks "echo 'a' 'b' \$(git add .)"
+  assert_guard_blocks "echo \"\$(git add '.')\""
 }
 
 test_review_config() {
@@ -3391,6 +3539,7 @@ test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
 test_guard_arithmetic
+test_guard_quoted_substitution
 test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
@@ -3401,6 +3550,7 @@ test_onboard_apply
 test_onboard_detect
 test_hook_onboard_drift
 test_validate_ledger_artifacts
+test_validate_design_ledger
 test_validate_retro_readiness
 test_validate_analyst_modes
 test_execute_ledger_wiring

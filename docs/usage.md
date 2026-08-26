@@ -29,7 +29,8 @@ permission to break a lease.
 | `work my board` | Lists your assigned tickets; you pick one; the full loop runs |
 | `work <ticket> with brigade` | Straight to research and decomposition for a named ticket |
 | `groom my board` | Grooming session — cluster, split, merge, sharpen. Never cooks |
-| `swag this ticket` / `flesh out the design` | One-shot design pass; leaves the ticket in `design` with open questions |
+| `swag this ticket` / `flesh out the design` / `revisit the design` | Design pass; first run writes a decision ledger, each revisit resolves one open question; ticket stays in `design` |
+| `design the UI for <ticket>` / `ui loop` | Designer loop in your session: stand up the app or a canvas, iterate live, capture states as UI samples, ticket becomes implementer-ready |
 | `continue the dish` | Resumes from `PLAN.md` in any session, any time |
 | `brigade heavy` | Run this one dish at ★★★ |
 | `brigade light` | Run this one dish at ★ |
@@ -46,7 +47,8 @@ set `tier` in config or run `/brigade:tier`.
 | `/brigade:validate` | Schema conformance of every dish artifact |
 | `/brigade:tier` | Show or set the repo's default service tier |
 | `/brigade:retro` | Run the analyst pass on the current dish now (intensive at ★★★; `--standard`/`--intensive` to override) |
-| `/brigade:design` | Design swag for a ticket without claiming or cooking it |
+| `/brigade:design [ticket-id] [question-name]` | Design ledger for a ticket — first pass or one-question revisit — without claiming or cooking it |
+| `/brigade:ui [ticket-id] [state-name]` | UI design loop for a front-end ticket — live browser iteration, screenshots into the board, `## UI samples` spec; never claims or cooks |
 | `/brigade:review` | Advisory, tier-scaled code review of a branch, PR, or commit range |
 | `/brigade:review-dispatch` | Dispatch selected findings from a completed review report into a cooked mini-dish |
 

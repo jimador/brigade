@@ -62,6 +62,12 @@ sections in order (a well-groomed ticket makes Phase 0–2 dramatically cheaper)
   files/areas it's believed to touch. This is a **decomposition hint for the Planner, not
   a contract** — Phase 2 re-derives the real work items and packets from fresh scout
   research, honoring the hint where it holds and recording where it didn't.
+- `## UI samples` — *optional, written by the Designer*: one `### <state-name>` per agreed
+  visual state, each with: the sample embed/link (see the adapter's § UI samples for the
+  path form), `Layout:` one paragraph, `Components:` list, `Tokens:` names from
+  `.impeccable/design.json` (never raw values), `Interactions:` incl. terminal paths
+  (success / error / empty / loading), `A11y:` one line. Implementers get the image path AND
+  this text; the text alone must be enough for a cook without vision.
 - `## Original request` — the verbatim original text when a grooming pass restructured
   the ticket; never delete what a human wrote.
 
@@ -292,10 +298,11 @@ reports, the brigade-status efficiency aggregate, the live heuristic set, and th
 for tooling research. Proposals: ≤ 3 standard, ≤ 5 intensive; `tooling` is
 intensive-only. Budget: ≤ 120 lines standard, ≤ 200 intensive.
 
-### `design_swag` — one-shot Design pass (`.brigade/dishes/<slug>/DESIGN.md`)
+### `design_swag` — Design pass and its decision ledger (`.brigade/dishes/<slug>/DESIGN.md`)
 
-Producer: Design agent (`agents/brigade-design.md`). Consumers: operator (curation), later
-Planner when the ticket is promoted. **Not** a substitute for cook packets.
+Producer: Design agent (`agents/brigade-design.md`), first pass and every revisit.
+Consumers: operator (curation), later Planner when the ticket is promoted. **Not** a
+substitute for cook packets.
 
 ```yaml
 doc: design_swag
@@ -309,14 +316,40 @@ ticket_url: <url|null>
 source: obsidian                   # adapter id
 readiness: swaggable               # insufficient|needs_product|needs_tech|swaggable|likely_ready
 size_swag: M                       # XS|S|M|L|XL|unknown — estimate only
+revisits: 0                        # number of revisit sessions applied to this ledger
 sources:
   - path/to/file.ts:10-40
 ```
 
 Body sections, in order: `## What this seems to be`, `## Likely shape of work`,
-`## Codebase grounding`, `## Open questions`, `## Risks & unknowns`, `## Readiness`,
-`## Original request`. Budget: ≤ 100 lines. Must **not** claim the ticket, set `worker`,
-create packets, or promote to `todo`.
+`## Codebase grounding`, `## Decisions so far`, `## Open questions`, `## Not yet specified`,
+`## Out of scope`, `## Risks & unknowns`, `## Readiness`, `## Original request`. Budget:
+≤ 140 lines.
+
+Open-question line: `- **<name>** — \`research|grilling|prototype|task\` · AFK|HITL — <the
+question>. Blocked by: <name>|none`
+Decision line: `- **<name>**: <one-line gist> — <pointer>` (pointer = board Activity
+timestamp, brief path, ADR path, or URL; the detail lives there, never restated here). Fog
+test: a question goes in `## Open questions` when it can be **stated precisely now** (even
+if unanswerable yet); in `## Not yet specified` when it can't be phrased that sharply.
+`## Out of scope` never graduates. Refer to questions by **name**, never by index. Types:
+`research` (AFK — scout), `grilling` (HITL — ask the operator), `prototype` (HITL —
+throwaway artifact linked from the question), `task` (manual precondition — checklist). A
+`prototype` pointer may be a UI sample path produced by the Designer (`/brigade:ui`).
+
+Must **not** claim the ticket, set `worker`, create packets, or promote to `todo`. The
+ledger is an index: a decision lives where its pointer points, and the file only gists it.
+
+### `design_language` — the project's design system (external, impeccable-owned)
+
+Producer: `impeccable-documenter` (the impeccable plugin). Consumers: Designer
+(`/brigade:ui`), implementer cooks, inspectors. Brigade keeps **no** copy: the record is
+the project's root `DESIGN.md` (impeccable schema v2 — frontmatter `name`, `description`,
+`colors`, `typography`, `components`; body sections Overview, Colors, Typography, Layout,
+Elevation & Depth, Shapes, Components, Do's and Don'ts) plus the sidecar
+`.impeccable/design.json` (`schemaVersion: 2`, tokens, tonal ramps, component HTML/CSS).
+Packets and UI samples reference tokens by their design.json **names**, never raw values.
+Missing → the Designer runs `/impeccable init` with the operator before any capture.
 
 ### `review_report` — standalone code review (`.brigade/reviews/<slug>/report.md`)
 

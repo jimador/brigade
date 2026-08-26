@@ -70,6 +70,14 @@ Edit `status` frontmatter. Confirm by re-read. Unknown status → fail with path
 
 Append `- <ISO timestamp> [<author>] <text>` under `## Activity`.
 
+## UI samples (Designer)
+
+Images live in the vault's attachment folder — read `attachmentFolderPath` from the vault's
+`.obsidian/app.json` (default `attachments`) — under `<attachments>/tickets/<ticket-id>/<state-name>.png`.
+The ticket embeds each with `![[<state-name>.png]]` inside `## UI samples` (SCHEMAS.md).
+Copy files in; never move or delete an existing attachment. Re-read the ticket before
+writing the section (the operator may be editing in Obsidian).
+
 ## Optional — Create a ticket
 
 Write a new file; refuse overwrite. Prefer Templater from Obsidian for humans.

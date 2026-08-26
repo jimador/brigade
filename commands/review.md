@@ -1,6 +1,6 @@
 ---
 description: Review a branch, PR, or commit range along the configured dimensions (advisory, tier-scaled)
-argument-hint: <branch|range|PR> [--tier <star>]
+argument-hint: [branch|range|PR] [--tier star]
 ---
 
 Arguments: $ARGUMENTS

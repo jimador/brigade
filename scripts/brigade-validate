@@ -35,7 +35,7 @@ const TYPES = {
   plan_check: { keys: ['blind_sketch_first'], budget: 150 },
   analyst: { keys: ['items_total', 'proposals'], budget: null }, // budget comes from mode
   research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
-  design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 100 },
+  design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 140 },
   ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
   review_report: { keys: ['input', 'context_tier', 'tier', 'findings'], budget: 250 },
 }
@@ -295,7 +295,10 @@ function validateFile(file) {
         '## What this seems to be',
         '## Likely shape of work',
         '## Codebase grounding',
+        '## Decisions so far',
         '## Open questions',
+        '## Not yet specified',
+        '## Out of scope',
         '## Risks & unknowns',
         '## Readiness',
         '## Original request',

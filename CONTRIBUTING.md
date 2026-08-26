@@ -8,14 +8,18 @@ no package to publish — but there are a few rules that keep it working.
 ```
 skills/brigade/     the planner's brain, schemas, tier policy, source adapters, templates
 skills/groom/       the board-grooming session
+skills/onboard/     the onboarding skill behind /brigade:onboard
 agents/             one file per subagent role
 commands/           slash commands (thin wrappers over the scripts/ helpers)
 output-styles/      opt-in Planner output style (users pick it in /config; never forced)
 settings.json       plugin defaults — currently just the subagent status line
 monitors/           background coord watch (starts on brigade skill invoke)
 CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
+*/evals.json        prompt-eval seed cases for agents/ and skills/brigade/
+                    (scripts/brigade-eval)
 scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
-                    brigade-coord, brigade-subagent-line, brigade-risk, brigade-evidence
+                    brigade-coord, brigade-subagent-line, brigade-risk, brigade-evidence,
+                    brigade-onboard, brigade-eval
 hooks/              SessionStart state injection, PreToolUse git guard,
                     SubagentStop artifact-validate gate
 workflows/src/      hand-edited Workflow script sources
