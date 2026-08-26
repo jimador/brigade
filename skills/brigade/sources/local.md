@@ -63,6 +63,12 @@ file is reported precisely (file + value), never skipped.
 Append a timestamped line to `## Activity` (create the section if missing). Never rewrite
 existing Activity history.
 
+## UI samples (Designer)
+
+Images live beside the board at `<board_dir>/assets/<ticket-id>/<state-name>.png`; the
+ticket links each with a relative markdown image `![<state-name>](assets/<ticket-id>/<state-name>.png)`
+inside `## UI samples` (SCHEMAS.md). Copy files in; never overwrite a different state's file.
+
 ## Optional — Create a ticket
 
 Write a new file with the frontmatter above (slugified title as filename); refuse to
