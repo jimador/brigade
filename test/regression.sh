@@ -918,6 +918,140 @@ EOF
   fi
 }
 
+test_validate_design_ledger() {
+  fixture="$TMP_ROOT/validate-design-ledger"
+  mkdir -p "$fixture/.brigade/dishes/sample"
+
+  # Create a conforming DESIGN.md fixture — all ten contract sections present.
+  cat >"$fixture/.brigade/dishes/sample/good-DESIGN.md" <<'EOF'
+---
+doc: design_swag
+schema: 1
+dish: sample
+role: design
+model: sonnet
+created: 2026-08-26T00:00:00Z
+ticket: sample
+source: local
+readiness: swaggable
+size_swag: S
+revisits: 1
+sources:
+  - path/to/file:1-2
+---
+
+## What this seems to be
+
+A one-line gist of the ticket.
+
+## Likely shape of work
+
+A one-line shape estimate.
+
+## Codebase grounding
+
+A one-line grounding pointer.
+
+## Decisions so far
+
+- **name**: gist — pointer
+
+## Open questions
+
+- **name** — `research` · AFK — the question. Blocked by: none
+
+## Not yet specified
+
+A one-line unresolved fog item.
+
+## Out of scope
+
+A one-line excluded item.
+
+## Risks & unknowns
+
+A one-line risk.
+
+## Readiness
+
+A one-line readiness call.
+
+## Original request
+
+A one-line paraphrase of the request.
+EOF
+
+  # Create a nonconforming fixture — same body, minus "## Decisions so far".
+  cat >"$fixture/.brigade/dishes/sample/bad-DESIGN.md" <<'EOF'
+---
+doc: design_swag
+schema: 1
+dish: sample
+role: design
+model: sonnet
+created: 2026-08-26T00:00:00Z
+ticket: sample
+source: local
+readiness: swaggable
+size_swag: S
+revisits: 1
+sources:
+  - path/to/file:1-2
+---
+
+## What this seems to be
+
+A one-line gist of the ticket.
+
+## Likely shape of work
+
+A one-line shape estimate.
+
+## Codebase grounding
+
+A one-line grounding pointer.
+
+## Open questions
+
+- **name** — `research` · AFK — the question. Blocked by: none
+
+## Not yet specified
+
+A one-line unresolved fog item.
+
+## Out of scope
+
+A one-line excluded item.
+
+## Risks & unknowns
+
+A one-line risk.
+
+## Readiness
+
+A one-line readiness call.
+
+## Original request
+
+A one-line paraphrase of the request.
+EOF
+
+  # Test good-DESIGN.md — should validate successfully.
+  output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/good-DESIGN.md" 2>&1)"
+  printf '%s\n' "$output" | grep -Fq "ok" &&
+    printf '%s\n' "$output" | grep -Fq "(design_swag)" ||
+    fail "brigade-validate did not report ok for a conforming DESIGN.md: $output"
+
+  # Test bad-DESIGN.md — should fail validation, naming the missing section.
+  if bad_output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" \
+    "$fixture/.brigade/dishes/sample/bad-DESIGN.md" 2>&1)"; then
+    fail "brigade-validate passed a DESIGN.md missing a required section: $bad_output"
+  fi
+  printf '%s\n' "$bad_output" | grep -Fq 'missing "## Decisions so far"' ||
+    fail "brigade-validate did not name the missing section: $bad_output"
+}
+
 test_execute_ledger_wiring() {
   # Check presence of WORKING MEMORY layer comment in brigade-execute.js.
   count="$(grep -c 'WORKING MEMORY — this dispatch carries a ledger' "$ROOT/workflows/brigade-execute.js")"
@@ -3413,6 +3547,7 @@ test_onboard_apply
 test_onboard_detect
 test_hook_onboard_drift
 test_validate_ledger_artifacts
+test_validate_design_ledger
 test_validate_retro_readiness
 test_validate_analyst_modes
 test_execute_ledger_wiring
