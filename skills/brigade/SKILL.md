@@ -40,6 +40,7 @@ branches, and worktrees without conversion.
 | --- | --- | --- | --- |
 | **Planner** | this session (you) | the session model — the tier's planning row | intake, decomposition, dispatch, merges, ticket updates. **Never implements. Never explores the codebase directly.** |
 | **Design** | `brigade-design` subagent (or this session in design-only mode) | sonnet | one-shot swag: research, open questions, readiness; never claims or cooks |
+| **Designer** | this session via `/brigade:ui` (`agents/brigade-designer.md`) | sonnet | UI loop for FE tickets: stand up, iterate live, capture states, write UI samples; never implements product code |
 | **Scout** | `brigade-scout` subagent | haiku (all tiers) | answers one focused codebase question, returns a compact brief |
 | **Cook** | `brigade-cook` subagent | haiku; ★★★ dispatches the heavy cook first | implements exactly one work packet in its own worktree |
 | **Heavy Cook** | `brigade-cook-heavy` subagent | sonnet | same contract as Cook, for escalations and known-hard slices |
@@ -200,6 +201,22 @@ Refer to questions by name, never by number. Mirror a one-line comment + status
 `design` (or `scoping`). **Do not claim, set worker, or dispatch cooks.** Acquire
 `<slug>` as `claude` before writing and release it before stopping for human curation.
 
+## UI design loop — `/brigade:ui`, the Designer in your session
+
+For front-end tickets. `/brigade:ui [ticket-id]` loads `agents/brigade-designer.md` into
+this session (browser and design tools are the session's; a background agent would lose
+them — that is why this is not a Workflow script). The loop: stand up the app (impeccable
+`live-server.mjs --background` + `live-poll.mjs`) or the built-in `design` canvas when
+nothing runs yet → iterate one named state at a time with the operator → capture each
+agreed state as a PNG into the board's sample store (adapter § UI samples) → optional
+assets when the project has a design tool (Figma via `/figma-use`; none → skip, say so) →
+write `## UI samples` (SCHEMAS.md: embed + Layout / Components / Tokens / Interactions /
+A11y per state) → ticket `todo` only when the operator says ready. Design language of
+record is the project's impeccable `DESIGN.md` + `.impeccable/design.json`; brigade never
+keeps a second one. The Designer never edits product code on the ticket's branch;
+implementer cooks get the image path AND the text spec, so a cook without vision can
+still cook it.
+
 ## Claim the ticket (mandatory before cook / decompose)
 
 **Exception — Design swag:** do not claim.
@@ -258,9 +275,9 @@ contributes, appended after the shipped prompt in layer order:
 - `<repo>/.brigade/overrides/{agents,prompts}/<role>.md` — repo personal
 - config `prompts.<role>.append` — short inline additions
 
-Roles: `scout`, `cook`, `cookHeavy`, `inspector`, `analyst`, `design`, `steward`,
-`planner`. Resolve with `brigade-config prompts --json` at dish start and pass the result
-through; agents never read override files themselves.
+Roles: `scout`, `cook`, `cookHeavy`, `inspector`, `analyst`, `design`, `designer`,
+`steward`, `planner`. Resolve with `brigade-config prompts --json` at dish start and pass
+the result through; agents never read override files themselves.
 
 Overrides only ADD instructions. They never remove the Inspector gate, the Analyst pass,
 or the evidence requirements — forking the agent file is the honest way to do that.
