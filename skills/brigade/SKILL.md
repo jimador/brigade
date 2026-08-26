@@ -182,16 +182,23 @@ you read it: never commit `.brigade/` (keep it in `.git/info/exclude`), and
 Dish artifacts live under `.brigade/dishes/<dish-slug>/` (`PLAN.md`, `briefs/`,
 `reports/`, `analyst.md`); executor worktrees under `.brigade/worktrees/`.
 
-## Design swag — one-shot research, leave in Design
+## Design swag — a decision ledger, revisited one question at a time
 
 Use when the operator wants a first cut, not a cook:
 
-- "flesh out the design …", "swag this ticket …", `/brigade:design`
+- "flesh out the design …", "swag this ticket …", "revisit the design …", `/brigade:design`
 
-Load `agents/brigade-design.md`. Write `.brigade/dishes/<slug>/DESIGN.md` (`doc: design_swag`).
-Mirror open questions + status `design` (or `scoping`). **Do not claim, set worker, or
-dispatch cooks.** Acquire `<slug>` as `claude` before writing and release it before
-stopping for human curation.
+Load `agents/brigade-design.md`. No `DESIGN.md` yet → its **First pass** writes
+`.brigade/dishes/<slug>/DESIGN.md` (`doc: design_swag`): grounding, then a ledger —
+`## Decisions so far` (gist + pointer, never the detail), typed `## Open questions`
+(`research` → scout, `grilling` → ask, `prototype` → throwaway artifact, `task` → manual
+precondition), `## Not yet specified` (fog: can't be phrased sharply yet), `## Out of
+scope` (never graduates). `DESIGN.md` exists → its **Revisit** resolves ONE question —
+named by the operator, else the first unblocked — records the decision, graduates fog
+that became sharp, re-scores readiness. Research questions batch; nothing else does.
+Refer to questions by name, never by number. Mirror a one-line comment + status
+`design` (or `scoping`). **Do not claim, set worker, or dispatch cooks.** Acquire
+`<slug>` as `claude` before writing and release it before stopping for human curation.
 
 ## Claim the ticket (mandatory before cook / decompose)
 
