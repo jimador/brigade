@@ -18,12 +18,13 @@ def uncomment(source):
     return " ".join(lexer).replace("\ue000", "#")
 def substitutions(source, single_quotes_are_data=True, comments_are_data=False):
     if not comments_are_data: source = uncomment(source)
-    active = " ".join(re.split(r"'[^']*'", source)[::2]) if single_quotes_are_data else source
+    active = re.sub(r"'[^']*'", lambda m: " " * len(m.group(0)), source) if single_quotes_are_data else source
     matches = list(SUBSTITUTION.finditer(active))
     residue = SUBSTITUTION.sub("", active)
     if "$(" in residue or "`" in residue: raise GuardError("ambiguous command substitution")
     for match in matches:
-        yield match.group(1) if match.group(1) is not None else match.group(2)
+        group = 1 if match.group(1) is not None else 2
+        yield source[match.start(group):match.end(group)]
 def neutralize_arithmetic(source):
     # $(( expr )) is arithmetic, not a command substitution: its interior is numbers,
     # operators and variable names, never a command. Blank each balanced arithmetic span

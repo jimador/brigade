@@ -1459,6 +1459,17 @@ test_guard_arithmetic() {
   assert_guard_blocks 'echo "$(( $(git add -A) ))"'
 }
 
+test_guard_quoted_substitution() {
+  # A single-quoted argument inside $(...) is data; the substitution stays balanced.
+  assert_guard_allows "echo \"\$t: \$(grep -m1 '^status:' f.md)\""
+  assert_guard_allows "sed -n \"\$(grep -n 'design_swag' f | head -1 | cut -d: -f1),+60p\" f"
+  assert_guard_allows "for t in a b; do echo \"\$t: \$(grep -m1 '^status:' \$t.md)\"; done"
+  # SECURITY: quoted text around a real substitution never hides it.
+  assert_guard_blocks "echo 'a' \$(git add .) 'b'"
+  assert_guard_blocks "echo 'a' 'b' \$(git add .)"
+  assert_guard_blocks "echo \"\$(git add '.')\""
+}
+
 test_review_config() {
   # Pin REVIEW_DIMENSIONS/REVIEW_POLICY straight out of workflows/config.js, the same
   # extraction pattern as test_config_override_consumer_path and the MD_SCHEMA_BLOCKS.ledger
@@ -3391,6 +3402,7 @@ test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
 test_guard_arithmetic
+test_guard_quoted_substitution
 test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
