@@ -1,6 +1,6 @@
 ---
 description: Dispatch selected findings from a completed /brigade:review report into a cooked mini-dish
-argument-hint: <review-slug|report-path> [finding-id...]
+argument-hint: [review-slug|report-path] [finding-id...]
 ---
 
 Arguments: $ARGUMENTS
