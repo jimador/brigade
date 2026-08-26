@@ -536,7 +536,7 @@ test_config_override_consumer_path() {
   "maxParallel": 2,
   "workingMemory": false,
   "policy": { "scoutCap": 5, "planCheck": "always", "retro": "every-dish" },
-  "models": { "cook": "custom:my-cook", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector" },
+  "models": { "cook": "custom:my-cook", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector", "designer": "custom:my-designer" },
   "circuitBreaker": { "maxTotalFails": 9 } }
 EOF
 
@@ -564,6 +564,7 @@ assert.strictEqual(p.circuitBreaker.maxTotalFails, 9, 'circuitBreaker override l
 assert.strictEqual(p.agents.inspector, 'custom:my-inspector', 'models.inspector override lost')
 assert.ok(p.attempts.includes('custom:my-cook'), 'models.cook override missing from attempt ladder')
 assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHeavy override missing from heavy ladder')
+assert.strictEqual(envelope.config.models.designer, 'custom:my-designer', 'models.designer override lost in resolve --json')
 NODE
 }
 
