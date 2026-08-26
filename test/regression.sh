@@ -536,7 +536,7 @@ test_config_override_consumer_path() {
   "maxParallel": 2,
   "workingMemory": false,
   "policy": { "scoutCap": 5, "planCheck": "always", "retro": "every-dish" },
-  "models": { "cook": "custom:my-cook", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector", "designer": "custom:my-designer" },
+  "models": { "cook": "custom:my-cook", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector" },
   "circuitBreaker": { "maxTotalFails": 9 } }
 EOF
 
@@ -564,7 +564,9 @@ assert.strictEqual(p.circuitBreaker.maxTotalFails, 9, 'circuitBreaker override l
 assert.strictEqual(p.agents.inspector, 'custom:my-inspector', 'models.inspector override lost')
 assert.ok(p.attempts.includes('custom:my-cook'), 'models.cook override missing from attempt ladder')
 assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHeavy override missing from heavy ladder')
-assert.strictEqual(envelope.config.models.designer, 'custom:my-designer', 'models.designer override lost in resolve --json')
+// No layer here sets models.designer, so this pins the DEFAULTS entry itself: without it,
+// the key is missing (undefined) rather than present-and-null.
+assert.strictEqual(envelope.config.models.designer, null, 'models.designer should default to null when no layer sets it')
 NODE
 }
 
