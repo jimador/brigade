@@ -3225,6 +3225,13 @@ test_hook_matchers() {
   # outside [A-Za-z0-9_- ,|]; any other character (a plugin scope colon) makes it an
   # unanchored RegExp. Pin both matchers against every value the fleet actually produces,
   # so a scoped-name change can never silently unhook the validate gate.
+  #
+  # The criterion is "does this agent write an artifact brigade-validate checks", NOT
+  # "is this agent a cook". An earlier version of this test asserted the opposite for
+  # brigade-scout on the stated grounds that scouts write no dish artifact. That was
+  # false — scouts write briefs/<n>-<topic>.md, which brigade-validate checks as type
+  # `brief` — and the wrong premise kept scout briefs unvalidated across ~10 recorded
+  # occurrences of the missing/malformed-artifact class.
   python3 - "$ROOT/hooks/hooks.json" <<'HOOKPY' || fail "hooks.json matchers do not cover the fleet"
 import json, re, sys
 
@@ -3244,18 +3251,62 @@ for start in ("startup", "resume", "clear", "compact", "fork"):
 
 subagent = doc["SubagentStop"][0]["matcher"]
 # Every agent that writes a dish artifact must reach the validator.
-for agent in ("brigade:brigade-cook", "brigade:brigade-cook-heavy", "brigade:brigade-inspector"):
+for agent in ("brigade:brigade-cook", "brigade:brigade-cook-heavy", "brigade:brigade-inspector", "brigade:brigade-scout"):
     if not matches(subagent, agent):
         raise SystemExit(f"SubagentStop matcher {subagent!r} misses agent {agent!r}")
 # cook-heavy must be named outright, not caught as a prefix of brigade-cook.
 if "brigade:brigade-cook-heavy" not in subagent:
     raise SystemExit("SubagentStop matcher must list brigade:brigade-cook-heavy explicitly")
-# Agents that write no dish artifact must not pay for a validate pass.
-for agent in ("brigade:brigade-scout", "brigade:brigade-analyst", "brigade:brigade-design"):
+# brigade-scout MUST be covered: it writes briefs/, which brigade-validate checks.
+if "brigade:brigade-scout" not in subagent:
+    raise SystemExit("SubagentStop matcher must list brigade:brigade-scout explicitly — it writes briefs/")
+# Agents whose artifacts this hook's find globs do not reach must not pay for a validate pass.
+for agent in ("brigade:brigade-analyst", "brigade:brigade-design"):
     if matches(subagent, agent):
         raise SystemExit(f"SubagentStop matcher {subagent!r} wrongly covers {agent!r}")
 HOOKPY
   echo "HOOK MATCHERS OK"
+}
+
+test_hook_validates_scout_briefs() {
+  # Covering brigade-scout in the SubagentStop matcher is inert unless the hook's own find
+  # expression reaches briefs/. Both halves are required; assert the glob directly against
+  # the script source, and prove end-to-end that a malformed brief actually blocks the stop.
+  grep -q "path '\*/briefs/\*'" "$ROOT/hooks/post-cook-validate.sh" \
+    || fail "post-cook-validate.sh find does not reach */briefs/* — scout coverage is inert"
+
+  fixture="$TMP_ROOT/scout-brief-hook"
+  mkdir -p "$fixture/.brigade/dishes/sample/briefs"
+  # A brief missing its required envelope fields — brigade-validate must call this nonconforming.
+  cat >"$fixture/.brigade/dishes/sample/briefs/1-broken.md" <<'EOF'
+---
+doc: brief
+question: what breaks
+---
+
+## Answer
+Malformed on purpose: no schema, dish, item, role, model, or created fields.
+EOF
+
+  out="$(printf '{"agent_id":"regression-scout"}' \
+    | CLAUDE_PROJECT_DIR="$fixture" bash "$ROOT/hooks/post-cook-validate.sh" 2>&1 || true)"
+  printf '%s' "$out" | grep -q '"decision": *"block"' \
+    || fail "post-cook-validate.sh did not block on a nonconforming scout brief; got: $out"
+  rm -f "${TMPDIR:-/tmp}/brigade-postcook-regression-scout"
+  echo "SCOUT BRIEF HOOK OK"
+}
+
+test_research_reports_expected_brief_path() {
+  # A scout that writes its brief but returns no structured output was previously reported
+  # as a flat failure, so planners re-dispatched work that had already succeeded. The
+  # workflow knows the deterministic brief path; on a null result it must surface it.
+  for f in "$ROOT/workflows/src/brigade-research.js" "$ROOT/workflows/brigade-research.js"; do
+    grep -q 'expectedBriefPath' "$f" \
+      || fail "$f does not surface the expected brief path for a scout that returned no result"
+    grep -q 'unreported' "$f" \
+      || fail "$f does not distinguish an unreported-but-possibly-written brief from a failure"
+  done
+  echo "RESEARCH EXPECTED PATH OK"
 }
 
 test_subagent_line_model() {
@@ -3571,6 +3622,8 @@ test_eval_judge
 test_eval_seed_cases
 test_eval_cli_backend
 test_hook_matchers
+test_hook_validates_scout_briefs
+test_research_reports_expected_brief_path
 test_subagent_line_model
 test_evidence_scope
 test_planner_model_config

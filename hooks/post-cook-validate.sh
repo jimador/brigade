@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# SubagentStop hook for the artifact-writing fleet agents (cooks and the inspector).
+# SubagentStop hook for the artifact-writing fleet agents (cooks, the inspector, and
+# scouts). Scouts write briefs/, which brigade-validate checks as type `brief`.
+#
+# Note what this hook can and cannot do: it validates artifacts that EXIST but are
+# malformed. It cannot detect a MISSING artifact — when find returns nothing the hook
+# exits 0 by design, because an empty window is indistinguishable from an agent that
+# legitimately wrote nothing. A scout that writes no brief at all is caught upstream,
+# by the research workflow reporting the expected brief path instead of a flat failure.
 # When one finishes, validate the dish artifacts written in the last few minutes; if any
 # are nonconforming, block the stop and hand the agent the validator's findings so it
 # fixes its own output while it is still cheap — before the inspector or the merge gate
@@ -26,7 +33,7 @@ RECENT=()
 while IFS= read -r file; do
   [ -n "$file" ] && RECENT+=("$file")
 done < <(find "$ROOT/.brigade/dishes" -type f -name '*.md' \
-  \( -path '*/reports/*' -o -path '*/state/*' \) -mmin -10 2>/dev/null)
+  \( -path '*/reports/*' -o -path '*/state/*' -o -path '*/briefs/*' \) -mmin -10 2>/dev/null)
 [ "${#RECENT[@]}" -gt 0 ] || exit 0
 
 set +e

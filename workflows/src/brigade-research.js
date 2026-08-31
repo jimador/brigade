@@ -66,6 +66,7 @@ Budget: the brief body must be ≤ 150 lines.`
   // A thunk error or a schema-skipped/dead agent both resolve to null here — either way it's a failed
   // scout, not a crash. Filter those out of the briefs and count them so the caller can see the gap.
   const briefs = []
+  const unreported = []
   let failed = 0
   for (const [i, r] of results.entries()) {
     const q = kept[i]
@@ -79,10 +80,17 @@ Budget: the brief body must be ≤ 150 lines.`
         notVerified: r.notVerified,
       })
     } else {
+      // No structured result is NOT proof the scout did no work. Scouts are told the brief
+      // file is their terminal action, and in practice some write it and then end without
+      // returning — reporting that as a flat failure has made planners re-dispatch work that
+      // had already succeeded. Workflow scripts cannot read the filesystem, so surface the
+      // deterministic path instead and let the caller check disk before re-dispatching.
       failed += 1
-      blog('scout', `Scout for #${q.n} (${q.topic}) returned no result — counted as failed.`)
+      const expectedBriefPath = `${A.dishDir}/briefs/${q.n}-${q.topic}.md`
+      unreported.push({ n: q.n, topic: q.topic, expectedBriefPath })
+      blog('scout', `Scout for #${q.n} (${q.topic}) returned no result — check ${expectedBriefPath} on disk before re-dispatching; the brief may have been written.`)
     }
   }
 
-  return { briefs, dropped: droppedQuestions.length, failed }
+  return { briefs, dropped: droppedQuestions.length, failed, unreported }
 })()
