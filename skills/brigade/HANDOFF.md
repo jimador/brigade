@@ -82,11 +82,18 @@ before returning the handoff to the operator.
 
 ## Spot-checks in place of an inspector pass
 
-Three paths skip the gate quietly: a commit you made directly to the integration branch, a
-fix produced by overriding a PASS into rework, and a docs-only item you self-verified
-instead of dispatching an inspector. Each is legitimate; each gets a short verdict-shaped
-note beside the cook report naming the commit, what you checked it against, and what you
-corrected — silent fixes leave the item unscoreable. A diff-conformance spot-check replaces
+Four paths skip the gate quietly: a commit you made directly to the integration branch, a
+fix produced by overriding a PASS into rework, a docs-only item you self-verified instead
+of dispatching an inspector, and — the one that costs most — **cooking outside the
+Workflow.** The inspector gate lives inside `brigade-execute`, so the moment you dispatch
+cooks as direct subagents (because the Workflow broke, or the item was small) adversarial
+review silently disappears and nothing tells you. It is not optional there: dispatch
+`brigade-inspector` yourself, per item, before landing, and write its verdict to
+`reports/<item>-verdict.md` exactly as the Workflow would. Planner self-review of the diff
+is not a substitute — a dish that landed four items this way shipped with zero verdicts
+while every item read `done`. The first three paths are legitimate; each gets a short
+verdict-shaped note beside the cook report naming the commit, what you checked it
+against, and what you corrected — silent fixes leave the item unscoreable. A diff-conformance spot-check replaces
 a full inspector pass only when all three hold: the diff is annotation-, comment-, constant-
 or doc-only; every file it touches already PASSed inspection this dish; and the item's own
 Verify commands were re-run green. Record the deviation in PLAN.md.

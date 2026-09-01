@@ -80,8 +80,13 @@ const blog = (role, msg) => log(`${BADGE[role] || '·'} ${msg}`)
 // Prompt overrides resolved by `brigade-config prompt <name>` arrive as an ordered
 // array of text fragments and are appended to the shipped prompt, in layer order.
 function withPromptOverrides(basePrompt, fragments) {
-  if (!fragments || !fragments.length) return basePrompt
-  return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${fragments.join('\n\n')}\n`
+  // A caller that hands us a bare string instead of an array used to blow up on `.join` —
+  // a string is truthy and has `.length`, so it sailed past the guard and killed the whole
+  // run before a single agent started. Normalize instead of trusting the shape.
+  const list = typeof fragments === 'string' ? [fragments] : Array.isArray(fragments) ? fragments : []
+  const usable = list.filter((f) => typeof f === 'string' && f.trim().length > 0)
+  if (!usable.length) return basePrompt
+  return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${usable.join('\n\n')}\n`
 }
 
 const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' } } }
@@ -497,6 +502,17 @@ reworked — do not treat that as an error. Instead verify the worktree exists a
 ${worktreePath} and that ${branch} is checked out there, and return ok: true.
 Any other failure is real: return ok: false with the actual error in detail.
 
+Then copy the repo's gitignored environment files into the new worktree, preserving
+their relative paths:
+
+  cd ${A.repoRoot} && find . -name '.env.local' -not -path '*/node_modules/*' -not -path './.brigade/*' -print
+
+For each result, create the parent directory under ${worktreePath} and copy the file
+there. A fresh worktree has none of these — they are gitignored — and without them the
+cook's build and pre-push gates fail for reasons that have nothing to do with its packet.
+If there are none to copy, that is fine; say so and carry on. Never create, edit, or
+invent an env file, and never copy one that is not already in the repo.
+
 You never run git add or git commit, never touch any file outside .brigade/, and
 never push. Return the result per the steward schema.
 `
@@ -617,6 +633,38 @@ let totalInspectorFails = 0
 let breakerTripped = false
 let breakerReason = null
 
+// The harness kills the whole run when a subagent finishes without calling StructuredOutput.
+// That failure is not ours to fix (it is an open SDK issue), it is not retryable, and it does
+// not get cheaper on the next item — one dish burned roughly 900k subagent tokens across five
+// of these before anyone noticed. So: catch it, trip the breaker on the FIRST one, and let the
+// run wind down reporting what actually landed instead of crashing on top of it.
+let structuredOutputFails = 0
+
+const isStructuredOutputFailure = (err) => {
+  const msg = err && err.message ? String(err.message) : String(err || '')
+  return /StructuredOutput/i.test(msg)
+}
+
+const structuredAgent = async (prompt, opts) => {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    if (!isStructuredOutputFailure(err)) throw err
+    structuredOutputFails += 1
+    blog('blocked', `${opts && opts.label ? opts.label : 'agent'} finished without calling StructuredOutput — its work may still be on disk`)
+    if (!breakerTripped) {
+      breakerTripped = true
+      breakerReason =
+        'a subagent completed without calling StructuredOutput. This is a harness-level failure, ' +
+        'not a packet problem, and retrying the Workflow reproduces it. Check the item branches and ' +
+        'dish reports/ — cook work usually survives even though the return did not — then land what ' +
+        'is there by hand and run the remaining cooks as direct Agent subagents instead.'
+      blog('blocked', `circuit breaker tripped: ${breakerReason}`)
+    }
+    return null
+  }
+}
+
 const recordInspectorFail = (slug) => {
   totalInspectorFails += 1
   blog('inspector', `inspector FAIL recorded for ${slug} (${totalInspectorFails} total)`)
@@ -697,7 +745,7 @@ async function runItem(item, promises) {
   for (let i = 0; i < ladder.length; i += 1) {
     if (i === 0) {
       blog('steward', `dispatch ${item.slug}: preparing worktree`)
-      const creation = await guarded(`steward-create:${item.slug}`, () => agent(stewardCreatePrompt(worktreePath, branch), {
+      const creation = await guarded(`steward-create:${item.slug}`, () => structuredAgent(stewardCreatePrompt(worktreePath, branch), {
         label: `steward-create:${item.slug}`,
         phase: 'Cook',
         schema: SCHEMA_STEWARD_RETURN,
@@ -717,7 +765,7 @@ async function runItem(item, promises) {
     await acquireCookSlot()
     let cookResult
     try {
-      cookResult = await guarded(`cook:${item.slug}:${i}`, () => agent(
+      cookResult = await guarded(`cook:${item.slug}:${i}`, () => structuredAgent(
         withPromptOverrides(
           cookPrompt(item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, i),
           PROMPT_EXTRAS.cook,
@@ -743,7 +791,7 @@ async function runItem(item, promises) {
     }
 
     blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
-    const verdictResult = await guarded(`inspect:${item.slug}:${i}`, () => agent(
+    const verdictResult = await guarded(`inspect:${item.slug}:${i}`, () => structuredAgent(
       withPromptOverrides(
         inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
         PROMPT_EXTRAS.inspector,

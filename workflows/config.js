@@ -74,8 +74,13 @@ const blog = (role, msg) => log(`${BADGE[role] || '·'} ${msg}`)
 // Prompt overrides resolved by `brigade-config prompt <name>` arrive as an ordered
 // array of text fragments and are appended to the shipped prompt, in layer order.
 function withPromptOverrides(basePrompt, fragments) {
-  if (!fragments || !fragments.length) return basePrompt
-  return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${fragments.join('\n\n')}\n`
+  // A caller that hands us a bare string instead of an array used to blow up on `.join` —
+  // a string is truthy and has `.length`, so it sailed past the guard and killed the whole
+  // run before a single agent started. Normalize instead of trusting the shape.
+  const list = typeof fragments === 'string' ? [fragments] : Array.isArray(fragments) ? fragments : []
+  const usable = list.filter((f) => typeof f === 'string' && f.trim().length > 0)
+  if (!usable.length) return basePrompt
+  return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${usable.join('\n\n')}\n`
 }
 
 const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' } } }
