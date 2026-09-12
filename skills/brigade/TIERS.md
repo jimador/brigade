@@ -4,6 +4,15 @@ Tiers are Michelin stars. A tier sets which model plans, cooks, and reviews, and
 call-sensitive the run is. Say **brigade heavy** for ★★★, plain **brigade** for the
 configured default (★★ out of the box), **brigade light** for ★.
 
+## Contents
+
+- The tiers
+- Reading the table
+- Difficult planning
+- Choosing and recording a tier
+- Overriding individual rows
+- Tier tuning (the efficiency flywheel)
+
 ## The tiers
 
 | | ★★★ three-star | ★★ two-star (default) | ★ one-star |

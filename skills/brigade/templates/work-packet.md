@@ -11,6 +11,11 @@ with a Verify step whose failure stops the Cook** (report BLOCKED, never merge-h
 Cooks have no Propose/Review steps — the Planner's plan checkpoint and the Inspector gate are
 those steps, lifted out of the packet.
 
+## Contents
+
+- <item-slug> — <one-sentence behavior, no "and">
+- Packet quality bar (Planner self-check before dispatch)
+
 ---
 
 ## <item-slug> — <one-sentence behavior, no "and">

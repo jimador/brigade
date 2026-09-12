@@ -7,6 +7,28 @@ those shapes. Agents MUST emit conforming documents; the Planner rejects malform
 subagent output the same way the Inspector rejects bad code; the Inspector checks
 conformance of the artifacts it reviews.
 
+## Contents
+
+- The common envelope
+- Type registry
+  - `ticket`
+  - `plan`
+  - `packet`
+  - `brief`
+  - `research`
+  - `report`
+  - `verdict`
+  - `plan_check`
+  - `analyst`
+  - `design_swag`
+  - `design_language`
+  - `review_report`
+  - `ledger`
+  - `heuristic`
+  - `learnings`
+  - `config`
+- Versioning & enforcement
+
 ## The common envelope
 
 Every brigade artifact starts with frontmatter carrying at least:
@@ -246,6 +268,11 @@ check` (what was re-run, verbatim result tail). Authority: the actual diff and t
 inspector's own command runs; the cook's report is a claim, not a source.
 Budget: ≤ 150 lines.
 
+Acceptance pass (`HANDOFF.md` § 2): the inspector's Mode 4 writes this same type at
+`reports/acceptance-verdict.md` with `item: dish`, `attempt_reviewed: 0`, one finding per NOT
+VERIFIED criterion (severity `high`, location the criterion's source), and the full per-criterion
+table under `## Evidence check`; `verdict: PASS` only when nothing is NOT VERIFIED.
+
 ### `plan_check` — inspector's pre-dispatch plan review (`reports/plan-check-<n>.md`)
 
 Producer: inspector (plan check mode). Consumer: Planner. Every attempt keeps its own
@@ -385,7 +412,8 @@ no-requirements caveat.
 ### `ledger` — cook working memory (`.brigade/dishes/<dish>/state/<item>.md`)
 
 Producer: cook (heavy items and rework attempts — dispatches whose prompt carries a
-`WORKING MEMORY` block). Consumers: the next attempt's cook (inheritance), Inspector
+`WORKING MEMORY` block) or the Planner (`item: planner`, `role: planner`; protocol in
+`MEMORY.md` § The Planner's ledger). Consumers: the next attempt's cook (inheritance), Inspector
 (Canon audit), Analyst. Protocol: `MEMORY.md` next to this file.
 
 ```yaml
