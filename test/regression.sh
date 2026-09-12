@@ -1947,9 +1947,13 @@ test_inspector_modes() {
   [ "$count" -eq 1 ] ||
     fail "expected exactly one Mode 3 heading, got $count"
 
-  # Mode 3 is the last mode section, so its span runs from the heading to EOF.
+  count="$(grep -c "^## Mode 4" "$file")"
+  [ "$count" -eq 1 ] ||
+    fail "expected exactly one Mode 4 heading, got $count"
+
+  # Mode 3's span runs from its heading to the next `## ` heading (Mode 4 follows it).
   mode3_span="$TMP_ROOT/inspector-mode3-span.txt"
-  awk '/^## Mode 3/,0' "$file" >"$mode3_span"
+  awk '/^## Mode 3/ { p = 1; print; next } /^## / { p = 0 } p' "$file" >"$mode3_span"
 
   grep -Fq "advisory" "$mode3_span" ||
     fail "Mode 3 section does not describe itself as advisory"
