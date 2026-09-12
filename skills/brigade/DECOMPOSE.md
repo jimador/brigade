@@ -129,7 +129,7 @@ Table flags are add-only: judgment may add heavy flags, never remove one the tab
 
 ## Research dishes
 
-A research item's depth, set at planning time, picks its researcher's model and report budget
+Give every item a research depth at plan time; it picks the researcher's model and report budget
 regardless of tier: `light` (haiku, ≤ 150 lines, repo-first), `medium` (sonnet, ≤ 250 lines,
 one candidate/area with web sourcing), `heavy` (opus, ≤ 400 lines, decision-grade surveys and
 rubric scoring). Dispatch in waves like cooks (≤ 4 at a time; a rubric-producing item goes in

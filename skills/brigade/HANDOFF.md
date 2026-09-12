@@ -48,15 +48,16 @@ re-run the pass — before any handoff text. Attach the evidence to the ticket.
 
 ## 3. Hand off the branch
 
-Open the single human-review PR `<delivery-branch> → main` (`gh pr create`) with summary,
-item list, Evidence highlights, and risks — or, with no remote or `gh`, tell the user the
-integration branch is ready for local review. If the base branch has advanced since you
-branched, rebase the integration branch `--onto <latest main> <original base>` first for a
-clean per-ticket diff. With `graphite_platform: true` in the repo config this step becomes
-`gt sync` + `gt submit --stack`, one PR per item; see `GRAPHITE.md`. With `remote_pr: false`
-in `.brigade/config.md`, or an operator directive to land without a PR: rebase onto the
-latest main, prove the gate on the tip, fast-forward push (never `--force`), and say so in
-the handoff; the ticket then moves on the human's review of the pushed branch.
+Open the single human-review PR `<delivery-branch> → main` (`gh pr create`) with
+summary, item list, Evidence highlights, and risks — or, with no remote or `gh`, tell
+the user the integration branch is ready for local review. If the base branch has advanced
+(or its own PR merged) since you branched, rebase the integration branch `--onto <latest
+main> <original base>` first for a clean per-ticket diff. With `graphite_platform: true`
+in the repo config this step becomes `gt sync` + `gt submit --stack`, one PR per item;
+see `GRAPHITE.md`. With `remote_pr: false` in `.brigade/config.md`, or an operator
+directive to land without a PR: rebase onto the latest main, prove the gate on the tip,
+fast-forward push (never `--force`), and say so in the handoff; the ticket then moves
+on the human's review of the pushed branch.
 
 ## 4. Ticket and comment
 

@@ -4,8 +4,13 @@ Read when: before pre-flight, when a ledger returns, and when resuming mid-execu
 
 ## Contents
 
-Before dispatch: Pre-flight; Invoke brigade-execute. After a ledger: Apply the ledger; Stop
-conditions; Landing, worktrees, and working memory. Resuming mid-execute; Complete when.
+- Pre-flight
+- Invoke brigade-execute
+- Apply the ledger
+- Stop conditions
+- Landing, worktrees, and working memory
+- Resuming mid-execute
+- Complete when
 
 ## Pre-flight
 
