@@ -1298,6 +1298,42 @@ console.log('EXECUTE VERDICT-SCRIBE HOSTILE INPUT PIN OK')
 NODE
 }
 
+test_execute_guarded_agent_calls() {
+  # A subagent that ends without its structured return rejects agent(); one item's
+  # rejection costs that item one attempt and never aborts the run (dish retro, wave 2b).
+  count="$(grep -c '^const guarded = ' "$ROOT/workflows/src/brigade-execute.js")"
+  [ "$count" -eq 1 ] ||
+    fail "brigade-execute.js source missing or duplicated guarded() helper (found $count, expected 1)"
+  count="$(grep -c 'guarded(' "$ROOT/workflows/src/brigade-execute.js")"
+  [ "$count" -eq 4 ] ||
+    fail "brigade-execute.js source should guard all four agent() calls (found $count)"
+
+  node - "$ROOT/workflows/brigade-execute.js" <<'JS' || fail "brigade-execute.js aborts the run when one cook returns no structured result"
+const fs = require('fs')
+const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta/m, 'const meta')
+const calls = []
+const runtime = {
+  log: () => {},
+  agent: async (prompt, opts) => {
+    calls.push(opts.label)
+    if (opts.label.startsWith('cook:')) throw new Error('agent({schema}): subagent completed without calling StructuredOutput')
+    if (opts.label.startsWith('steward-create:')) return { ok: true, detail: 'ok' }
+    throw new Error('unexpected agent call ' + opts.label)
+  },
+  args: { dishDir: '/path/to/dish', repoRoot: '/path/to/repo', now: '2026-01-01T00:00:00Z', tier: 'three-star', deliverySlug: 'd', deliveryBranch: 'b', gate: ['true'], maxParallel: 2, overrides: {}, items: [{ slug: 'a', status: 'todo', dependsOn: [], heavy: false, packet: 'p' }, { slug: 'b', status: 'todo', dependsOn: [], heavy: false, packet: 'p' }] },
+}
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+const fn = new AsyncFunction(...Object.keys(runtime), src)
+fn(...Object.values(runtime)).then((ledger) => {
+  const bad = ledger.items.filter((it) => it.status !== 'blocked' || it.attempts.length === 0 || it.attempts.some((a) => a.result !== 'failed'))
+  if (bad.length) { console.error('unexpected ledger: ' + JSON.stringify(ledger)); process.exit(1) }
+  const cookCalls = calls.filter((c) => c.startsWith('cook:')).length
+  const attempts = ledger.items.reduce((n, it) => n + it.attempts.length, 0)
+  if (cookCalls !== attempts) { console.error('cook calls ' + cookCalls + ' != recorded attempts ' + attempts); process.exit(1) }
+}).catch((e) => { console.error('run aborted: ' + e.message); process.exit(1) })
+JS
+}
+
 test_schema_examples_validate() {
   fixture="$TMP_ROOT/schema-examples"
   mkdir -p "$fixture/.brigade/dishes/sample/briefs" \
@@ -3730,6 +3766,7 @@ test_validate_analyst_modes
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_execute_verdict_scribe
+test_execute_guarded_agent_calls
 test_schema_examples_validate
 test_review_config
 test_review_policy_binding

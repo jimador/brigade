@@ -602,6 +602,16 @@ const withLandLock = (landFn) => {
   return turn
 }
 
+// The runtime rejects agent() when a subagent ends without its structured return —
+// a turn cap hit mid-report, a dead agent, a schema it never called. One item's
+// rejection must not abort every other item in the run: guard each call so it
+// resolves to null, which every call site below already treats as a failed
+// attempt (cook, inspector) or a failed step (steward).
+const guarded = (label, call) => call().catch((err) => {
+  blog('blocked', `${label} returned no structured result: ${err && err.message ? err.message : String(err)}`)
+  return null
+})
+
 let ladderExhausts = 0
 let totalInspectorFails = 0
 let breakerTripped = false
@@ -687,13 +697,13 @@ async function runItem(item, promises) {
   for (let i = 0; i < ladder.length; i += 1) {
     if (i === 0) {
       blog('steward', `dispatch ${item.slug}: preparing worktree`)
-      const creation = await agent(stewardCreatePrompt(worktreePath, branch), {
+      const creation = await guarded(`steward-create:${item.slug}`, () => agent(stewardCreatePrompt(worktreePath, branch), {
         label: `steward-create:${item.slug}`,
         phase: 'Cook',
         schema: SCHEMA_STEWARD_RETURN,
         agentType: POLICY.agents.steward,
         effort: STEWARD.effort,
-      })
+      }))
       if (!creation || !creation.ok) {
         status = 'blocked'
         blockedReason = `steward-create failed: ${creation ? creation.detail : 'agent returned no result'}`
@@ -707,13 +717,13 @@ async function runItem(item, promises) {
     await acquireCookSlot()
     let cookResult
     try {
-      cookResult = await agent(
+      cookResult = await guarded(`cook:${item.slug}:${i}`, () => agent(
         withPromptOverrides(
           cookPrompt(item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, i),
           PROMPT_EXTRAS.cook,
         ),
         { label: `cook:${item.slug}:${i}`, phase: 'Cook', schema: SCHEMA_COOK_RETURN, agentType },
-      )
+      ))
     } finally {
       releaseCookSlot()
     }
@@ -733,7 +743,7 @@ async function runItem(item, promises) {
     }
 
     blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
-    const verdictResult = await agent(
+    const verdictResult = await guarded(`inspect:${item.slug}:${i}`, () => agent(
       withPromptOverrides(
         inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
         PROMPT_EXTRAS.inspector,
@@ -744,7 +754,7 @@ async function runItem(item, promises) {
         schema: SCHEMA_VERDICT_RETURN,
         agentType: POLICY.agents.inspector,
       },
-    )
+    ))
 
     if (!verdictResult) {
       attempts.push({ agentType, result: 'failed' })
@@ -771,7 +781,7 @@ async function runItem(item, promises) {
     // before the steward is even dispatched, and hand both through.
     const reportReconstruction = reportReconstructionBlock(item, branch, cookResult)
     const verdictReconstruction = verdictReconstructionBlock(item, i + 1, verdictResult)
-    const landResult = await withLandLock(() => agent(
+    const landResult = await withLandLock(() => guarded(`steward-land:${item.slug}`, () => agent(
       stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction),
       {
         label: `steward-land:${item.slug}`,
@@ -780,7 +790,7 @@ async function runItem(item, promises) {
         agentType: POLICY.agents.steward,
         effort: STEWARD.effort,
       },
-    ))
+    )))
 
     if (!landResult || !landResult.ok) {
       status = 'rework-needed'

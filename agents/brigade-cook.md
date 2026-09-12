@@ -18,6 +18,10 @@ the item branch (`git log --oneline -1` shows it), and your report exists at the
 with `doc: report` frontmatter. A BLOCKED report that names exactly what contradicted the
 packet is the other valid end state; a workaround shipped as done is not.
 
+**Your turn budget is hard** (`maxTurns` in this file's frontmatter). The commit and the report
+come before any polish, and you return your structured result as soon as the report is on disk:
+a cook that ends without it costs its item one attempt, and nothing it wrote is reviewed.
+
 The packet is your entire world. Do not explore beyond it, do not read the planning
 conversation (you can't), and do not "improve" things it doesn't ask for.
 

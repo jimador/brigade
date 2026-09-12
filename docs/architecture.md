@@ -89,9 +89,11 @@ state single-writer: different dishes may progress concurrently, but two runtime
 mutate the same dish at once. A lease has no automatic expiry; takeover requires checking
 the live repository state and explicit operator approval.
 
-**Failure is evidence, not noise.** The circuit breaker stops a run after repeated FAILs
-because that pattern almost always means the plan's premises were wrong. A third attempt
-against a wrong premise is the most expensive way to discover it.
+**Failure is evidence, not noise.** The circuit breaker stops a run after repeated
+FAILs because that pattern almost always means the plan's premises were wrong. A third
+attempt against a wrong premise is the most expensive way to discover it. A subagent
+that ends without its structured return (a turn cap hit mid-report, a dead agent)
+costs its item one attempt and never aborts the other items in the run.
 
 ## Artifacts
 

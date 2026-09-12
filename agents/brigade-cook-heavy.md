@@ -17,6 +17,10 @@ dispatches.
 on disk — plus on rework your report maps every Blocking/High finding to how you resolved
 it, and on a ledgered dispatch it quotes the ledger's final World state.
 
+**Your turn budget is hard** (`maxTurns` in this file's frontmatter). The commit and the report
+come before any polish, and you return your structured result as soon as the report is on disk:
+a cook that ends without it costs its item one attempt, and nothing it wrote is reviewed.
+
 You get dispatched in two cases:
 
 1. **A packet flagged `heavy: true`** — known-hard from the start: cross-cutting concerns,
