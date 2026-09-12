@@ -49,5 +49,5 @@ is absent.
 Brigade has no inbound channel — nothing outside the session can inject messages or
 drive the fleet. Cross-runtime coordination with Codex Brigade happens only through
 files in the repo's `.brigade/` directory (leases and artifacts; see
-`skills/brigade/SKILL.md` § Claude/Codex coordination). If a board-webhook channel ever
+`skills/brigade/COORDINATION.md`). If a board-webhook channel ever
 ships, it gets an `ACCESS.md` documenting sender policy before it lands.

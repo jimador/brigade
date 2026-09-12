@@ -78,13 +78,13 @@ Execute: if the review resolved a tracked source ticket, claim it (assignee, `ki
 `todo` → `in_progress`) before dispatching, the same as any other dish. Pick a delivery
 branch in the repo's own naming convention (check `git log`/existing branches; never
 "brigade" in the name), cut it from `mainLine`, and create the delivery worktree. Then
-invoke `brigade-execute` exactly per the SKILL's Phase 3–5 contract: resolve `scriptPath`
+invoke `brigade-execute` exactly per the brigade skill's `EXECUTE.md`: resolve `scriptPath`
 (`$CLAUDE_PLUGIN_ROOT/workflows/brigade-execute.js` when set, else skill-base fallback),
 build `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate, maxParallel,
 overrides, promptOverrides, items }` from the mini-dish's PLAN.md, apply the returned
 ledger item by item (status/attempts into PLAN.md, ticket transitions, the retro-readiness
 check that every `done` item has a populated `attempts:` entry and a verdict file on
-disk), and act on each item's status exactly per that same phase's rules.
+disk), and act on each item's status exactly per `EXECUTE.md`.
 
 Close the loop: on handoff, comment on the source ticket (when one is tracked) in plain
 language — which finding ids shipped, and which were dropped because their premise didn't
