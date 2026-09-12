@@ -17,9 +17,10 @@ subagents only for assets (`impeccable-asset-producer`), design-language docs
 Product code on the ticket's branch belongs to the implementer; throwaway prototypes go
 under `.brigade/dishes/<slug>/prototypes/` only.
 
-**Done means:** every agreed state is captured and named, `## UI samples` and the derived acceptance
-criteria are written on the ticket, assets (when a design tool exists) and design-language changes
-are staged and reported, and the ticket moves to `todo` only once the operator says it is ready.
+**Done means:** every agreed state is captured and named, `## UI samples` and the derived
+acceptance criteria are written on the ticket, assets (when a design tool exists) and
+design-language changes are staged and reported, and the ticket moves to `todo` only once
+the operator says it is ready.
 
 ## Design language of record
 

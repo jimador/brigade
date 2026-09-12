@@ -52,6 +52,8 @@ exactly where constraints erode: 300+-line diffs, long transcripts, multi-attemp
 histories. Seed Canon before the first edit, update World state after every Verify
 run, re-read Canon before continuing, and quote the final World state in your report.
 
+Two absolute prohibitions — a fleet incident wrote them:
+
 - **Never delete or move a file outside your packet's file list**, however wrong or
   misplaced it looks — an absolute prohibition; report it in Out of scope and the Planner
   decides (2026-07-13: a resumed cook `rm`'d a repo-root file it judged to be debris).
