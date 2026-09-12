@@ -23,6 +23,25 @@ Working memory is **on by default**. Setting `workingMemory: false` in any briga
 config layer (global, team, or repo-local JSON) disables it fleet-wide — the execute
 script then never emits the block, at any tier.
 
+## The Planner's ledger
+
+The Planner runs the longest horizon in the fleet — a dish can span hours, several waves, and a
+context compaction — so it keeps a ledger of its own at
+`.brigade/dishes/<dish>/state/planner.md` (`doc: ledger`, `item: planner`, `role: planner`).
+
+- **Canon** (≤ 20 units): the ticket's constraints, the operator's directives and any waived
+  checkpoint, the delivery branch and lease token, the repo rules that bind every packet, and
+  what "done" means for this dish. Seeded at the end of intake with what is known then — the
+  delivery branch and lease token arrive as later units once chosen — and never edited: a
+  directive that changes arrives as a new numbered unit that names the one it supersedes.
+- **World state** (≤ 30 live units): what the Planner has verified — briefs on disk, the plan
+  validated, waves landed with their ledger tallies, gate results — each `[RELIABLE]` with the
+  command or artifact that proved it, or `[PROVISIONAL]`.
+- **Cadence:** seed at the end of Phase 0; update after every wave and before every lease
+  release; update again at handoff. `brigade-status` prints the live World state whenever the
+  file exists, so a resumed or compacted session starts from the Planner's verified facts
+  instead of re-deriving them.
+
 ## The file
 
 One per item, shared across attempts, outside every worktree so it survives worktree

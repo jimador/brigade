@@ -189,6 +189,11 @@ if [ -d "$B/dishes" ]; then
       [ -f "$rep" ] || continue
       echo "  report: $(basename "$rep")"
     done
+    ledger="$(dirname "$plan")/state/planner.md"
+    if [ -f "$ledger" ]; then
+      echo "  planner ledger (live World state):"
+      awk '/^## World state/ { p = 1; next } /^## / { p = 0 } p && /^W[0-9]+\./ { u = ($0 !~ /~~/) } p && u && (/^W[0-9]+\./ || /^[[:space:]]/)' "$ledger" | sed 's/^/    /'
+    fi
   done
 fi
 
