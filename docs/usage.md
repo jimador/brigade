@@ -110,8 +110,8 @@ wrong, not bad luck; the run stops and hands back to you rather than burning ano
 attempt against a bad assumption.
 
 **6 — Handoff.** Full verification gate on the integration branch, an acceptance pass over
-every criterion, one PR, the ticket moved to in-review with a plain-language comment, and
-an analyst retro.
+every criterion run by the inspector (Mode 4), one PR, the ticket moved to in-review with a
+plain-language comment, and an analyst retro.
 
 ## Reviewing code on demand
 
@@ -137,6 +137,14 @@ Answer it and re-run execute.
 
 Ladder exhausted with no PASS is the one case the Planner fixes itself — announced, with a
 minimal diff, re-inspected before landing.
+
+## The Planner's ledger
+
+A dish can outlive a context window. The Planner keeps `state/planner.md` under the dish —
+Canon (the ticket's constraints, the operator's directives, the delivery branch) and World
+state (what has been verified, wave by wave). `brigade-status` prints the live World state, so
+`continue the dish` in a fresh session starts from verified facts. Protocol:
+`skills/brigade/MEMORY.md` § The Planner's ledger.
 
 ## Self-improvement
 
@@ -168,6 +176,6 @@ The whole design is about not spending the expensive model on cheap work:
   re-read artifacts.
 - Escalation is per item and evidence-driven — never fleet-wide.
 
-The granularity rules in Phase 2 exist for this reason: a cheap cook handed exact files,
-contracts, and a verification command produces mergeable code, while the same model told
-to "look around for the auth logic" produces garbage.
+The granularity rules in `skills/brigade/DECOMPOSE.md` exist for this reason: a cheap cook
+handed exact files, contracts, and a verification command produces mergeable code, while
+the same model told to "look around for the auth logic" produces garbage.

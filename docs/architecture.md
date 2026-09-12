@@ -46,11 +46,22 @@ rather than re-decided by a model on every turn.
 | Scout | `brigade-scout` | answers one focused codebase question, returns a compact brief |
 | Cook | `brigade-cook` | implements exactly one work packet in its own worktree |
 | Heavy cook | `brigade-cook-heavy` | same contract, for hard packets and escalation rework |
-| Inspector | `brigade-inspector` | adversarial PASS/FAIL diff review; optional blind plan check |
+| Inspector | `brigade-inspector` | adversarial PASS/FAIL diff review; optional blind plan check; acceptance pass over a landed dish (Mode 4) |
 | Analyst | `brigade-analyst` | retro over a dish's artifacts; 1–3 process proposals (★★★ end-of-dish: intensive — cross-dish trends, proposal closure ledger, researched tooling recommendations, up to 5) |
+| Planner's ledger | `state/planner.md` | Canon + World state the Planner keeps across waves; printed by `brigade-status` |
 | Steward | a general-purpose agent | worktree creation, rebase, landing, cleanup |
 
 Every one of these is swappable — see [configuration.md](configuration.md#agents-per-role).
+
+## The Planner's brain is a router
+
+`skills/brigade/SKILL.md` stays under 400 lines: standing rules first (the part that survives
+context compaction), then a phase-by-phase checklist where every phase names what "complete"
+means and points at its companion — `DECOMPOSE.md`, `EXECUTE.md`, `HANDOFF.md`,
+`COORDINATION.md`, `CONFIG.md`. Rule ids (`P1`–`P7`, `D1`–`D7`) live in `DECOMPOSE.md` and stay
+stable because retros and plan checks cite them. `test/regression.sh` enforces the size,
+reference, and description budgets, and `evals/` holds the `claude plugin eval` suite that
+exercises the plugin in a fresh session.
 
 ## Why it is built this way
 
