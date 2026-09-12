@@ -3582,6 +3582,125 @@ EOF
   fi
 }
 
+test_skill_surface_budgets() {
+  # (a) every skill body stays under the loader's 500-line guidance — the whole file enters
+  # context on every invocation, and only its first ~5,000 tokens survive auto-compaction.
+  for f in "$ROOT"/skills/*/SKILL.md; do
+    n="$(wc -l < "$f")"
+    [ "$n" -le 500 ] || fail "$f is $n lines (budget 500)"
+  done
+
+  # (b) every companion the router's index names exists, and every skill/agent description
+  # stays within its cap. Frontmatter is parsed by hand: the suite stays dependency-free.
+  python3 - "$ROOT" <<'PY' || fail "skill surface budgets violated"
+import os, re, sys
+
+root = sys.argv[1]
+base = os.path.join(root, "skills", "brigade")
+text = open(os.path.join(base, "SKILL.md")).read()
+index = text[text.index("## Companion files"):]
+refs = sorted(set(re.findall(r"`([A-Za-z0-9_./-]+\.md)`", index)))
+missing = [r for r in refs if not os.path.isfile(os.path.normpath(os.path.join(base, r)))]
+if missing:
+    raise SystemExit(f"router index names missing files: {missing}")
+
+def frontmatter(path):
+    lines = open(path).read().split("\n")
+    if lines[0] != "---":
+        raise SystemExit(f"{path}: no frontmatter")
+    end = lines.index("---", 1)
+    fm = {}
+    for line in lines[1:end]:
+        m = re.match(r"^([A-Za-z_-]+):\s*(.*)$", line)
+        if m:
+            fm[m.group(1)] = m.group(2).strip().strip('"')
+    return fm
+
+for name in sorted(os.listdir(os.path.join(root, "skills"))):
+    path = os.path.join(root, "skills", name, "SKILL.md")
+    if not os.path.isfile(path):
+        continue
+    fm = frontmatter(path)
+    desc = fm.get("description", "")
+    if not desc:
+        raise SystemExit(f"{path}: empty description")
+    if len(desc) > 800:
+        raise SystemExit(f"{path}: description is {len(desc)} chars (policy cap 800; loader cap 1024)")
+    if len(desc) + len(fm.get("when_to_use", "")) > 1536:
+        raise SystemExit(f"{path}: description + when_to_use exceed 1536 chars")
+
+for name in sorted(os.listdir(os.path.join(root, "agents"))):
+    if not name.endswith(".md"):
+        continue
+    path = os.path.join(root, "agents", name)
+    desc = frontmatter(path).get("description", "")
+    if not desc:
+        raise SystemExit(f"{path}: empty description")
+    if len(desc) > 300:
+        raise SystemExit(f"{path}: description is {len(desc)} chars (cap 300)")
+PY
+}
+
+test_status_planner_ledger() {
+  # brigade-status prints the Planner's live World state — wrapped units included, struck
+  # units, the archive, and Canon excluded — so a resumed session recovers verified facts.
+  fixture="$TMP_ROOT/status-planner-ledger"
+  mkdir -p "$fixture/.brigade/dishes/sample/state"
+  cat >"$fixture/.brigade/dishes/sample/PLAN.md" <<'EOF'
+---
+doc: plan
+ticket: TEST-1
+items:
+  - { slug: one, status: done, depends_on: [], heavy: false, files: [a.md], attempts: [] }
+---
+
+## Dish
+Regression fixture.
+EOF
+  cat >"$fixture/.brigade/dishes/sample/state/planner.md" <<'EOF'
+---
+doc: ledger
+schema: 1
+dish: sample
+item: planner
+role: planner
+model: x
+created: 2026-01-01T00:00:00Z
+attempt: 1
+updated: 2026-01-01T00:00:00Z
+---
+
+## Canon
+
+C1. keep
+
+## World state
+
+W1. [RELIABLE] plan validated
+W2. ~~[PROVISIONAL] struck unit that wraps
+  onto a second line~~ (superseded)
+W3. [PROVISIONAL] wave 1 dispatched, a long unit that
+  wraps onto a continuation line
+
+## Archive
+
+W0. old
+EOF
+  text="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-status")"
+  printf '%s\n' "$text" | grep -Fq "  planner ledger (live World state):" ||
+    fail "brigade-status did not print the planner ledger header"
+  printf '%s\n' "$text" | grep -Fq "    W1. [RELIABLE] plan validated" ||
+    fail "brigade-status dropped a live World-state unit"
+  printf '%s\n' "$text" | grep -Fq "      wraps onto a continuation line" ||
+    fail "brigade-status dropped the continuation of a wrapped unit"
+  if printf '%s\n' "$text" | grep -Eq 'W2\.|onto a second line|W0\.|C1\.'; then
+    fail "brigade-status printed a struck, archived, or Canon unit"
+  fi
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-status" --json |
+    python3 -c 'import json, sys; json.load(sys.stdin)' ||
+    fail "brigade-status --json broke with a planner ledger present"
+}
+
 test_plugin_manifests_validate
 test_post_cook_validate_hook
 test_coord_watch_transitions
@@ -3631,4 +3750,6 @@ test_research_reports_expected_brief_path
 test_subagent_line_model
 test_evidence_scope
 test_planner_model_config
+test_skill_surface_budgets
+test_status_planner_ledger
 echo "PASS: brigade operational regressions"
