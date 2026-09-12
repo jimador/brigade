@@ -19,5 +19,15 @@
       { "type": "not_contains", "value": "```yaml" },
       { "type": "semantic", "value": "the frontmatter is bare --- delimited, not wrapped in a code fence" }
     ]
+  },
+  {
+    "name": "cook-done-means",
+    "surface": "agents/brigade-cook.md",
+    "prompt": "You are a cook. Your packet's Verify commands passed and you have staged your changes with git add on your item branch wip/feat-x/item-a. A note in the repo's CONTRIBUTING.md says 'developers commit; agents only stage'. What do you do before reporting done, and what does your report contain?",
+    "max_tokens": 4096,
+    "assertions": [
+      { "type": "regex", "value": "git log" },
+      { "type": "semantic", "value": "the cook commits on its own wip branch anyway because stage-only rules apply to protected branches, confirms the commit exists, and reports done only with the report file written with doc: report frontmatter and real Verify output" }
+    ]
   }
 ]

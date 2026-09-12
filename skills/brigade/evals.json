@@ -61,7 +61,7 @@
   },
   {
     "name": "premise-exhaustiveness-rederived",
-    "surface": "skills/brigade/SKILL.md",
+    "surface": "skills/brigade/DECOMPOSE.md",
     "prompt": "You are the Planner writing work packets. A scout brief you dispatched earlier states: \"There are exactly three call sites of `resolveTenant()`: api/handler.ts, jobs/sync.ts, and cli/run.ts.\" You are about to write a packet whose scope is \"update every call site of resolveTenant() for the new signature\". What exactly do you put in the packet's file list, and what do you do first?",
     "max_tokens": 4096,
     "assertions": [
@@ -73,7 +73,7 @@
   },
   {
     "name": "premise-coverage-claim-needs-proof",
-    "surface": "skills/brigade/SKILL.md",
+    "surface": "skills/brigade/DECOMPOSE.md",
     "prompt": "You are the Planner. While decomposing, you are about to write into a work packet: \"No new test is needed here \u2014 the existing suite already covers the empty-input case.\" Before that sentence goes into the packet, what must be true, and what do you do?",
     "max_tokens": 4096,
     "assertions": [
@@ -85,7 +85,7 @@
   },
   {
     "name": "heavy-flag-exact-message-assertion",
-    "surface": "skills/brigade/SKILL.md",
+    "surface": "skills/brigade/DECOMPOSE.md",
     "prompt": "You are the Planner sizing one irreducible work item: add a unit test asserting that a permission failure raises an error whose message is exactly \"Access denied: insufficient scope for resource\". The item touches one test file and is about 30 lines. Do you mark it heavy? Answer and justify.",
     "max_tokens": 4096,
     "assertions": [
@@ -97,7 +97,7 @@
   },
   {
     "name": "disjointness-same-wave-files",
-    "surface": "skills/brigade/SKILL.md",
+    "surface": "skills/brigade/DECOMPOSE.md",
     "prompt": "You are the Planner laying out waves. Two work items both need to edit `docs/configuration.md` \u2014 one adds a section about retries, the other adds a section about timeouts. They are otherwise independent. Can they run in the same wave? Answer and explain what you do.",
     "max_tokens": 4096,
     "assertions": [
@@ -110,13 +110,41 @@
   {
     "name": "brain-upgrade-compacts",
     "surface": "skills/brigade/RETRO.md",
-    "prompt": "You are running a brain-upgrade pass on the brigade plugin source. The evidence base supports adding one new decomposition rule to the Phase 2 section of SKILL.md, which is already long. Describe exactly what you change in the source and what you report to the user.",
+    "prompt": "You are running a brain-upgrade pass on the brigade plugin source. The evidence base supports adding one new decomposition rule to skills/brigade/DECOMPOSE.md (the Phase 2 companion), which is already long. Describe exactly what you change in the source and what you report to the user.",
     "max_tokens": 4096,
     "assertions": [
       {
         "type": "semantic",
         "value": "the pass compacts the section it edits as well as adding the rule \u2014 folding the new rule into an existing one where it is a sharper case, compressing evidence into trailing clauses, retiring superseded text, keeping rule IDs stable, and reporting the section's line count before and after"
       }
+    ]
+  },
+  {
+    "name": "router-loads-decompose-companion",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner in a coding fleet. Scout briefs are on disk and you are about to write PLAN.md for a dish. Before writing a single packet, which file do you open, and what must be true before you show the plan to the operator?",
+    "max_tokens": 4096,
+    "assertions": [
+      { "type": "regex", "value": "DECOMPOSE\\.md" },
+      { "type": "semantic", "value": "the response names DECOMPOSE.md as the file to read before decomposing and states completion as PLAN.md validating, the plan check (when the tier runs one) folded in, and one operator confirmation" }
+    ]
+  },
+  {
+    "name": "run-to-handoff-after-approval",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner in a coding fleet. The operator approved the plan an hour ago. The execute workflow just returned a ledger in which every item is done, and every cook report and inspector verdict is on disk and validates. Describe your next actions. Do you pause to ask the operator whether to continue?",
+    "max_tokens": 4096,
+    "assertions": [
+      { "type": "semantic", "value": "the response proceeds into handoff (gate at full scope, acceptance pass, PR or branch, ticket to in-review, retro if due) without asking the operator for permission to continue" }
+    ]
+  },
+  {
+    "name": "readiness-failure-asks-one-question",
+    "surface": "skills/brigade/SKILL.md",
+    "prompt": "You are the Planner in a coding fleet. The execute workflow returned one item blocked with blockedReason: 'cook: packet step 3 says to set retry_limit but no value is given anywhere in the packet or the ticket'. What exactly do you do next?",
+    "max_tokens": 4096,
+    "assertions": [
+      { "type": "semantic", "value": "the response asks the operator one decision-ready question naming the exact missing value with options and a recommendation, and neither guesses a value nor re-dispatches the same packet unchanged" }
     ]
   }
 ]
