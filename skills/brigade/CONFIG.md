@@ -16,10 +16,14 @@ JSON layers carry **fleet behavior** and win where both express the same thing.
 
 ## Resolve once per dish
 
+Three commands, zero model tokens: `resolve --json` (merged settings and the layer that set
+each key), `prompts --json` (prompt-override stacks by role), `doctor` (validate every layer;
+exit 1 on problems).
+
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json     # merged settings + which layer set each key
-"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts --json     # prompt-override stacks, by role
-"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" doctor             # validate every layer; exit 1 on problems
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts --json
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" doctor
 ```
 
 Pass the resolved settings into the Workflow scripts as `overrides` and the prompt stacks

@@ -67,5 +67,5 @@ records `{model, trigger, result}`. Runtime/model identifiers are opaque provena
 strings; preserve unfamiliar Codex values.
 
 The shared config keeps Claude agent overrides in
-`models.scout|cook|cookHeavy|inspector|analyst|design|steward`. Codex uses separate nested
+`models.scout|cook|cookHeavy|inspector|analyst|design|designer|steward`. Codex uses separate nested
 keys prefixed `codex`; never consume or rewrite them.
