@@ -36,7 +36,7 @@ rules exist to make cheap execution viable, not to be tidy.
 
 Four design goals, in order:
 
-- **Minimum installable surface** — two skills, six agent files, no MCP server, no runtime
+- **Minimum installable surface** — three skills, seven agent files, no MCP server, no runtime
   daemon, no database.
 - **Cheap execution** — the session plans and never explores or implements; token-heavy
   work runs on the tier's cheap models.
@@ -119,7 +119,9 @@ the Inspector. Small first-attempt items skip it; at that horizon the packet alo
 enough. On by default — set `workingMemory: false` in any config layer to disable.
 Protocol: `skills/brigade/MEMORY.md`; adapted from
 [arc-mem](https://github.com/jimador/arc-mem) (Activation-Ranked Context — governed
-working memory for LLM agents).
+working memory for LLM agents). The Planner keeps a ledger of its own
+(`state/planner.md`), and `brigade-status` prints its live World state so a resumed
+session starts from verified facts.
 
 ## Configuration and overrides
 
@@ -150,7 +152,9 @@ and [docs/overrides.md](docs/overrides.md).
 
 | Path | What |
 | --- | --- |
-| `skills/brigade/SKILL.md` | the planner's brain: intake → research → decompose → dispatch → review → merge → handoff |
+| `skills/brigade/SKILL.md` | the Planner's router: standing rules, the dish checklist, and pointers into the phase companions |
+| `skills/brigade/DECOMPOSE.md` · `EXECUTE.md` · `HANDOFF.md` | the phase companions: decomposition rules and the plan check; pre-flight, the execute ledger, stop conditions; the handoff and acceptance pass |
+| `skills/brigade/COORDINATION.md` · `CONFIG.md` | the Claude/Codex dish lease and wire contract; settings layers and prompt overrides |
 | `skills/brigade/SCHEMAS.md` | typed artifact registry — every plan, brief, report, and verdict has a fixed envelope and authority rule |
 | `skills/brigade/TIERS.md` | service-tier reference and difficult-planning triggers |
 | `skills/brigade/GRAPHITE.md` | optional Graphite modes, both off by default |
@@ -167,6 +171,8 @@ and [docs/overrides.md](docs/overrides.md).
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
+| `evals/` | `claude plugin eval` suite: eight expected-workflow cases with scaffolded fixtures; results stay local |
+| `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
 
 ## Requirements
 

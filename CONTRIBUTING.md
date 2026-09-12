@@ -6,7 +6,8 @@ no package to publish — but there are a few rules that keep it working.
 ## Layout
 
 ```
-skills/brigade/     the planner's brain, schemas, tier policy, source adapters, templates
+skills/brigade/     the planner's router + phase companions (DECOMPOSE, EXECUTE, HANDOFF,
+                    COORDINATION, CONFIG), schemas, tier policy, source adapters, templates
 skills/groom/       the board-grooming session
 skills/onboard/     the onboarding skill behind /brigade:onboard
 agents/             one file per subagent role
@@ -27,6 +28,7 @@ workflows/config.js policy consts + config merging, spliced into all three scrip
 workflows/*.js      GENERATED — never hand-edit
 docs/               the documentation set
 test/regression.sh  operational regressions
+evals/              claude plugin eval cases (opt-in, real model calls; see the eval tier)
 ```
 
 ## The one build step
@@ -73,7 +75,12 @@ surfaces; it needs either `ANTHROPIC_API_KEY` or an authenticated Claude Code CL
 on PATH) and Node 18+. Run `node scripts/brigade-eval` to try it — with neither a key nor
 the CLI available it skips cleanly (exit 0) and prints `brigade-eval: skipped (no
 ANTHROPIC_API_KEY and no claude CLI)`. Results land in `.brigade/evals/` and are never
-committed. A full sweep is operator-invoked, not part of the per-commit gate.
+committed. A full sweep is operator-invoked, not part of the per-commit gate. The
+plugin-level suite is `claude plugin eval . --trust-plugin --scaffold --runs 1
+--allow-tools Write Edit --model sonnet --judge-model haiku --no-publish --max-cost-usd
+25` — it loads the plugin the way a user's session does and reports a with/without delta
+per case; `--max-cost-usd 0` is a free load check (exit 2 = every case loaded). Results
+land in `evals/results/` and are never committed.
 
 `claude plugin validate` is the only check that reads the manifests and every skill,
 command, and agent the way the runtime does. It is how a command whose frontmatter fails
