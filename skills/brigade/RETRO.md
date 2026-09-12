@@ -64,11 +64,11 @@ the installed copy**:
    reports from active repos. Soft-fail optional graph tooling if the KB CLI exposes it.
 3. Synthesize: which heuristics have earned a place in the brain (recurring, evidence-
    backed) vs. stay repo-local vs. contradict each other (surface contradictions to the
-   user — don't average them). Then edit the source SKILL/agents/templates: tighten the
+   user — don't average them). Then edit the source SKILL, its companions (`DECOMPOSE.md`, `EXECUTE.md`, `HANDOFF.md`), agents, or templates: tighten the
    granularity bar, sharpen packet/verdict formats, adjust the escalation or heavy-flag
    policy — smallest diff that captures the rule.
 4. **Compact what you just wrote into.** Absorbing without compacting is how this brain
-   grows a wall of prose nobody can scan: Phase 2 reached 140 lines of accreted paragraphs
+   grows a wall of prose nobody can scan: Phase 2 (now `DECOMPOSE.md`) reached 140 lines of accreted paragraphs
    before anyone noticed. An upgrade pass that adds a rule also pays down the section it
    touched. Every pass, in the file it edited:
    - **Fold, don't append.** A new rule that is a sharper case of an existing one amends
@@ -79,7 +79,7 @@ the installed copy**:
      it, but never let it swallow the rule either.
    - **Retire superseded text.** A rule a later rule strictly covers comes out. Say so in
      the diff, so the user can veto a retirement they disagree with.
-   - **Keep the rule IDs stable.** Phase 2's `P*`/`D*` numbers are cited by retros and plan
+   - **Keep the rule IDs stable.** `DECOMPOSE.md`'s `P*`/`D*` numbers are cited by retros and plan
      checks. Amend a rule under its existing ID; only a genuinely new rule takes a new one,
      appended rather than renumbered.
    - **A section that grew and did not shrink is a finding**, reported to the user with the

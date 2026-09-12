@@ -2,7 +2,7 @@
 
 Brigade can drive its stack rebases and its handoff through the Graphite CLI (`gt`).
 Two independent switches in `.brigade/config.md` under `## Repo`; a missing key means
-`false`, and everything in SKILL.md works unchanged when both are off.
+`false`, and everything in SKILL.md and its companions works unchanged when both are off.
 
 - `graphite_restack: true` — the Planner uses `gt` for the local rebase mechanics at
   landing and rework. No account, no network: create/track/restack/absorb/undo are
@@ -69,7 +69,7 @@ are unchanged; gt replaces the hand-rolled rebase cascade where a cascade exists
 
 - Track the delivery branch once at dish start: `gt track <delivery-branch>` with trunk
   as parent (run in the delivery worktree).
-- Independent items: land exactly as in SKILL.md Phase 3. Tracking them buys nothing.
+- Independent items: land exactly as in `EXECUTE.md`. Tracking them buys nothing.
 - Sequential chains (item B branched from item A's landed work): track each chained
   branch with its dependency as parent. When rework lands low in the chain,
   `gt restack` from the chain's worktree replaces the per-branch rebase cascade, and
@@ -77,7 +77,7 @@ are unchanged; gt replaces the hand-rolled rebase cascade where a cascade exists
 
 ## Platform mode (`graphite_platform`)
 
-Landing stays linear, but item branches become the PR stack, so two Phase-5/6 steps
+Landing stays linear, but item branches become the PR stack, so two landing and handoff steps
 change:
 
 - **Keep item branches at landing.** After each `--ff-only` landing, `gt track` the
@@ -85,7 +85,7 @@ change:
   as parent, and skip the `git branch -d` cleanup. Because landing is linear, each
   branch tip sits on the delivery history and the tracked chain is a valid stack.
   Worktrees are still removed at landing; only branches persist until the stack merges.
-- **Handoff (replaces SKILL.md Phase 6 step 3):** from the delivery worktree, restack
+- **Handoff (replaces `HANDOFF.md` step 3):** from the delivery worktree, restack
   on latest trunk (`gt sync` — waves are done, checkout is clean), then
   `gt submit --stack` — one PR per item in dependency order. `--ai` may fill titles
   and descriptions on new PRs; the PR bodies still follow the handoff rules (summary,

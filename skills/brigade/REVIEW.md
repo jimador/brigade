@@ -75,4 +75,4 @@ Selection is explicit (arguments or an `AskUserQuestion` multi-select — no bul
 finding whose `confirmed` isn't `true` gets a premise re-check against current main before
 it's trusted. Surviving findings become `.brigade/dishes/review-fixes-<slug>/PLAN.md`, one
 item per finding, with no second planning pass since the findings already did the
-decomposition — then it runs through `brigade-execute` (Phases 3–5) like any other dish.
+decomposition — then it runs through `brigade-execute` (`EXECUTE.md`) like any other dish.
