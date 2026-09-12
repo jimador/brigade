@@ -4,6 +4,9 @@
 # Local brigade state: board, dishes, worktrees, personal config layer.
 .brigade/
 
+# Plugin eval runs (claude plugin eval): results are local, never committed.
+evals/results/
+
 # Python bytecode cache (hooks/guard.py leaves this when executed)
 __pycache__/
 *.pyc
