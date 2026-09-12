@@ -1,7 +1,6 @@
 ---
 name: onboard
-description: Set up brigade in a repo, or repair and upgrade an existing setup. Runs the init interview, writes the .brigade/ layout and board wiring, and reconciles drift left by a plugin update.
-when_to_use: Onboarding a repo, getting brigade working here, finishing board wiring, fixing a broken .brigade/config.md, or resolving drift after a plugin update. Triggers on "onboard this repo", "set up brigade", "repair brigade setup", "finish board wiring", "brigade doctor said drift".
+description: "Sets up brigade in a repo, or repairs and upgrades an existing setup: scans repo signals, writes .brigade/config.md and the git exclusion, records the plugin version, and reconciles drift after a plugin update, asking only for values it cannot detect. Use when the user says set up brigade, onboard this repo, repair brigade setup, finish board wiring, or when SessionStart reports setup incomplete or drift. Not for working tickets or grooming a board."
 ---
 
 # Onboard
@@ -9,6 +8,10 @@ when_to_use: Onboarding a repo, getting brigade working here, finishing board wi
 One-time setup and any-time repair for a repo's brigade wiring. Scan what's already true,
 plan the gap, ask the operator only what can't be inferred, execute, verify. Safe to re-run:
 a second pass repairs whatever is still wrong and touches nothing that's already correct.
+
+**Done means:** `brigade-config doctor` is clean, one board read succeeded, `.brigade/config.md`
+reads back with the values just written, and the report table lists every piece as done,
+repaired, or skipped — with anything still wrong stated, never marked done.
 
 ## Scan
 

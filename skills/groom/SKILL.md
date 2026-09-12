@@ -1,7 +1,6 @@
 ---
 name: groom
-description: Board grooming session for the brigade fleet. Clusters tickets by product feature, splits multi-behavior tickets, merges duplicates, and sharpens goals and acceptance criteria with scout and inspector review, iterating with the user. Never cooks — a dish starts only when the user picks a groomed ticket and says go.
-when_to_use: Grooming a board, organizing or cleaning up tickets, breaking a feature down into tickets, splitting or merging tickets, or getting a board ready for brigade work. Triggers on "groom my board", "organize my tickets", "break down this feature", "clean up the backlog".
+description: "Grooms a task board for the brigade fleet: clusters tickets by product feature, splits multi-behavior tickets, merges duplicates, and sharpens goals and acceptance criteria with scout grounding and inspector review, one confirmed batch at a time. Use when the user says groom my board, organize my tickets, break down this feature, clean up the backlog, split or merge tickets, or hands over a whole board instead of one ticket. Never cooks; a dish starts only when the user picks a groomed ticket and says go."
 argument-hint: "[board|feature]"
 ---
 
@@ -13,9 +12,18 @@ sharp enough to cook. It is a conversation: every restructure is a proposal the 
 confirms, and **nothing is dispatched to cooks from a grooming session** — that happens
 later, when the user says go on a specific ticket (the main `brigade` skill).
 
-Load the brigade skill's `SCHEMAS.md` (next to the main SKILL.md in this plugin) for the
+Copy this checklist and check off each round:
+
+- [ ] 1 Collect — every open ticket listed, exclusions applied
+- [ ] 2 Organize — clusters and split/merge candidates confirmed by the user
+- [ ] 3 Review — scout brief and inspector findings on disk per ticket
+- [ ] 4 Rewrite — groomed bodies drafted, open questions surfaced
+- [ ] 5 Update — one batch confirmation, source updated, leases released
+- [ ] 6 Report — round summary delivered, this session's grooming artifacts removed
+
+Load the brigade skill's `SCHEMAS.md` (next to the brigade SKILL.md in this plugin) for the
 `ticket` schema. Read `.brigade/config.md` for the source transport and status mapping; if
-it doesn't exist, run brigade init first (see the main skill § Setup).
+it doesn't exist, run /brigade:onboard first.
 
 ## 1. Collect
 
@@ -49,8 +57,9 @@ shape. Restructures are applied in step 4 only after confirmation:
 ## 3. Review — two perspectives per ticket, in parallel where independent
 
 For each ticket, derive its canonical dish slug using the source-plus-ticket algorithm in
-the main skill, acquire that dish lease before writing any `.brigade/grooming/` artifact,
-and release it before the batch confirmation. A held lease leaves that ticket read-only.
+the brigade skill's `COORDINATION.md`, acquire that dish lease before writing any
+`.brigade/grooming/` artifact, and release it before the batch confirmation. A held lease
+leaves that ticket read-only.
 
 **Scout pass (grounding).** Dispatch one `brigade-scout` per ticket with: the ticket text,
 the repo root, the question "Which files, modules, and contracts does this ticket actually
@@ -121,3 +130,7 @@ Guardrails: originals preserved verbatim; no restructure or status change withou
 confirmation; open questions are surfaced, never answered by invention; no secrets or
 local paths on the board; scouts/inspectors report — only you write to the source; no
 cooking from a grooming session.
+
+A grooming session is complete when the round report is delivered and this session's grooming
+artifacts are removed. It never proceeds into a dish on its own: cooking starts only when the user
+names a groomed ticket and says go.
