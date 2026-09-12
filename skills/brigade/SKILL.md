@@ -225,7 +225,8 @@ Derive `<dish-slug>` per `COORDINATION.md` and create `.brigade/dishes/<dish-slu
 
 **Claim the ticket** (skip for Design swag): (1) acquire the dish slug as `claude`; (2) set
 `assignee` to the operator; (3) ensure `kind` is set; (4) move status `todo` → `in_progress`;
-(5) set `worker` to the cook roster name on each dispatch. Confirm with a read-back.
+(5) set `worker` to the cook roster name on each dispatch. Confirm with a read-back. Skipping
+the claim or `worker` while cooking in chat is a readiness failure.
 
 Seed your own ledger at `state/planner.md` per `MEMORY.md` § The Planner's ledger (Canon: the
 ticket's constraints, the operator's directives, the delivery branch and lease token, what

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixture: a tiny repo with a brigade board wired to a local markdown source.
+# Fixture: a tiny repo with no brigade setup yet; the onboard case is expected to plan it.
 set -euo pipefail
 git init -q .
 mkdir -p src
