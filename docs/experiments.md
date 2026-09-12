@@ -36,8 +36,8 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   duration and tokens.
 - result: null on outcomes, a measured cost. Nine ON↔OFF pairs: first-attempt PASS 9/9 ON vs 8/9 OFF (the one OFF miss was a report-format FAIL, not a work defect); inspector findings excluding ledger upkeep 14 vs 14; mean first-attempt cook context 111,621 vs 86,278 tokens (+29%); ledger-upkeep findings 6 vs 3; one ON ledger exceeded its 80-line budget and needed Planner compaction. Confounds: the hardest items were assigned ON by difficulty, cooks changed model mid-dish, n = 9.
 - decision: keep watching — keep the ledger for rework attempts and cross-cutting items (where it is the audit trail), stop paying for it on small first attempts; rerun the pairing on a dish where ON/OFF is assigned at random.
-- evidence: `.brigade/dishes/local-skills-best-practices/analyst.md` and
-  `reports/experiment-tally.md` (local).
+- evidence: [retros/2026-09-12-skill-authoring.md](retros/2026-09-12-skill-authoring.md)
+  § Experiment E-001 (the per-pair table and the confounds).
 
 ### E-002 Router-style SKILL.md with phase companions
 
@@ -50,7 +50,8 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   per-case delta.
 - result: the router did not keep every prompt eval passing: on the 11 cases both trees share, `scripts/brigade-eval` (CLI backend, sonnet, one run) passed 9/11 at the base commit and 6/11 at the tip (15 cases at the tip, 7 pass; three tip failures are harness artifacts — a failed file write, a rubric-only reply, a truncated Verify step). `claude plugin eval` (8 cases, with/without ablation, one run): overall score 0.79, 5/8 pass with the plugin vs 3/8 without, mean delta +0.27; the three with-plugin failures all hit the host's Bash denial.
 - decision: keep watching — do not revert the split (the plugin still beats the no-plugin baseline on every case where the plugin fires); rerun `scripts/brigade-eval` with three runs per case on both trees before ruling on the 3-case gap, and make the verdict/packet cases robust to fenced output.
-- evidence: `evals/results/` (local) and the handoff report.
+- evidence: [retros/2026-09-12-skill-authoring.md](retros/2026-09-12-skill-authoring.md);
+  raw eval output lands in `evals/results/`, which is local and never committed.
 
 ### E-003 Native Claude Code worktrees for cook isolation
 

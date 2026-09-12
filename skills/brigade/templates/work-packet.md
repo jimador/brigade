@@ -164,6 +164,11 @@ Only when they apply — omit the section if neither does:
 anything a scout brief flagged. e.g. "imports at top; exhaustive switch with never default;
 no new dependencies.">
 
+Name the commit shape if the repo has one, but never quote a literal attribution trailer: say
+"the session's mandated attribution trailer" and let the cook write what its own session
+mandates. A dictated model name makes every cook choose between the packet and its session, and
+the choice becomes a finding either way — one dish spent a fifth of its findings on exactly that.
+
 ### Out of scope
 
 Name the tempting-but-forbidden things explicitly: files not to touch, refactors not to do,

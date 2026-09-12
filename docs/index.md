@@ -27,6 +27,7 @@ A Claude Code plugin that turns one session into the planner of a parallel dev f
 - **[sources.md](sources.md)** — ticket sources and the four-operation adapter contract
 - **[intent.md](intent.md)** — what brigade optimizes for, its bet and non-goals, and how the intent changes
 - **[experiments.md](experiments.md)** — hypotheses the fleet has tested: setup, metric, result, decision
+- **[retros/](retros/)** — what a dish cost and what changed because of it, one record per published run
 
 ## When it goes wrong
 
@@ -45,6 +46,7 @@ A Claude Code plugin that turns one session into the planner of a parallel dev f
 - [`evals/`](../evals/) — the `claude plugin eval` suite: eight expected-workflow cases with fixtures
 - [`skills/brigade/SCHEMAS.md`](../skills/brigade/SCHEMAS.md) — the typed artifact registry
 - [`skills/brigade/TIERS.md`](../skills/brigade/TIERS.md) — machine-readable tier policy
+- [`skills/brigade/policies/heuristics.md`](../skills/brigade/policies/heuristics.md) — process rules earned by retros, shared by the team
 - [`skills/brigade/GRAPHITE.md`](../skills/brigade/GRAPHITE.md) — optional Graphite modes
 - [`skills/groom/SKILL.md`](../skills/groom/SKILL.md) — the board-grooming session
 - [`skills/brigade/sources/`](../skills/brigade/sources/) — one file per ticket source
