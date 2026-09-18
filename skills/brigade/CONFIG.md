@@ -59,7 +59,10 @@ contributes, appended after the shipped prompt in layer order:
 
 Roles: `scout`, `cook`, `cookHeavy`, `inspector`, `analyst`, `design`, `designer`,
 `steward`, `planner`. Resolve with `brigade-config prompts --json` at dish start and pass
-the result through; agents never read override files themselves.
+the result through; agents never read override files themselves. Your own `planner`
+stack is the exception: nothing dispatches the Planner, so SessionStart inlines it into
+the session. If that block is missing, run `brigade-config prompt planner` yourself at
+dish start and follow it.
 
 Overrides only ADD instructions. They never remove the Inspector gate, the Analyst pass,
 or the evidence requirements — forking the agent file is the honest way to do that.

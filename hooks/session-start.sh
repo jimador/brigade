@@ -40,6 +40,14 @@ if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-config"
     "") ;;
     *) echo; printf '%s\n' "$OVERRIDES" ;;
   esac
+  # Every other role gets its override stack appended at dispatch. Nothing dispatches the
+  # Planner, so its stack has to reach the session here or it never applies at all.
+  PLANNER_OVERRIDES="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-config" prompt planner 2>/dev/null || true)"
+  if [ -n "$PLANNER_OVERRIDES" ]; then
+    echo
+    echo "## planner prompt overrides (these apply to YOU, the Planner, for this whole session)"
+    printf '%s\n' "$PLANNER_OVERRIDES"
+  fi
 fi
 
 # Onboarding drift: auto-apply pending mechanical steps; point at /brigade:onboard for the rest.

@@ -220,9 +220,10 @@ ${worktreePath} and that ${branch} is checked out there, and return ok: true.
 Any other failure is real: return ok: false with the actual error in detail.
 
 Then copy the repo's gitignored environment files into the new worktree, preserving
-their relative paths:
+their relative paths. List them with git so the repo's own ignore rules decide what
+counts (.env, .env.local, .env.production, a nested app's .env — all of them):
 
-  cd ${A.repoRoot} && find . -name '.env.local' -not -path '*/node_modules/*' -not -path './.brigade/*' -print
+  cd ${A.repoRoot} && git ls-files --others --ignored --exclude-standard | grep -E '(^|/)[.]env([.][^/]+)?$' | grep -v -E '(^|/)node_modules/|^[.]brigade/'
 
 For each result, create the parent directory under ${worktreePath} and copy the file
 there. A fresh worktree has none of these — they are gitignored — and without them the
@@ -460,6 +461,15 @@ async function runItem(item, promises) {
   let reconstructed = []
 
   for (let i = 0; i < ladder.length; i += 1) {
+    // The breaker can trip while this item is mid-ladder (its own attempt, or a sibling's).
+    // Once it has, every further rung reproduces the same unretryable failure, so stop here
+    // instead of burning the rest of the ladder.
+    if (i > 0 && breakerTripped) {
+      status = 'blocked'
+      blockedReason = `circuit breaker: ${breakerReason}`
+      blog('blocked', `breaker tripped mid-ladder: stopping ${item.slug} after attempt ${i}`)
+      break
+    }
     if (i === 0) {
       blog('steward', `dispatch ${item.slug}: preparing worktree`)
       const creation = await guarded(`steward-create:${item.slug}`, () => structuredAgent(stewardCreatePrompt(worktreePath, branch), {
@@ -546,7 +556,7 @@ async function runItem(item, promises) {
     // before the steward is even dispatched, and hand both through.
     const reportReconstruction = reportReconstructionBlock(item, branch, cookResult)
     const verdictReconstruction = verdictReconstructionBlock(item, i + 1, verdictResult)
-    const landResult = await withLandLock(() => guarded(`steward-land:${item.slug}`, () => agent(
+    const landResult = await withLandLock(() => guarded(`steward-land:${item.slug}`, () => structuredAgent(
       stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction),
       {
         label: `steward-land:${item.slug}`,

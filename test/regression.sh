@@ -1299,14 +1299,20 @@ NODE
 }
 
 test_execute_guarded_agent_calls() {
-  # A subagent that ends without its structured return rejects agent(); one item's
-  # rejection costs that item one attempt and never aborts the run (dish retro, wave 2b).
+  # A subagent that ends without its structured return rejects agent(). guarded() turns
+  # that into a null result so the run never aborts; structuredAgent() recognises the
+  # StructuredOutput shape, trips the breaker on the first one, and the ladder stops at
+  # the next rung instead of reproducing the same unretryable failure (one dish burned
+  # ~900k tokens doing exactly that). All four agent() calls go through both.
   count="$(grep -c '^const guarded = ' "$ROOT/workflows/src/brigade-execute.js")"
   [ "$count" -eq 1 ] ||
     fail "brigade-execute.js source missing or duplicated guarded() helper (found $count, expected 1)"
   count="$(grep -c 'guarded(' "$ROOT/workflows/src/brigade-execute.js")"
   [ "$count" -eq 4 ] ||
     fail "brigade-execute.js source should guard all four agent() calls (found $count)"
+  count="$(grep -c '() => structuredAgent(' "$ROOT/workflows/src/brigade-execute.js")"
+  [ "$count" -eq 4 ] ||
+    fail "brigade-execute.js source should route all four agent() calls through structuredAgent (found $count)"
 
   node - "$ROOT/workflows/brigade-execute.js" <<'JS' || fail "brigade-execute.js aborts the run when one cook returns no structured result"
 const fs = require('fs')
@@ -1325,13 +1331,56 @@ const runtime = {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 const fn = new AsyncFunction(...Object.keys(runtime), src)
 fn(...Object.values(runtime)).then((ledger) => {
-  const bad = ledger.items.filter((it) => it.status !== 'blocked' || it.attempts.length === 0 || it.attempts.some((a) => a.result !== 'failed'))
+  const bad = ledger.items.filter((it) => it.status !== 'blocked' || it.attempts.some((a) => a.result !== 'failed'))
   if (bad.length) { console.error('unexpected ledger: ' + JSON.stringify(ledger)); process.exit(1) }
+  if (ledger.stoppedEarly !== true || !/StructuredOutput/.test(String(ledger.reason))) {
+    console.error('breaker did not trip on the StructuredOutput failure: ' + JSON.stringify({ stoppedEarly: ledger.stoppedEarly, reason: ledger.reason })); process.exit(1)
+  }
+  const tooMany = ledger.items.filter((it) => it.attempts.length > 1)
+  if (tooMany.length) { console.error('ladder kept going after the breaker tripped: ' + JSON.stringify(ledger.items)); process.exit(1) }
   const cookCalls = calls.filter((c) => c.startsWith('cook:')).length
   const attempts = ledger.items.reduce((n, it) => n + it.attempts.length, 0)
   if (cookCalls !== attempts) { console.error('cook calls ' + cookCalls + ' != recorded attempts ' + attempts); process.exit(1) }
 }).catch((e) => { console.error('run aborted: ' + e.message); process.exit(1) })
 JS
+}
+
+test_execute_prompt_overrides_normalize() {
+  # withPromptOverrides once took a bare string past its guard and died on .join before
+  # a single agent started. It now accepts a string, an array, or garbage, and drops
+  # empty fragments.
+  node - "$ROOT/workflows/config.js" <<'JS' || fail "withPromptOverrides does not normalize its fragments argument"
+const fs = require('fs')
+const src = fs.readFileSync(process.argv[2], 'utf8')
+const fn = new Function(src + '; return withPromptOverrides')()
+const base = 'BASE'
+const checks = [
+  [fn(base, 'extra rule'), /^BASE\n\nADDITIONAL INSTRUCTIONS[\s\S]*extra rule\n$/, 'bare string'],
+  [fn(base, ['one', '', '   ', 'two']), /one\n\ntwo\n$/, 'array with empties'],
+  [fn(base, undefined), /^BASE$/, 'undefined'],
+  [fn(base, ''), /^BASE$/, 'empty string'],
+  [fn(base, { not: 'a list' }), /^BASE$/, 'object'],
+  [fn(base, [42, null]), /^BASE$/, 'non-string entries'],
+]
+for (const [out, re, label] of checks) {
+  if (!re.test(out)) { console.error(label + ': got ' + JSON.stringify(out)); process.exit(1) }
+}
+JS
+}
+
+test_workflow_scripts_parse() {
+  # Workflow scripts run inside an async function the Workflow tool builds, where a
+  # top-level return and the agent()/parallel() globals are legal. Plain node --check
+  # rejects the return once Node 22+ detects the ESM export, so parse them the way the
+  # runtime does.
+  for f in "$ROOT"/workflows/src/*.js "$ROOT"/workflows/brigade-*.js; do
+    node - "$f" <<'JS' || fail "workflow script does not parse as the Workflow runtime would: $f"
+const fs = require('fs')
+const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta/m, 'const meta')
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+new AsyncFunction('agent', 'parallel', 'pipeline', 'phase', 'log', 'args', 'budget', 'workflow', src)
+JS
+  done
 }
 
 test_schema_examples_validate() {
@@ -1960,8 +2009,12 @@ test_review_bundle() {
   [ -f "$ROOT/workflows/brigade-review.js" ] ||
     fail "workflows/brigade-review.js does not exist"
 
-  node --check "$ROOT/workflows/brigade-review.js" ||
-    fail "node --check failed on workflows/brigade-review.js"
+  node - "$ROOT/workflows/brigade-review.js" <<'JS' || fail "workflows/brigade-review.js does not parse as a Workflow script"
+const fs = require('fs')
+const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta/m, 'const meta')
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+new AsyncFunction('agent', 'parallel', 'pipeline', 'phase', 'log', 'args', 'budget', 'workflow', src)
+JS
 
   count="$(grep -c "GENERATED by scripts/brigade-bundle" "$ROOT/workflows/brigade-review.js")"
   [ "$count" -eq "$reference_count" ] ||
@@ -3767,6 +3820,8 @@ test_execute_ledger_wiring
 test_execute_artifact_verification
 test_execute_verdict_scribe
 test_execute_guarded_agent_calls
+test_execute_prompt_overrides_normalize
+test_workflow_scripts_parse
 test_schema_examples_validate
 test_review_config
 test_review_policy_binding

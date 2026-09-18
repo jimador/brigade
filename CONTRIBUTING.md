@@ -62,7 +62,6 @@ node --check scripts/brigade-risk
 node --check scripts/brigade-eval
 node --check scripts/brigade-evidence
 node --check workflows/config.js
-for f in workflows/src/*.js workflows/brigade-*.js; do node --check "$f" || exit 1; done
 scripts/brigade-bundle --check
 python3 -c "import json; [json.load(open(f)) for f in ['.claude-plugin/plugin.json','.claude-plugin/marketplace.json','hooks/hooks.json','settings.json','monitors/monitors.json']]"
 claude plugin validate .claude-plugin/plugin.json
@@ -81,6 +80,11 @@ plugin-level suite is `claude plugin eval . --trust-plugin --scaffold --runs 1
 25` — it loads the plugin the way a user's session does and reports a with/without delta
 per case; `--max-cost-usd 0` is a free load check (exit 2 = every case loaded). Results
 land in `evals/results/` and are never committed.
+
+Workflow scripts are not run through `node --check`: they execute inside an async
+function the Workflow tool builds, where a top-level `return` is legal, and Node 22+
+rejects that once it detects the ESM `export`. `test/regression.sh` parses them the way
+the runtime does instead.
 
 `claude plugin validate` is the only check that reads the manifests and every skill,
 command, and agent the way the runtime does. It is how a command whose frontmatter fails
