@@ -15,10 +15,9 @@ Before creating the review worktree or report, acquire coordination key
 `review-<review-slug>` as `claude`; release it after report assembly and cleanup. This
 prevents a concurrent Codex review of the same input from colliding on shared paths.
 
-**Invocation.** Resolve `scriptPath` the same two-path rule as research/execute: prefer
-`$CLAUDE_PLUGIN_ROOT/workflows/brigade-review.js` when that env is set, else
-`<skill-base>/../../workflows/brigade-review.js`. Build args (may arrive as a JSON
-string): `{ repoRoot, now, tier, mainLine, reviewSlug, input: { kind, ref },
+**Invocation.** Invoke the Workflow tool by name, `name: "brigade:brigade-review"`, the
+same as research/execute — never by `scriptPath`, which the tool rejects for plugin-cache
+files. Build args (may arrive as a JSON string): `{ repoRoot, now, tier, mainLine, reviewSlug, input: { kind, ref },
 boardConfigured, overrides, promptOverrides }` — `overrides` is the `config` object from
 `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json` (passing the whole resolve output also works — the script
 unwraps `.config`), `promptOverrides` is `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts --json`. `boardConfigured`

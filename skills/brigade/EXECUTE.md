@@ -39,10 +39,9 @@ args from `.brigade/config.md`'s gate commands and the plan's item list.
 ## Invoke brigade-execute
 
 Invoking `brigade-execute` is the Planner's opt-in to multi-agent orchestration for the
-cook/inspect/land loop. Resolve `scriptPath` the same way as research —
-`$CLAUDE_PLUGIN_ROOT/workflows/brigade-execute.js` when set, else
-`<skill-base>/../../workflows/brigade-execute.js` — and invoke with args (may arrive as a
-JSON string): `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate: [],
+cook/inspect/land loop. Invoke the Workflow tool by name, `name: "brigade:brigade-execute"`,
+the same as research — never by `scriptPath`, which the tool rejects for plugin-cache
+files — with args (may arrive as a JSON string): `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate: [],
 maxParallel, overrides, promptOverrides, items: [{slug, status, dependsOn: [], heavy,
 packet}] }`. `packet` is the item's full, standalone work-packet text; `gate` is the repo's
 verification gate commands (resolved `gate` wins over `.brigade/config.md`); `overrides` is

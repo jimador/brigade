@@ -35,9 +35,9 @@ works — the script unwraps `.config`), `promptOverrides` is `"${CLAUDE_PLUGIN_
 `database_id` set (a ticket board this review's context probe and board-mirror comment can
 use), false otherwise.
 
-Invoke the Workflow tool with `scriptPath` resolved the same way as every other brigade
-workflow: prefer `$CLAUDE_PLUGIN_ROOT/workflows/brigade-review.js` when that env is set,
-else fall back to skill-base resolution, `<skill-base>/../../workflows/brigade-review.js`.
+Invoke the Workflow tool by name, `name: "brigade:brigade-review"`, the same as every other
+brigade workflow. Never pass a `scriptPath` into the plugin cache — the tool rejects paths
+outside the directories the session can read.
 
 On return: if `error` is set, the Resolve phase failed before anything else ran — report it
 verbatim, release the review lease, and stop. Otherwise present, in order: finding counts by severity (`counts`), the

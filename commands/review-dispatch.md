@@ -78,9 +78,8 @@ Execute: if the review resolved a tracked source ticket, claim it (assignee, `ki
 `todo` → `in_progress`) before dispatching, the same as any other dish. Pick a delivery
 branch in the repo's own naming convention (check `git log`/existing branches; never
 "brigade" in the name), cut it from `mainLine`, and create the delivery worktree. Then
-invoke `brigade-execute` exactly per the brigade skill's `EXECUTE.md`: resolve `scriptPath`
-(`$CLAUDE_PLUGIN_ROOT/workflows/brigade-execute.js` when set, else skill-base fallback),
-build `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate, maxParallel,
+invoke `brigade-execute` exactly per the brigade skill's `EXECUTE.md`: Workflow tool by
+name (`name: "brigade:brigade-execute"`, never a plugin-cache `scriptPath`), build `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate, maxParallel,
 overrides, promptOverrides, items }` from the mini-dish's PLAN.md, apply the returned
 ledger item by item (status/attempts into PLAN.md, ticket transitions, the retro-readiness
 check that every `done` item has a populated `attempts:` entry and a verdict file on

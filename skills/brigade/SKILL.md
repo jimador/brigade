@@ -241,9 +241,11 @@ Check memory first: read the tail of `.brigade/LEARNINGS.md`; if `kb.enabled` an
 on PATH, search it for the live heuristic set and prior art, else skip silently. Then
 formulate the smallest set of focused questions decomposition actually needs.
 
-Invoking `brigade-research` is the opt-in to multi-agent orchestration. Resolve `scriptPath`
-from `$CLAUDE_PLUGIN_ROOT/workflows/brigade-research.js` (or `<skill-base>/../../workflows/`),
-then invoke with args `{ dishDir, repoRoot, now, tier, questions: [{n, topic, question, why, allowWeb}],
+Invoking `brigade-research` is the opt-in to multi-agent orchestration. Invoke the Workflow
+tool by name — `name: "brigade:brigade-research"` — never by `scriptPath`: the plugin
+manifest registers the three scripts, and the Workflow tool rejects a `scriptPath` under
+the plugin cache because it is outside the directories the session can read. Pass args
+`{ dishDir, repoRoot, now, tier, questions: [{n, topic, question, why, allowWeb}],
 overrides, promptOverrides }`. It returns `{ briefs: [{n, topic, answer, confidence, briefPath,
 notVerified}], dropped, failed }`, capped at the resolved scout budget. At ★★★ you may
 additionally read pivotal files directly.

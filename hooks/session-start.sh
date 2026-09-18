@@ -17,9 +17,9 @@ CFG_LOCAL="${ROOT}/.brigade/config.local.json"
 echo "<brigade-state>"
 echo "This repo has an active brigade setup. Current mechanical state:"
 echo
-echo "CLAUDE_PLUGIN_ROOT (for Workflow scriptPath): $PLUGIN_ROOT"
-echo "  research: $PLUGIN_ROOT/workflows/brigade-research.js"
-echo "  execute:  $PLUGIN_ROOT/workflows/brigade-execute.js"
+echo "CLAUDE_PLUGIN_ROOT: $PLUGIN_ROOT"
+echo "  Workflows are invoked BY NAME — Workflow tool with name: brigade:brigade-research, brigade:brigade-execute, brigade:brigade-review."
+echo "  Never pass scriptPath into the plugin cache: the Workflow tool rejects paths outside the session's readable directories."
 echo "  helpers:  $PLUGIN_ROOT/scripts/ — whenever brigade docs say run brigade-status/-config/-validate/-coord, use this directory (they are not on PATH)"
 echo
 "$SELF_DIR/../scripts/brigade-status" || true
