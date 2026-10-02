@@ -246,9 +246,11 @@ async function refreshMemory($: EngineInterface) {
   if (!same(await read($, memory), next)) await update($, memory, () => next)
 }
 
-// One line per note: time (UTC), who wrote it, for which item, and what it says.
+// One line per note: time (UTC), who wrote it, for which item, and what it says. A time no date
+// can hold (infinite, or past the year 275760) shows as --:-- rather than breaking the pane.
 function noteLine(note: Note) {
-  const time = Number.isFinite(note.at) ? new Date(note.at).toISOString().slice(11, 16) : '--:--'
+  const when = new Date(typeof note.at === 'number' ? note.at : NaN)
+  const time = Number.isNaN(when.getTime()) ? '--:--' : when.toISOString().slice(11, 16)
   return `${time} ${note.role} ${note.item} · ${note.kind} ${note.gist}`
 }
 
@@ -309,17 +311,36 @@ const refresh = async ($: EngineInterface) => {
   return running
 }
 
+// Whether this module load has started its five-second refresh. A reload runs the module again
+// and starts over; a session.start that fires again within one load leaves the timer alone.
+let ticking = false
+
 function markOf(role: string) {
   return (Object.hasOwn(ROLES, role) ? ROLES[role as keyof typeof ROLES] : ROLES.agent).mark
 }
 
 export const register: Register = on => {
+  // Every hook below follows one rule: the board's own work is wrapped so its failure is
+  // swallowed, and the hook hands back exactly what next(e) gave it, or lets what next(e) threw
+  // pass through untouched. The session must never wait on, or break over, the board.
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'brigade-board', description: 'Open the brigade board' })
-    await refresh($)
-    $.clock.every(5000, () => {
+    try {
+      await $.command.register({ name: 'brigade-board', description: 'Open the brigade board' })
+    } catch {
+      // No board command this session; the session goes on.
+    }
+    try {
+      // The first scan runs on its own; refresh never throws, and the session doesn't wait for it.
       void refresh($)
-    })
+      if (!ticking) {
+        $.clock.every(5000, () => {
+          void refresh($)
+        })
+        ticking = true
+      }
+    } catch {
+      // The board stays as it was until the board command opens it.
+    }
     return next(e)
   })
 
@@ -334,27 +355,36 @@ export const register: Register = on => {
   // hands the event on unchanged.
   on('agent.spawn', async ($, e, next) => {
     const ran = await next(e)
-    if (ran.agentId !== undefined) {
-      await record($, {
-        type: 'spawn',
-        id: ran.agentId,
-        model: ran.model,
-        description: e.description,
-        subagentType: e.subagentType,
-        name: e.name,
-        prompt: e.prompt,
-      })
+    try {
+      // A refused spawn, or one that resolved to nothing, started no agent to put on the board.
+      if (ran != null && ran.agentId !== undefined) {
+        await record($, {
+          type: 'spawn',
+          id: ran.agentId,
+          model: ran.model,
+          description: e.description,
+          subagentType: e.subagentType,
+          name: e.name,
+          prompt: e.prompt,
+        })
+      }
+    } catch {
+      // The agent stays off the board.
     }
     return ran
   })
 
   on('turn.step', async function* ($, e, next) {
     const ran = yield* next(e)
-    const usage = ran?.usage
-    const tokens = usage ? usage.input_tokens + usage.output_tokens : 0
-    // A step without an agent id is the main loop, which is the Planner.
-    if (e.agentId === undefined) await record($, { type: 'step', id: 'main', model: e.model, tokens }, true)
-    else await record($, { type: 'step', id: e.agentId, model: e.model, tokens })
+    try {
+      const usage = ran?.usage
+      const tokens = usage ? usage.input_tokens + usage.output_tokens : 0
+      // A step without an agent id is the main loop, which is the Planner.
+      if (e.agentId === undefined) await record($, { type: 'step', id: 'main', model: e.model, tokens }, true)
+      else await record($, { type: 'step', id: e.agentId, model: e.model, tokens })
+    } catch {
+      // The step goes uncounted.
+    }
     return ran
   })
 
@@ -379,18 +409,22 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId !== undefined) await record($, { type: 'complete', id: e.agentId, reason: e.reason })
+    try {
+      if (e.agentId !== undefined) await record($, { type: 'complete', id: e.agentId, reason: e.reason })
+    } catch {
+      // The agent keeps its last state on the board.
+    }
     return next(e)
   })
 
   on('ui.message', async ($, e, next) => {
     if (e.requestId === PANE) {
-      await selectFrom($, e.data)
-      // Read the clicked agent's memory now rather than on the next tick, so it shows at once.
       try {
+        await selectFrom($, e.data)
+        // Read the clicked agent's memory now rather than on the next tick, so it shows at once.
         await refreshMemory($)
       } catch {
-        // The memory shown stays as it was until the next tick.
+        // The selection and the memory shown stay as they were until the next click or tick.
       }
     }
     return next(e)

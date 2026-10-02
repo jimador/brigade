@@ -150,13 +150,19 @@ and [docs/overrides.md](docs/overrides.md).
 
 ## The board
 
-Run `/brigade-board` to open a pane with the ticket board: one lane per status, a chip per
-ticket. Every agent in the session shows as a pixel sprite; a bigger model draws a bigger
+Run `/brigade-board` to open a pane with the ticket board in six lanes: BACKLOG, TODO,
+COOKING, IN REVIEW, BLOCKED and DONE. BACKLOG holds `backlog`, `scoping` and `design` tickets,
+plus any status the other lanes don't name. Each lane shows its first tickets as chips and a
+`+N` count of the rest; a ticket an agent is working comes first, so it shows however full its
+lane is. Every agent in the session shows as a pixel sprite; a bigger model draws a bigger
 sprite, and the name tag carries the role mark. Hover a sprite for its model, role, item,
 state, tokens and time; click it to show its working memory under the board. The top row
 reads context-window fill as weather: clear, cloudy, showers, storm, compact soon.
 
-The board is read-only. It needs a Claude Code build with mods (function hooks).
+An agent stands under its ticket once something it reads or writes names the dish, and that
+dish's `PLAN.md` names the ticket; until then it waits on the bench. The board lists and reads
+whatever folder `.brigade/config.md` names as the board, and writes no files. It needs a Claude
+Code build with mods (function hooks).
 
 ## What ships
 
