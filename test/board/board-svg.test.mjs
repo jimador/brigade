@@ -6,9 +6,9 @@ import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
 import { pictureOf, CELL_W, CELL_H, SVG_MAX } from '../../hooks/board/lib/board-svg.mjs'
 import { draw } from '../../hooks/board/lib/board-paint.mjs'
-import { PALETTE } from '../../hooks/board/lib/sprites.mjs'
+import { PALETTE, ART } from '../../hooks/board/lib/sprites.mjs'
 
-const ALLOWED = new Set(['svg', 'style', 'rect', 'g', 'text', 'title', 'animate'])
+const ALLOWED = new Set(['svg', 'style', 'rect', 'g', 'text', 'title', 'animate', 'path'])
 const SHAPES = new Set(['█', '▀', '▄', '▌', '▐', '▰', '▱'])
 const HOSTILE = [
   '</text></svg><script>alert(1)</script>',
@@ -629,4 +629,272 @@ test('the same input gives the same picture, with tidy numbers', () => {
       for (const v of n.attrs[key].split(' ')) assert.match(v, /^-?\d+(\.\d)?$/, `<${n.name} ${key}="${n.attrs[key]}">`)
     }
   }
+})
+
+// --- sprites -------------------------------------------------------------------------------------
+
+// A board of `height` rows, each `columns` field-coloured spaces.
+function blank(height, columns) {
+  return Array.from({ length: height }, () => [run(' '.repeat(columns))])
+}
+
+function pathsIn(source) {
+  return source.match(/<path[^>]*\/>/g) ?? []
+}
+
+// One sub-path as the picture writes it: `M x y h len v p h -len z`. A number has at most two
+// decimals and no trailing zero.
+const N = '-?\\d+(?:\\.\\d?[1-9])?'
+const SUB = new RegExp(`M(${N}) (${N})h(${N})v(${N})h-(${N})z`, 'y')
+
+function subpaths(d) {
+  const out = []
+  SUB.lastIndex = 0
+  while (SUB.lastIndex < d.length) {
+    const at = SUB.lastIndex
+    const m = SUB.exec(d)
+    assert.ok(m, `sub-path at ${at} in ${d.slice(at, at + 40)}`)
+    assert.equal(m[5], m[3], 'a sub-path goes back as far as it went')
+    out.push({ x: Number(m[1]), y: Number(m[2]), len: Number(m[3]), p: Number(m[4]) })
+  }
+  return out
+}
+
+// The lit pixels a path draws, as 'row:col' keys, read back with the art's top left and pixel size.
+function litOf(d, left, top, p) {
+  const lit = new Set()
+  const subs = subpaths(d)
+  for (const s of subs) {
+    const col = Math.round((s.x - left) / p)
+    const row = Math.round((s.y - top) / p)
+    const n = Math.round(s.len / p)
+    assert.ok(Math.abs(s.x - (left + col * p)) <= 0.005 + 1e-9, `x ${s.x} on the pixel grid`)
+    assert.ok(Math.abs(s.y - (top + row * p)) <= 0.005 + 1e-9, `y ${s.y} on the pixel grid`)
+    assert.ok(Math.abs(s.p - p) <= 0.005 + 1e-9, `pixel ${s.p} is ${p}`)
+    for (let k = 0; k < n; k++) lit.add(`${row}:${col + k}`)
+  }
+  return { lit, count: subs.length }
+}
+
+function litOfArt(bitmap) {
+  const lit = new Set()
+  let runs = 0
+  bitmap.forEach((line, row) => {
+    for (let col = 0; col < line.length; col++) {
+      if (line[col] !== '#') continue
+      if (col === 0 || line[col - 1] !== '#') runs++
+      lit.add(`${row}:${col}`)
+    }
+  })
+  return { lit, count: runs }
+}
+
+function dOf(source) {
+  const [only] = elements(parseXml(source), 'path')
+  return only.attrs.d
+}
+
+const SPRITE = { x: 10, y: 4, w: 3, h: 1, size: 'm', color: '#06d6a0', frame: 0 }
+
+test('an m sprite in a 3 by 1 box draws its art at two picture pixels a dot', () => {
+  const pic = pictureOf({ rows: blank(6, 20), columns: 20, sprites: [SPRITE] })
+  const paths = pathsIn(pic.source)
+  assert.equal(paths.length, 1)
+  assert.ok(paths[0].startsWith('<path fill="#06d6a0" d="M94 73h2v2h-2z'), paths[0])
+  assert.deepEqual(litOf(dOf(pic.source), 90, 73, 2), litOfArt(ART.m[0]))
+})
+
+test('an xl sprite in the same box draws at four thirds of a picture pixel, rounded only when written', () => {
+  const pic = pictureOf({ rows: blank(6, 20), columns: 20, sprites: [{ ...SPRITE, size: 'xl' }] })
+  const d = dOf(pic.source)
+  assert.ok(d.startsWith('M95.33 73h1.33v1.33h-1.33z'), d)
+  assert.deepEqual(litOf(d, 90, 73, 4 / 3), litOfArt(ART.xl[0]))
+})
+
+test('frame 1 draws the second bitmap; any other frame draws the first', () => {
+  const draw1 = (frame) => dOf(pictureOf({ rows: blank(6, 20), columns: 20, sprites: [{ ...SPRITE, frame }] }).source)
+  assert.deepEqual(litOf(draw1(1), 90, 73, 2), litOfArt(ART.m[1]))
+  for (const frame of [0, 2, undefined, '1', true, -1, 1.5]) {
+    assert.deepEqual(litOf(draw1(frame), 90, 73, 2), litOfArt(ART.m[0]), `frame ${String(frame)}`)
+  }
+  const { frame, ...noFrame } = SPRITE
+  assert.equal(frame, 0)
+  assert.equal(dOf(pictureOf({ rows: blank(6, 20), columns: 20, sprites: [noFrame] }).source), draw1(0))
+})
+
+test('every size draws its own bitmap, left in its box and centred top to bottom', () => {
+  for (const size of ['s', 'm', 'l', 'xl']) {
+    const art = ART[size][0]
+    const p = Math.min(3 * CELL_W / art[0].length, (CELL_H - 2) / art.length)
+    const top = 4 * CELL_H + (CELL_H - art.length * p) / 2
+    const d = dOf(pictureOf({ rows: blank(6, 20), columns: 20, sprites: [{ ...SPRITE, size }] }).source)
+    assert.deepEqual(litOf(d, 90, top, p), litOfArt(art), size)
+  }
+})
+
+test('a cleared cell keeps its background rect and has no text, and blocks under a sprite go', () => {
+  const rows = [
+    [run('abcdefgh', { backgroundColor: '#1a1c2e' })],
+    [run('ijklmnop')],
+    [run('████████', { color: '#ff3b30' })],
+  ]
+  const sprites = [{ ...SPRITE, x: 2, y: 0 }, { ...SPRITE, x: 0, y: 2 }]
+  const root = parseXml(pictureOf({ rows, columns: 8, sprites }).source)
+  assert.equal(rowShown(root, 0, 8), 'ab   fgh')
+  assert.equal(rowShown(root, 1, 8), 'ijklmnop')
+  const rects = elements(root, 'rect').slice(1).map((r) => [r.attrs.x, r.attrs.y, r.attrs.width, r.attrs.height, r.attrs.fill])
+  assert.deepEqual(rects, [
+    ['0', '0', '72', '18', '#1a1c2e'],
+    ['27', '36', '45', '18', '#ff3b30'],
+  ])
+})
+
+test('a sprite half off the right edge clears only cells on the board and draws inside it', () => {
+  const rows = [[run('abcde')], [run('vwxyz')]]
+  const pic = pictureOf({ rows, columns: 5, sprites: [{ ...SPRITE, x: 3, y: 0, w: 4, h: 1 }] })
+  const root = parseXml(pic.source)
+  assert.equal(rowShown(root, 0, 5), 'abc')
+  assert.equal(rowShown(root, 1, 5), 'vwxyz')
+  const subs = subpaths(dOf(pic.source))
+  assert.ok(subs.length > 0)
+  for (const s of subs) {
+    assert.ok(s.x >= 27 && s.x + s.len <= pic.width + 0.01, `x ${s.x} + ${s.len} inside the board`)
+    assert.ok(s.y >= 0 && s.y + s.p <= CELL_H + 0.01, `y ${s.y} inside the sprite's row`)
+  }
+})
+
+test('a sprite box that does not touch the board draws nothing', () => {
+  const rows = [[run('abcde')], [run('vwxyz')]]
+  const base = pictureOf({ rows, columns: 5 }).source
+  for (const over of [
+    { x: 1e300 }, { x: -1e300 }, { y: 1e300 }, { x: 5 }, { y: 2 }, { x: -3, w: 3 }, { y: -5, h: 2 },
+    { w: 0.5 }, { h: 0.9 },
+  ]) {
+    const pic = pictureOf({ rows, columns: 5, sprites: [{ ...SPRITE, x: 1, y: 0, ...over }] })
+    assert.equal(pic.source, base, JSON.stringify(over))
+  }
+})
+
+test('a sprite adds exactly one path and no animation, after the rows and before the title boxes', () => {
+  const rows = [[run('same top')], [run('frame zero')], [run('same end')]]
+  const altRows = [[run('same top')], [run('frame one!')], [run('same end')]]
+  const titles = [{ x: 0, y: 0, w: 2, h: 1, text: 'Token bucket' }]
+  const still = pictureOf({ rows, columns: 10, sprites: [{ ...SPRITE, x: 0, y: 2 }] })
+  assert.equal(still.source.split('<path').length - 1, 1)
+  assert.ok(!still.source.includes('<animate'))
+  const sprites = [{ ...SPRITE, x: 0, y: 2 }, { ...SPRITE, x: 5, y: 0, color: '#ff7ab6', size: 's' }]
+  const pic = pictureOf({ rows, altRows, columns: 10, titles, sprites })
+  const root = parseXml(pic.source)
+  assert.equal(elements(root, 'animate').length, 2, 'the rows still walk')
+  const names = kids(root).map((k) => k.name)
+  assert.deepEqual(names.slice(-3), ['path', 'path', 'rect'])
+  assert.ok(names.lastIndexOf('g') < names.indexOf('path'), 'paths after every row')
+  assert.deepEqual(elements(root, 'path').map((p) => p.attrs.fill), ['#06d6a0', '#ff7ab6'])
+  for (const g of elements(root, 'g')) assert.equal(elements(g, 'path').length, 0, 'no sprite inside a walking group')
+})
+
+test('cells are cleared in both frames before the rows are compared, so a row that only differs under a sprite is still', () => {
+  const rows = [[run('ab▀▀ef')]]
+  const altRows = [[run('ab▄▄ef')]]
+  const walkingPic = pictureOf({ rows, altRows, columns: 6 })
+  assert.ok(walkingPic.source.includes('<animate'))
+  const pic = pictureOf({ rows, altRows, columns: 6, sprites: [{ ...SPRITE, x: 2, y: 0, w: 2, h: 1 }] })
+  assert.ok(!pic.source.includes('<animate'), 'the row is still once the blocks are cleared')
+  assert.equal(rowShown(parseXml(pic.source), 0, 6), 'ab  ef')
+})
+
+test('a colour in capitals is written in lower case', () => {
+  const pic = pictureOf({ rows: blank(6, 20), columns: 20, sprites: [{ ...SPRITE, color: '#06D6A0' }] })
+  assert.ok(pathsIn(pic.source)[0].startsWith('<path fill="#06d6a0" d="M'), pathsIn(pic.source)[0])
+})
+
+test('every hostile sprite value is skipped and leaves no trace in the source', () => {
+  const rows = [[run('abcdefghij')], [run('klmnopqrst')]]
+  const base = pictureOf({ rows, columns: 10 }).source
+  const ok = { x: 1, y: 0, w: 3, h: 1, size: 'm', color: '#06d6a0', frame: 0 }
+  const hostile = [
+    null, undefined, 7, 'm', ['m'],
+    { ...ok, size: ['m'] }, { ...ok, size: '__proto__' }, { ...ok, size: 'constructor' },
+    { ...ok, size: 'toString' }, { ...ok, size: 'hasOwnProperty' }, { ...ok, size: 'M' }, { ...ok, size: 'xxl' },
+    { ...ok, size: null }, { ...ok, size: 2 }, { ...ok, size: { toString: () => 'm' } },
+    { ...ok, color: '" onload="x' }, { ...ok, color: 'url(#x)' }, { ...ok, color: '#abc' }, { ...ok, color: '#06d6a0 ' },
+    { ...ok, color: '#06d6a0"/><script>alert(1)</script>' }, { ...ok, color: 'red' }, { ...ok, color: null },
+    { ...ok, color: ['#06d6a0'] }, { ...ok, color: '#06d6ag' },
+    { ...ok, x: '5' }, { ...ok, x: '1' }, { ...ok, y: '0' }, { ...ok, w: '3' }, { ...ok, h: '1' },
+    { ...ok, x: NaN }, { ...ok, y: Infinity }, { ...ok, w: -Infinity }, { ...ok, x: null }, { ...ok, x: [1] },
+    { ...ok, w: 0 }, { ...ok, w: -3 }, { ...ok, h: 0 }, { ...ok, h: -1 }, { ...ok, x: undefined },
+  ]
+  for (const sprite of hostile) {
+    const pic = pictureOf({ rows, columns: 10, sprites: [sprite] })
+    assertSafe(pic.source)
+    assert.equal(pic.source, base, `skipped: ${JSON.stringify(sprite)}`)
+  }
+  for (const sprites of [null, 'nope', 5, { 0: ok, length: 1 }]) {
+    assert.equal(pictureOf({ rows, columns: 10, sprites }).source, base, `no list: ${String(sprites)}`)
+  }
+})
+
+test('every path carries only fill and d', () => {
+  const out = drawn(160, 0)
+  const sprites = Array.from({ length: 12 }, (_, i) => ({ x: i * 12, y: i, w: 3, h: 1, size: ['s', 'm', 'l', 'xl'][i % 4], color: INKS[i % INKS.length], frame: i % 2 }))
+  const root = assertSafe(pictureOf({ rows: out.rows, altRows: drawn(160, 1).rows, columns: 160, sprites }).source)
+  const paths = elements(root, 'path')
+  assert.equal(paths.length, 12)
+  for (const p of paths) {
+    assert.deepEqual(Object.keys(p.attrs).sort(), ['d', 'fill'])
+    assert.match(p.attrs.fill, /^#[0-9a-f]{6}$/)
+    assert.equal(kids(p).length, 0)
+    subpaths(p.attrs.d)
+  }
+})
+
+test('with no sprites the picture is exactly what it was before sprites existed', () => {
+  const r = (text, extra = {}) => run(text, extra)
+  const rows = [[r('Ab', { backgroundColor: '#1a1c2e', bold: true }), r('█▀', { color: '#06d6a0' })], [r('cd'), r('▰▱', { color: '#ffd166' })]]
+  const altRows = [rows[0], [r('ce'), r('▰▱', { color: '#ffd166' })]]
+  const titles = [{ x: 1, y: 0, w: 2, h: 1, text: 'a & b' }]
+  // Written down from the picture code as it stood before sprites were added.
+  const pinned = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><rect width="36" height="36" fill="#0f1020"/><style>text{font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.b{font-weight:700}</style><rect x="0" y="0" width="18" height="18" fill="#1a1c2e"/><rect x="18" y="0" width="9" height="18" fill="#06d6a0"/><rect x="27" y="0" width="9" height="9" fill="#06d6a0"/><text x="0 9" y="13" fill="#e8e6d9" class="b">Ab</text><g><animate attributeName="visibility" values="visible;hidden" dur="1s" calcMode="discrete" repeatCount="indefinite"/><rect x="19" y="19" width="7" height="16" fill="#ffd166"/><rect x="28.5" y="19.5" width="6" height="15" fill="none" stroke="#ffd166"/><text x="0 9" y="31" fill="#e8e6d9">cd</text></g><g visibility="hidden"><animate attributeName="visibility" values="hidden;visible" dur="1s" calcMode="discrete" repeatCount="indefinite"/><rect x="19" y="19" width="7" height="16" fill="#ffd166"/><rect x="28.5" y="19.5" width="6" height="15" fill="none" stroke="#ffd166"/><text x="0 9" y="31" fill="#e8e6d9">ce</text></g><rect x="9" y="0" width="18" height="18" fill="#000" fill-opacity="0"><title>a &amp; b</title></rect></svg>'
+  assert.equal(pictureOf({ rows, altRows, columns: 4, titles }).source, pinned)
+  assert.equal(pictureOf({ rows, altRows, columns: 4, titles, sprites: [] }).source, pinned)
+  // A sprite on this board changes it, so the pin is not passing by accident.
+  assert.notEqual(pictureOf({ rows, altRows, columns: 4, titles, sprites: [{ ...SPRITE, x: 0, y: 1 }] }).source, pinned)
+})
+
+test('sprites outlast the walk and the titles under the size cap, and only the stub drops them', () => {
+  const { one, both } = sizes()
+  const sprites = [{ ...SPRITE, x: 0, y: 0 }]
+  const times = Math.floor((SVG_MAX - 4000) / one)
+  assert.ok(times >= 1 && times * both > SVG_MAX)
+  const stepOne = pictureOf({ rows: stacked(times, 0), altRows: stacked(times, 1), columns: 160, sprites })
+  assert.ok(stepOne.source.length <= SVG_MAX)
+  assert.ok(!stepOne.source.includes('<animate'))
+  assert.equal(pathsIn(stepOne.source).length, 1)
+  const titles = Array.from({ length: 200 }, (_, i) => ({ x: i % 160, y: 0, w: 1, h: 1, text: `title ${i} `.padEnd(1000, 'x') }))
+  const stepTwo = pictureOf({ rows: stacked(1, 0), altRows: stacked(1, 1), columns: 160, titles, sprites })
+  assert.ok(stepTwo.source.length <= SVG_MAX)
+  assert.ok(!stepTwo.source.includes('<title'))
+  assert.equal(pathsIn(stepTwo.source).length, 1)
+  const stub = pictureOf({ rows: generated(400, 200), columns: 200, sprites })
+  assert.ok(stub.source.length < 2000)
+  assert.equal(pathsIn(stub.source).length, 0)
+  assertSafe(stub.source)
+})
+
+test('thirty sprites add at most 20000 characters and cost little next to the board', () => {
+  // A busy board small enough that the sprites are drawn rather than the one-line stand-in.
+  const rows = generated(24, 160)
+  const sizes4 = ['s', 'm', 'l', 'xl']
+  const sprites = Array.from({ length: 30 }, (_, i) => ({
+    x: 3 + (i % 6) * 26, y: 1 + Math.floor(i / 6) * 4, w: 3, h: 1, size: sizes4[i % 4], color: INKS[i % INKS.length], frame: i % 2,
+  }))
+  const pic = pictureOf({ rows, columns: 160, sprites })
+  const paths = pathsIn(pic.source)
+  assert.equal(paths.length, 30)
+  const added = paths.join('').length
+  assert.ok(added <= 20000, `sprites added ${added} characters`)
+  for (let i = 0; i < 3; i++) { pictureOf({ rows, columns: 160 }); pictureOf({ rows, columns: 160, sprites }) }
+  const without = bestOf(5, () => { for (let i = 0; i < 4; i++) pictureOf({ rows, columns: 160 }) })
+  const withSprites = bestOf(5, () => { for (let i = 0; i < 4; i++) pictureOf({ rows, columns: 160, sprites }) })
+  assert.ok(withSprites <= without * 2, `with sprites ${withSprites.toFixed(2)} ms, without ${without.toFixed(2)} ms`)
 })

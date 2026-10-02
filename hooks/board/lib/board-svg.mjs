@@ -6,9 +6,9 @@
 // Card titles, agent names and messages come from files and tool calls, and the picture ends up
 // in a browser frame, so every piece of text is escaped, characters XML refuses are dropped, and
 // colours are only used when they are plain hex. The markup uses only svg, style, rect, g, text,
-// title and animate; nothing here ever writes a script, an event handler, a link or a url().
+// title, animate and path; nothing here ever writes a script, an event handler, a link or a url().
 
-import { PALETTE } from './sprites.mjs'
+import { PALETTE, ART } from './sprites.mjs'
 import { cellWidth } from './canvas.mjs'
 
 export const CELL_W = 9
@@ -43,6 +43,12 @@ const BLANK = /^(?:[\u0000-\u001f\u007f-\u009f￾￿]|[\ud800-\udfff])$/
 // Numbers print as whole numbers or with one decimal, so output never depends on float noise.
 function num(n) {
   return Number.isInteger(n) ? String(n) : n.toFixed(1)
+}
+
+// Numbers in a sprite's path, which fall on fractions of a pixel: at most two decimals, with
+// trailing zeros dropped, so 4/3 prints as 1.33 and 2 prints as 2.
+function fine(n) {
+  return String(Math.round(n * 100) / 100)
 }
 
 function colorOr(value, fallback) {
@@ -201,6 +207,63 @@ function titleSvg(box, columns, height) {
   return `<rect x="${num(x * CELL_W)}" y="${num(y * CELL_H)}" width="${num(w * CELL_W)}" height="${num(h * CELL_H)}" fill="#000" fill-opacity="0"><title>${esc(text)}</title></rect>`
 }
 
+const SPRITE_COLOR = /^#[0-9a-f]{6}$/i
+
+// A sprite the caller placed, checked and pulled onto the board. Every value comes from outside,
+// so each is read once and anything of the wrong type gives null: a size that isn't one of ART's
+// own keys, a colour that isn't six-digit hex, a position or size that isn't a finite number (a
+// numeric string included), a width or height that isn't positive. The box is floored to whole
+// cells and clamped to the board; one that doesn't touch the board gives null too.
+function spriteOf(sprite, columns, height) {
+  if (sprite === null || typeof sprite !== 'object') return null
+  const { x, y, w, h, size, color, frame } = sprite
+  if (typeof size !== 'string' || !Object.hasOwn(ART, size)) return null
+  if (typeof color !== 'string' || !SPRITE_COLOR.test(color)) return null
+  if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null
+  const [bx, by, bw, bh] = [x, y, w, h].map(Math.floor)
+  const left = Math.min(Math.max(bx, 0), columns)
+  const top = Math.min(Math.max(by, 0), height)
+  const right = Math.min(bx + bw, columns)
+  const bottom = Math.min(by + bh, height)
+  if (right <= left || bottom <= top) return null
+  return { left, top, right, bottom, bitmap: ART[size][frame === 1 ? 1 : 0], fill: color.toLowerCase() }
+}
+
+// A sprite as one path in real pixels. A pixel is as big as fits the box across, and down with a
+// pixel of room above and below; the art sits at the box's left, centred top to bottom. Each run
+// of lit pixels in a bitmap row is one little rectangle. Positions are worked out exactly and only
+// rounded as they're written, so rounding never piles up along a row.
+function spritePath({ left, top, right, bottom, bitmap, fill }) {
+  const across = bitmap[0].length
+  const down = bitmap.length
+  const boxH = (bottom - top) * CELL_H
+  const p = Math.min((right - left) * CELL_W / across, (boxH - 2) / down)
+  const x0 = left * CELL_W
+  const y0 = top * CELL_H + (boxH - down * p) / 2
+  const d = []
+  bitmap.forEach((line, row) => {
+    for (let col = 0; col < line.length; col++) {
+      if (line[col] !== '#') continue
+      let end = col
+      while (end + 1 < line.length && line[end + 1] === '#') end++
+      const len = (end - col + 1) * p
+      d.push(`M${fine(x0 + col * p)} ${fine(y0 + row * p)}h${fine(len)}v${fine(p)}h${fine(-len)}z`)
+      col = end
+    }
+  })
+  return `<path fill="${fill}" d="${d.join('')}"/>`
+}
+
+// Blanks the characters of the cells a sprite covers, keeping their backgrounds, so the terminal's
+// blocks for that sprite don't show underneath the drawing. `spans` is a list of [from, to) columns.
+function clear(cells, spans) {
+  if (spans === undefined) return cells
+  for (const [from, to] of spans) {
+    for (let x = from; x < Math.min(to, cells.length); x++) cells[x].ch = ' '
+  }
+  return cells
+}
+
 function head(width, height) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${num(width)}" height="${num(height)}" viewBox="0 0 ${num(width)} ${num(height)}">` +
     `<rect width="${num(width)}" height="${num(height)}" fill="${PALETTE.field}"/>` +
@@ -226,15 +289,31 @@ function tooLarge(width, height) {
  * @param altRows the rows for walking frame 1, or null for a still picture
  * @param columns how many cells across
  * @param titles boxes in cells, { x, y, w, h, text }, that show `text` as a tooltip on hover
+ * @param sprites agents to draw in real pixels, { x, y, w, h, size, color, frame }: a box in
+ *   cells, an ART size, a '#rrggbb' colour and frame 0 or 1. Each is a still drawing of the frame
+ *   it was given, over its box's cells with their characters cleared; the caller redraws the
+ *   picture with the other frame when a sprite walks. A sprite with a bad value is skipped.
  * @return { source, width, height }: the SVG document and its size in CSS pixels. The source is
- *   never longer than SVG_MAX: the walk goes first, then the titles, then the board itself.
+ *   never longer than SVG_MAX: the walk goes first, then the titles, then the board itself. The
+ *   sprites stay to the end; only the one-line stand-in drops them along with the board.
  */
-export function pictureOf({ rows, altRows = null, columns, titles = [] } = {}) {
+export function pictureOf({ rows, altRows = null, columns, titles = [], sprites = [] } = {}) {
   const cols = count(columns)
   const list = Array.isArray(rows) ? rows : []
   const alt = Array.isArray(altRows) ? altRows : null
   const width = cols * CELL_W
   const height = list.length * CELL_H
+
+  // The columns each row loses to sprites, so both frames are cleared before they're compared.
+  const placed = (Array.isArray(sprites) ? sprites : []).map((s) => spriteOf(s, cols, list.length)).filter((s) => s !== null)
+  const spans = new Map()
+  for (const s of placed) {
+    for (let y = s.top; y < s.bottom; y++) {
+      if (!spans.has(y)) spans.set(y, [])
+      spans.get(y).push([s.left, s.right])
+    }
+  }
+  const art = placed.map(spritePath).join('')
 
   // Each row is drawn once per frame. A row that comes out the same in both frames is still.
   const still = []
@@ -242,10 +321,10 @@ export function pictureOf({ rows, altRows = null, columns, titles = [] } = {}) {
   const one = []
   const flat = []
   list.forEach((runs, y) => {
-    const a = rowSvg(cellsOf(runs, cols), y * CELL_H)
+    const a = rowSvg(clear(cellsOf(runs, cols), spans.get(y)), y * CELL_H)
     flat.push(a)
     if (alt !== null && Array.isArray(alt[y])) {
-      const b = rowSvg(cellsOf(alt[y], cols), y * CELL_H)
+      const b = rowSvg(clear(cellsOf(alt[y], cols), spans.get(y)), y * CELL_H)
       if (b !== a) {
         zero.push(a)
         one.push(b)
@@ -258,7 +337,7 @@ export function pictureOf({ rows, altRows = null, columns, titles = [] } = {}) {
 
   const build = (animate, withTitles) => {
     const body = animate && zero.length > 0 ? still.join('') + walking(zero, one) : flat.join('')
-    return `${head(width, height)}${body}${withTitles ? boxes : ''}</svg>`
+    return `${head(width, height)}${body}${art}${withTitles ? boxes : ''}</svg>`
   }
   let source = build(true, true)
   if (source.length > SVG_MAX && zero.length > 0) source = build(false, true)
