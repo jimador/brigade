@@ -148,6 +148,16 @@ Any role's agent is swappable — point `models.inspector` at your own reviewer 
 workflow scripts dispatch it instead. See [docs/configuration.md](docs/configuration.md)
 and [docs/overrides.md](docs/overrides.md).
 
+## The board
+
+Run `/brigade-board` to open a pane with the ticket board: one lane per status, a chip per
+ticket. Every agent in the session shows as a pixel sprite; a bigger model draws a bigger
+sprite, and the name tag carries the role mark. Hover a sprite for its model, role, item,
+state, tokens and time; click it to show its working memory under the board. The top row
+reads context-window fill as weather: clear, cloudy, showers, storm, compact soon.
+
+The board is read-only. It needs a Claude Code build with mods (function hooks).
+
 ## What ships
 
 | Path | What |
@@ -171,6 +181,7 @@ and [docs/overrides.md](docs/overrides.md).
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
+| `hooks/board/` | the live board pane (`/brigade-board`): the ticket board with agents as pixel sprites sized by model, a context weather gauge, and a notes panel |
 | `evals/` | `claude plugin eval` suite: eight expected-workflow cases with scaffolded fixtures; results stay local |
 | `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
 

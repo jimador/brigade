@@ -16,6 +16,10 @@ wording with the care you would give production code.
   `scripts/brigade-validate`.
 - Scripts stay dependency-free and BSD/macOS compatible: no `jq` requirement in a code path that
   must work without it, no GNU-only flags; Node scripts use only the standard library.
+- Board code lives under `hooks/board/`. Rules go in pure `lib/*.mjs` modules with no imports
+  outside that folder, covered by `node --test test/board/*.test.mjs`; `register.tsx` and
+  `screen.tsx` stay thin and are covered by `claude plugin test .`. Change state shapes in
+  `types/index.d.ts` first.
 
 ## Verification
 
