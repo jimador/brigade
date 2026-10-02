@@ -217,6 +217,14 @@ function drawn(columns, frame = 0, over = {}) {
   return draw(snapshot(over), { positions: {}, frame, hovered: null, over: null }, columns)
 }
 
+// The same board with every sprite one cell right of its home. A sprite at home stands still, so
+// only a walking board looks different on its two frames.
+function walked(columns, frame = 0) {
+  const homes = drawn(columns).regions.filter((r) => r.kind === 'agent')
+  const positions = Object.fromEntries(homes.map((r) => [r.id, { x: r.x + 1, y: r.y }]))
+  return draw(snapshot(), { positions, frame, hovered: null, over: null }, columns)
+}
+
 // A made-up frame of `height` rows: text in several colours and weights, background stretches,
 // blocks and gauge cells, all changing along the row so nothing merges away.
 const INKS = ['#e8e6d9', '#6b7089', '#8be9fd', '#ffd166', '#06d6a0']
@@ -394,8 +402,8 @@ test('no animation without altRows, or when both frames are the same', () => {
 })
 
 test('a real board walking: the sprite rows bob, the rest are drawn once', () => {
-  const zero = drawn(124, 0)
-  const one = drawn(124, 1)
+  const zero = walked(124, 0)
+  const one = walked(124, 1)
   const differ = zero.rows.filter((r, y) => JSON.stringify(r) !== JSON.stringify(one.rows[y])).length
   assert.ok(differ > 0 && differ < zero.rows.length, `some rows differ (${differ} of ${zero.rows.length})`)
   const pic = pictureOf({ rows: zero.rows, altRows: one.rows, columns: 124 })
@@ -525,35 +533,36 @@ test('broken input still gives a well-formed picture', () => {
 // --- the size cap --------------------------------------------------------------------------------
 
 test('a crowded real board at 160 columns fits with its walk and its titles', () => {
-  const out = drawn(160, 0)
+  const out = walked(160, 0)
   const titles = out.regions.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, text: `${r.kind} ${r.id}` }))
-  const pic = pictureOf({ rows: out.rows, altRows: drawn(160, 1).rows, columns: 160, titles })
+  const pic = pictureOf({ rows: out.rows, altRows: walked(160, 1).rows, columns: 160, titles })
   assert.ok(pic.source.length <= SVG_MAX, `${pic.source.length}`)
   assert.ok(pic.source.includes('<animate'))
   assert.equal(elements(parseXml(pic.source), 'title').length, titles.length)
 })
 
-// The crowded board stacked `times` over: real rows, as many as it takes to reach a size.
-function stacked(times, frame) {
-  const rows = drawn(160, frame).rows
+// The crowded board stacked `times` over: real rows, as many as it takes to reach a size. Pass
+// `walked` as the board to stack one whose sprites are walking.
+function stacked(times, frame, board = drawn) {
+  const rows = board(160, frame).rows
   return Array.from({ length: times }, () => rows).flat()
 }
 
 // How many copies of the crowded board fit with and without the walk, so each test can pick a size
 // that lands exactly on the step it checks.
-function sizes() {
-  const one = pictureOf({ rows: stacked(1, 0), columns: 160 }).source.length
-  const both = pictureOf({ rows: stacked(1, 0), altRows: stacked(1, 1), columns: 160 }).source.length
+function sizes(board = drawn) {
+  const one = pictureOf({ rows: stacked(1, 0, board), columns: 160 }).source.length
+  const both = pictureOf({ rows: stacked(1, 0, board), altRows: stacked(1, 1, board), columns: 160 }).source.length
   return { one, both }
 }
 
 test('step one: over the cap with the walk, the walk is dropped and the titles kept', () => {
-  const { one, both } = sizes()
+  const { one, both } = sizes(walked)
   // Enough copies that the walk tips it over, few enough that the still picture fits.
   const times = Math.floor((SVG_MAX - 4000) / one)
   assert.ok(times >= 1 && times * both > SVG_MAX, `the walk must tip ${times} copies over`)
   const titles = [{ x: 0, y: 0, w: 2, h: 1, text: 'Token bucket' }]
-  const pic = pictureOf({ rows: stacked(times, 0), altRows: stacked(times, 1), columns: 160, titles })
+  const pic = pictureOf({ rows: stacked(times, 0, walked), altRows: stacked(times, 1, walked), columns: 160, titles })
   assert.ok(pic.source.length <= SVG_MAX)
   assert.ok(!pic.source.includes('<animate'))
   const root = parseXml(pic.source)
@@ -862,11 +871,11 @@ test('with no sprites the picture is exactly what it was before sprites existed'
 })
 
 test('sprites outlast the walk and the titles under the size cap, and only the stub drops them', () => {
-  const { one, both } = sizes()
+  const { one, both } = sizes(walked)
   const sprites = [{ ...SPRITE, x: 0, y: 0 }]
   const times = Math.floor((SVG_MAX - 4000) / one)
   assert.ok(times >= 1 && times * both > SVG_MAX)
-  const stepOne = pictureOf({ rows: stacked(times, 0), altRows: stacked(times, 1), columns: 160, sprites })
+  const stepOne = pictureOf({ rows: stacked(times, 0, walked), altRows: stacked(times, 1, walked), columns: 160, sprites })
   assert.ok(stepOne.source.length <= SVG_MAX)
   assert.ok(!stepOne.source.includes('<animate'))
   assert.equal(pathsIn(stepOne.source).length, 1)

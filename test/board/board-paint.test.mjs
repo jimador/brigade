@@ -340,16 +340,75 @@ test('sprites are coloured by model family, failed in alert and done in dim', ()
   for (const [, , c] of spriteCells(g2, region(out2, 'agent', 'heavy-1'))) assert.equal(c.color, PALETTE.dim)
 })
 
-test('sprites take their size from the model and their frame from the view', () => {
+test('sprites take their size from the model and, while walking, their frame from the view', () => {
   const L = arrange(snapshot(), 124)
-  const out0 = frame(snapshot())
-  const out1 = frame(snapshot(), { frame: 1 })
   const home = L.homes['heavy-1']
-  const r = region(out0, 'agent', 'heavy-1')
+  // One cell to the right of home counts as walking, so the view's frame shows.
+  const off = { positions: { 'heavy-1': { x: home.x + 1, y: home.y } } }
+  const out0 = frame(snapshot(), off)
+  const out1 = frame(snapshot(), { ...off, frame: 1 })
+  const r = region(frame(snapshot()), 'agent', 'heavy-1')
   assert.deepEqual({ x: r.x, y: r.y, w: r.w, h: r.h }, home)
   assert.equal(r.w, SPRITES[sizeOf('claude-opus-4-5')][0][0].length)
-  const shape = (out) => spriteCells(grid(out), r).map(([x, y, c]) => `${x},${y},${c.ch}`).join(' ')
+  const walking = region(out0, 'agent', 'heavy-1')
+  const shape = (out) => spriteCells(grid(out), walking).map(([x, y, c]) => `${x},${y},${c.ch}`).join(' ')
   assert.notEqual(shape(out0), shape(out1))
+})
+
+// The cells a one-row bitmap lights, as a string: the block character, or '.' for an unlit cell.
+function bitmapRow(bitmap) {
+  const [upper, lower] = bitmap
+  return Array.from(upper, (ch, i) => {
+    const top = ch === '#'
+    const bottom = lower[i] === '#'
+    return top && bottom ? '█' : top ? '▀' : bottom ? '▄' : '.'
+  }).join('')
+}
+
+// The cells the grid shows inside a one-row region, in the same form.
+function drawnRow(g, r) {
+  return g[r.y].slice(r.x, r.x + r.w).map((c) => (SPRITE_CELLS.has(c.ch) ? c.ch : '.')).join('')
+}
+
+test('a sprite at its home stands still on frame 0, whatever frame the view asks for', () => {
+  const L = arrange(snapshot(), 124)
+  const home = L.homes['heavy-1']
+  const bitmaps = SPRITES[sizeOf('claude-opus-4-5')]
+  assert.notEqual(bitmapRow(bitmaps[0]), bitmapRow(bitmaps[1]))
+  // At home given explicitly, and at home because it has no position at all.
+  for (const positions of [{ 'heavy-1': { x: home.x, y: home.y } }, {}]) {
+    for (const f of [0, 1]) {
+      const out = frame(snapshot(), { positions, frame: f })
+      const r = region(out, 'agent', 'heavy-1')
+      assert.deepEqual({ x: r.x, y: r.y }, { x: home.x, y: home.y })
+      assert.equal(drawnRow(grid(out), r), bitmapRow(bitmaps[0]), `frame ${f}`)
+      assert.equal(r.frame, 0, `frame ${f}`)
+    }
+  }
+})
+
+test('a sprite one cell off its home walks: it draws the view\'s frame and its region says so', () => {
+  const L = arrange(snapshot(), 124)
+  const home = L.homes['heavy-1']
+  const bitmaps = SPRITES[sizeOf('claude-opus-4-5')]
+  for (const at of [{ x: home.x + 1, y: home.y }, { x: home.x, y: home.y - 1 }]) {
+    for (const f of [0, 1]) {
+      const out = frame(snapshot(), { positions: { 'heavy-1': at }, frame: f })
+      const r = region(out, 'agent', 'heavy-1')
+      assert.deepEqual({ x: r.x, y: r.y }, at)
+      assert.equal(drawnRow(grid(out), r), bitmapRow(bitmaps[f]), `frame ${f}`)
+      assert.equal(r.frame, f)
+    }
+  }
+})
+
+test('a settled board draws the same rows on either frame, and every agent region carries frame 0', () => {
+  const still = frame(snapshot(), { frame: 0 })
+  const flipped = frame(snapshot(), { frame: 1 })
+  assert.deepEqual(flipped.rows, still.rows)
+  const agents = flipped.regions.filter((r) => r.kind === 'agent')
+  assert.equal(agents.length, 4)
+  for (const r of agents) assert.equal(r.frame, 0, r.id)
 })
 
 test('a sprite mid-walk is drawn on top of the card under it, keeping the card background', () => {

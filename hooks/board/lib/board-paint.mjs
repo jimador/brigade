@@ -244,7 +244,7 @@ function agentsById(snapshot) {
  * @param view what is moving and under the pointer: { positions, frame, hovered, over }
  * @param columns how wide the pane is
  * @return { rows, regions, height }: coloured runs per row, click regions (sprites after the cards
- *   and messages, before the detail box's), and the row count
+ *   and messages, before the detail box's, each with the frame it was drawn on), and the row count
  */
 export function draw(snapshot, view, columns) {
   const snap = isObject(snapshot) ? snapshot : {}
@@ -263,6 +263,8 @@ export function draw(snapshot, view, columns) {
   paintLegend(canvas, plan.legend)
 
   // Sprites go on after everything else so nothing hides them, each where it is walking or at home.
+  // Movement on the board means something happened, so a sprite settled at home stands still on
+  // frame 0 and only a walking one shows the view's frame.
   const agents = agentsById(snap)
   const sprites = []
   for (const [id, home] of Object.entries(plan.homes)) {
@@ -270,8 +272,9 @@ export function draw(snapshot, view, columns) {
     if (!agent) continue
     const live = Object.hasOwn(positions, id) && isCell(positions[id]) ? positions[id] : home
     const box = { x: Math.floor(live.x), y: Math.floor(live.y), w: home.w, h: home.h }
-    putSprite(canvas, box.x, box.y, SPRITES[sizeOf(agent.model)][frame], colorOf(agent.role, agent.state, agent.model))
-    sprites.push({ kind: 'agent', id, ...box })
+    const shown = box.x === home.x && box.y === home.y ? 0 : frame
+    putSprite(canvas, box.x, box.y, SPRITES[sizeOf(agent.model)][shown], colorOf(agent.role, agent.state, agent.model))
+    sprites.push({ kind: 'agent', id, ...box, frame: shown })
   }
 
   if (look.hovered !== null) {
