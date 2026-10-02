@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Detail, Fleet, Lane, Learnings, Message, Note, Project, Snapshot, Weather, WorkLane } from '../../types'
-import { boardDirFrom, laneOf, parseTicket, toLanes } from './lib/board.mjs'
+import type { Agent, Detail, Fleet, Learnings, Message, Note, Project, Snapshot, Weather, WorkLane } from '../../types'
+import { boardDirFrom, laneOf, parseTicket } from './lib/board.mjs'
+import { safeText } from './lib/canvas.mjs'
 import { agentDetail, cardDetail, messageDetail, projectOf, ticketDetail } from './lib/detail.mjs'
-import { envelope, findingsOf, latest, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
+import { envelope, findingsOf, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
 import { activityOf, applyEvent, prune } from './lib/fleet.mjs'
 import { ROLES } from './lib/sprites.mjs'
 import { forecast } from './lib/weather.mjs'
@@ -16,15 +17,10 @@ const PANE_COLUMNS = 124
 // How often the board looks at the disk and the context figures again.
 const TICK_MS = 2000
 
-// The board folder's tickets in the old six lanes. Ticket mode draws from the ticket cache instead;
-// this stays in state for anything still reading it.
-const lanes = atom({ plugin: 'brigade', key: 'lanes' } as const, [] as Lane[])
 const fleet = atom({ plugin: 'brigade', key: 'fleet' } as const, { agents: {}, order: [] } as Fleet)
 const weather = atom({ plugin: 'brigade', key: 'weather' } as const, null as Weather | null)
 // Which ticket each dish belongs to, by dish folder name. A missing dish is just unknown.
 const dishes = atom({ plugin: 'brigade', key: 'dishes' } as const, {} as Record<string, string>)
-// Every note in the dish on the board (reports, verdicts, briefs, ledgers), newest first.
-const notes = atom({ plugin: 'brigade', key: 'notes' } as const, [] as Note[])
 // The header, the five lanes of cards, the Messages and Learnings panels, and the detail box.
 const project = atom({ plugin: 'brigade', key: 'project' } as const, projectOf({ mode: 'tickets', repo: '', count: 0 }) as Project)
 const work = atom({ plugin: 'brigade', key: 'work' } as const, toWorkLanes([]) as WorkLane[])
@@ -169,9 +165,9 @@ function cachedTickets() {
 // Whether two plain values would store the same, so an idle board skips the write and never redraws.
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
-// Rebuilds the ticket cache and the old lanes from the ticket folder named in .brigade/config.md.
-// Any missing piece (config, folder, a file that won't read) stops here and both keep what they had.
-async function refreshLanes($: EngineInterface) {
+// Rebuilds the ticket cache from the ticket folder named in .brigade/config.md. Any missing piece
+// (config, folder, a file that won't read) stops here and the cache keeps what it had.
+async function refreshTickets($: EngineInterface) {
   const root = await rootOf($)
   const config = `${root}/.brigade/config.md`
   if (!(await $.fs.exists(config))) return
@@ -193,18 +189,10 @@ async function refreshLanes($: EngineInterface) {
   // Only a complete pass replaces the cache, which also drops files that have gone.
   cacheDir = dir
   cache = fresh
-  // Tickets an agent is working always show, however full their lane is.
-  const roster = await read($, fleet)
-  const byDish = await read($, dishes)
-  const pinned = rosterAgents(roster).flatMap(agent => {
-    const ticket = ticketOf(agent, byDish)
-    return ticket === null ? [] : [ticket]
-  })
-  const next = toLanes(cachedTickets(), 6, pinned) as Lane[]
-  if (!same(await read($, lanes), next)) await update($, lanes, () => next)
 }
 
-// Only dishes whose PLAN.md moved in the last day get their folders scanned for notes.
+// Dishes whose PLAN.md moved in the last day get their folders scanned for notes, and so do
+// dishes an agent is working, however old their plan.
 const RECENT_MS = 24 * 60 * 60 * 1000
 // How many messages the board keeps, and how many learnings.
 const KEEP_MESSAGES = 8
@@ -224,8 +212,9 @@ let dishCache: Record<string, { mtimeMs: number; plan?: Plan; note?: Note | null
 // last moved, the plan, and the notes in it (none for a dish that has gone quiet).
 let dishesSeen: { dish: string; mtimeMs: number; plan: Plan; notes: Note[] }[] = []
 
-// Reads every dish's plan, and the notes of the dishes that are still moving. Missing folders
-// are skipped; a file that won't read throws, and the board keeps what it had until the next tick.
+// Reads every dish's plan, and the notes of the dishes that are still moving or being worked.
+// Missing folders are skipped; a file that won't read throws, and the board keeps what it had
+// until the next tick.
 async function refreshDishes($: EngineInterface) {
   const root = await rootOf($)
   const base = `${root}/.brigade/dishes`
@@ -234,6 +223,9 @@ async function refreshDishes($: EngineInterface) {
   const byDish: [string, string][] = []
   if (await $.fs.exists(base)) {
     const now = await $.clock.now()
+    // The board can show an old dish because someone is working it, and then its notes must be
+    // current. With nobody working, this adds no file read to a tick.
+    const worked = new Set(rosterAgents(await read($, fleet)).flatMap(agent => (agent.state === 'working' && typeof agent.dish === 'string' ? [agent.dish] : [])))
     for (const folder of await $.fs.list(base)) {
       if (folder.kind !== 'dir' || !SLUG.test(folder.name)) continue
       const dir = `${base}/${folder.name}`
@@ -249,7 +241,7 @@ async function refreshDishes($: EngineInterface) {
       fresh[planPath] = { mtimeMs: planEntry.mtimeMs, plan }
       if (plan.ticket !== '') byDish.push([folder.name, plan.ticket])
       const found: Note[] = []
-      if (!(now - planEntry.mtimeMs > RECENT_MS)) {
+      if (!(now - planEntry.mtimeMs > RECENT_MS) || worked.has(folder.name)) {
         for (const sub of NOTE_DIRS) {
           if (!inside.some(entry => entry.kind === 'dir' && entry.name === sub)) continue
           for (const entry of await $.fs.list(`${dir}/${sub}`)) {
@@ -288,7 +280,6 @@ async function refreshWork($: EngineInterface) {
   const current = picked === null ? undefined : dishesSeen.find(seen => seen.dish === picked)
   let nextWork: WorkLane[]
   let nextProject: Project
-  let nextNotes: Note[] = []
   let nextMessages: Message[] = []
   if (current) {
     // Only this dish's agents count, and the items they are working always show.
@@ -299,7 +290,6 @@ async function refreshWork($: EngineInterface) {
     const ticket = cachedTickets().find(hit => hit.id === current.plan.ticket) ?? null
     const done = cards.filter(card => card.phase === 'done').length
     nextProject = projectOf({ mode: 'dish', repo, plan: current.plan, ticket, done, total: cards.length }) as Project
-    nextNotes = latest(current.notes, current.notes.length) as Note[]
     nextMessages = messagesFrom(current.notes, crew, KEEP_MESSAGES) as Message[]
   } else {
     const tickets = cachedTickets()
@@ -314,7 +304,6 @@ async function refreshWork($: EngineInterface) {
   currentDish = current ? current.dish : null
   if (!same(await read($, work), nextWork)) await update($, work, () => nextWork)
   if (!same(await read($, project), nextProject)) await update($, project, () => nextProject)
-  if (!same(await read($, notes), nextNotes)) await update($, notes, () => nextNotes)
   if (!same(await read($, messages), nextMessages)) await update($, messages, () => nextMessages)
 }
 
@@ -375,7 +364,7 @@ const refresh = async ($: EngineInterface) => {
       // Agents keep saying what they said before.
     }
     try {
-      await refreshLanes($)
+      await refreshTickets($)
     } catch {
       // The tickets stay as they were.
     }
@@ -485,6 +474,12 @@ function goalOf(text: string) {
   return out.join(' ')
 }
 
+// Whether a ticket file name from our own listing of the ticket folder is safe to read: a
+// markdown file right in that folder, not a hidden one, and nothing that could reach another folder.
+function isTicketFile(name: string) {
+  return name.endsWith('.md') && !/[\\/]/.test(name) && !name.startsWith('.')
+}
+
 // The newest note of one kind, by time; a note without a time counts as the oldest.
 function newest(notes: Note[], kind: string) {
   const timeOf = (note: Note) => (Number.isFinite(note.at) ? note.at : 0)
@@ -524,7 +519,7 @@ async function ticketBox($: EngineInterface, id: string): Promise<Detail | null>
   if (!hit || cacheDir === null) return null
   const [name, { ticket }] = hit
   let goal = ''
-  if (NOTE_FILE.test(name)) {
+  if (isTicketFile(name)) {
     const text = await readIfThere($, `${cacheDir}/${name}`)
     if (text !== null) goal = goalOf(text)
   }
@@ -572,11 +567,17 @@ function boxFor($: EngineInterface, want: Target) {
   return messageBox($, want.id)
 }
 
-// Stores the box, unless an open or a close has come in since `mine` was taken.
-async function showDetail($: EngineInterface, next: Detail | null, mine: number) {
-  if (mine !== generation) return
+// Whether two targets are about the same thing. Two nulls match: no box either way.
+function sameTarget(a: Target | null, b: Target | null) {
+  return a === b || (a !== null && b !== null && a.kind === b.kind && a.id === b.id)
+}
+
+// Stores the box while `still()` says it is current. It is asked again inside the write itself,
+// so an open or a close that lands during the read just before can't be written over.
+async function showDetail($: EngineInterface, next: Detail | null, still: () => boolean) {
+  if (!still()) return
   if (same(await read($, detail), next)) return
-  await update($, detail, current => (mine === generation ? next : current))
+  await update($, detail, current => (still() ? next : current))
 }
 
 // Opens or closes the box for what the pane posted. An open whose subject the board doesn't hold
@@ -585,26 +586,30 @@ async function detailFrom($: EngineInterface, data: unknown) {
   const request = requestOf(data)
   if (request === null) return
   const mine = ++generation
+  const current = () => mine === generation
   if ('close' in request) {
     target = null
-    await showDetail($, null, mine)
+    await showDetail($, null, current)
     return
   }
   const built = await boxFor($, request.open)
   if (built === null || mine !== generation) return
   target = request.open
-  await showDetail($, built, mine)
+  await showDetail($, built, current)
 }
 
 // Rebuilds the open box so it stays current, and takes it down once its subject has gone. A box
-// with nothing behind it, left over from before a reload, comes down too.
+// with nothing behind it, left over from before a reload, comes down too. A click can land while
+// the rebuild is reading files, so the box is only written while the stored target is still the
+// one it was built for: a newer click's box, or a close, wins.
 async function refreshDetail($: EngineInterface) {
   const mine = generation
   const want = target
   const built = want === null ? null : await boxFor($, want)
-  if (mine !== generation) return
-  if (built === null) target = null
-  await showDetail($, built, mine)
+  if (mine !== generation || !sameTarget(target, want)) return
+  const after = built === null ? null : want
+  target = after
+  await showDetail($, built, () => mine === generation && sameTarget(target, after))
 }
 
 // Whether this module load has started its refresh timer. A reload runs the module again and
@@ -625,6 +630,16 @@ function laneLine(lane: WorkLane) {
 // 'Miso · cook · token-bucket · editing bucket.ts', leaving out whatever isn't known.
 function agentLine(agent: Agent) {
   return [agent.name, roleLabel(agent.role), agent.item ?? agent.ticket, agent.activity].filter(part => typeof part === 'string' && part !== '').join(' · ')
+}
+
+// The plain-text board's longest line, and how many agents it lists before counting the rest.
+const PLAIN_MAX = 200
+const PLAIN_AGENTS = 12
+
+// One line of the plain-text board. Its text comes from files and tool calls, so control
+// characters become spaces, invisible marks go, and it is cut to PLAIN_MAX characters.
+function plain(text: string) {
+  return Array.from(safeText(text)).slice(0, PLAIN_MAX).join('')
 }
 
 function contextLine(reading: Weather | null) {
@@ -757,20 +772,26 @@ export const register: Register = on => {
       return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
     }
     // Surfaces without a region get the same board as plain lines. Text from files only ever
-    // goes through Text, so nothing in it can turn into a link or markup.
+    // goes through Text, so nothing in it can turn into a link or markup, and every line goes
+    // through plain first. A crowd of agents is listed up to a dozen, then counted.
+    const listed = snapshot.agents.slice(0, PLAIN_AGENTS)
+    const unlisted = snapshot.agents.length - listed.length
     return (
       <Box flexDirection="column">
-        <Text bold>{snapshot.project.title}</Text>
-        <Text>{snapshot.project.detail}</Text>
-        <Text>{contextLine(snapshot.weather)}</Text>
+        <Text bold>{plain(snapshot.project.title)}</Text>
+        <Text>{plain(snapshot.project.detail)}</Text>
+        <Text>{plain(contextLine(snapshot.weather))}</Text>
         {snapshot.lanes.map(lane => (
-          <Text>{laneLine(lane)}</Text>
+          <Text>{plain(laneLine(lane))}</Text>
         ))}
-        {snapshot.agents.map(agent => (
-          <Text>{agentLine(agent)}</Text>
+        {listed.map(agent => (
+          <Text>{plain(agentLine(agent))}</Text>
+        ))}
+        {(unlisted > 0 ? [`+${unlisted} more`] : []).map(line => (
+          <Text>{line}</Text>
         ))}
         {snapshot.messages.slice(0, SHOW_MESSAGES).map(message => (
-          <Text>{`${message.from} → ${message.to}: ${message.text}`}</Text>
+          <Text>{plain(`${message.from} → ${message.to}: ${message.text}`)}</Text>
         ))}
       </Box>
     )

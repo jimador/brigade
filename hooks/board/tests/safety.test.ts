@@ -226,6 +226,71 @@ test('a note time out of range still lets the pane render', async ($, on) => {
   await ui.unmount()
 })
 
+// Anything that would move the cursor or recolour a terminal, including line breaks.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+
+test('a plain-text surface draws no control character and no line over 200 characters', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  engine(on)
+  const long = 'a'.repeat(5000)
+  // A file's lines are split on \n, so the line breaks that can ride inside one value are a lone
+  // carriage return and U+0085, next line. The escape starts a colour change.
+  const odd = 'far\u001b[31m\rnext\u0085line'
+  const report = (item: string) => `---\ndoc: report\ndish: obsidian-plain\nitem: ${item}\nrole: cook\nstatus: done\n---\n`
+  const dish = `${ROOT}/.brigade/dishes/obsidian-plain`
+  const files: Record<string, { text: string; mtimeMs: number }> = {
+    [`${dish}/PLAN.md`]: { text: `---\ndoc: plan\ndish: obsidian-plain\nticket: plain\nitems:\n  - { slug: ${long}, status: todo }\n---\n`, mtimeMs: at + 3 },
+    [`${dish}/reports/odd-cook.md`]: { text: report(odd), mtimeMs: at + 4 },
+    [`${dish}/reports/long-cook.md`]: { text: report(long), mtimeMs: at + 5 },
+  }
+  const dirs = new Set([`${ROOT}/.brigade/dishes`, dish, `${dish}/reports`])
+  on('fs.exists', async ($$, e) => ({ value: e.path in files || dirs.has(e.path) }))
+  on('fs.read', async ($$, e) => ({ value: files[e.path].text }))
+  on('fs.list', async ($$, e) => {
+    const out: Listing[] = []
+    for (const path of [...Object.keys(files), ...dirs]) {
+      if (!path.startsWith(`${e.path}/`) || path.slice(e.path.length + 1).includes('/')) continue
+      const isFile = path in files
+      out.push({ name: path.slice(e.path.length + 1), kind: isFile ? 'file' : 'dir', size: 0, mtimeMs: isFile ? files[path].mtimeMs : at, isLink: false })
+    }
+    return { value: out }
+  })
+  await $.command.run(OPEN)
+  const text = await $.ui.mount({ plugin: 'brigade', surface: 'vscode', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  const lines = (await text.findAll({ type: 'Text' })).map(line => line.text)
+  for (const line of lines) {
+    expect(line).not.toMatch(CONTROL)
+    expect(Array.from(line).length).toBeLessThanOrEqual(200)
+  }
+  // The odd message is still there, with its escape and line breaks turned into spaces.
+  expect(lines).toContain('cook → inspector: far [31m next line ready for review')
+  // The long slug is cut, not dropped. Its cook report has it waiting for review.
+  expect(lines).toContain(`In review 1: ${'a'.repeat(187)}`)
+  await text.unmount()
+})
+
+test('a plain-text surface lists twelve agents and counts the rest', async ($, on) => {
+  mock.clock(on)
+  engine(on)
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'haiku' } } as never
+  })
+  on('fs.exists', async () => ({ value: false }))
+  for (let i = 0; i < 30; i++) {
+    for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'haiku', messageCount: 1, agentId: `crowd-${i}` } as never)) void chunk
+  }
+  await $.command.run(OPEN)
+  const text = await $.ui.mount({ plugin: 'brigade', surface: 'vscode', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  const lines = (await text.findAll({ type: 'Text' })).map(line => line.text)
+  // The agents come straight after the last of the five lanes.
+  const lastLane = lines.findIndex(line => /^Done \d/.test(line))
+  const more = lines.indexOf('+18 more')
+  expect(lastLane).toBeGreaterThanOrEqual(0)
+  expect(more - lastLane - 1).toBe(12)
+  await text.unmount()
+})
+
 test('tool calls and finished turns pass through when the state store fails', { plugins: [watch] }, async ($, on) => {
   mock.clock(on)
   const traces: string[] = []

@@ -61,10 +61,28 @@ const LEDGER = [
 // Stands in for the engine beneath the plugin and for a project on disk with one dish in it.
 // `files` maps a path to its text and mtime; folders are implied by the paths. Every read, and
 // every check for a file, is written down, so a test can tell whether a click made the board go
-// looking for a file at all, whether or not it was there.
-function world(on: On, files: Record<string, { text: string; mtimeMs: number }>) {
+// looking for a file at all, whether or not it was there. `extra` adds entries to a folder's
+// listing that no file stands behind. `hold(path)` makes the next read of that file wait until
+// the test releases it, and says when the board has got that far. `when(path)` says when the
+// board next checks whether that file is there.
+function world(on: On, files: Record<string, { text: string; mtimeMs: number }>, extra: Record<string, Listing[]> = {}) {
   const reads: string[] = []
   const looks: string[] = []
+  const holds = new Map<string, { reached: () => void; wait: Promise<void> }>()
+  const hold = (path: string) => {
+    let reached = () => {}
+    let release = () => {}
+    const seen = new Promise<void>(resolve => {
+      reached = resolve
+    })
+    const wait = new Promise<void>(resolve => {
+      release = resolve
+    })
+    holds.set(path, { reached, wait })
+    return { seen, release }
+  }
+  const waits = new Map<string, () => void>()
+  const when = (path: string) => new Promise<void>(resolve => waits.set(path, resolve))
   const dirsOf = () => {
     const dirs = new Set<string>()
     for (const path of Object.keys(files)) {
@@ -77,10 +95,21 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
   on('session.root', async () => ({ value: '/repo' }))
   on('fs.exists', async ($$, e) => {
     looks.push(e.path)
+    const waiting = waits.get(e.path)
+    if (waiting) {
+      waits.delete(e.path)
+      waiting()
+    }
     return { value: e.path in files || dirsOf().has(e.path) }
   })
   on('fs.read', async ($$, e) => {
     reads.push(e.path)
+    const held = holds.get(e.path)
+    if (held) {
+      holds.delete(e.path)
+      held.reached()
+      await held.wait
+    }
     if (!(e.path in files)) throw new Error(`no such file: ${e.path}`)
     return { value: files[e.path].text }
   })
@@ -97,6 +126,7 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
       const file = files[path]
       names.set(rest, { name: rest, kind: file ? 'file' : 'dir', size: file ? file.text.length : 0, mtimeMs: file ? file.mtimeMs : 0, isLink: false })
     }
+    for (const entry of extra[e.path] ?? []) names.set(entry.name, entry)
     return { value: [...names.values()] }
   })
   on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 0, window: 100000, percent: 0 }, rateLimits: [] } }))
@@ -106,7 +136,7 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
   })
-  return { reads, looks }
+  return { reads, looks, hold, when }
 }
 
 // The dish on disk at `at`: its plan, a failed review of token-bucket, and the cook's working memory.
@@ -275,5 +305,116 @@ test('a hostile open reads no file and shows no box', async ($, on) => {
   await ui.post({ open: { kind: 'card', id: 'token-bucket' } }, { in: 'stage' })
   expect(await boxUp(ui)).toBe(true)
   expect(reads.slice(before)).toEqual([`${DISH}/reports/token-bucket-verdict.md`])
+  await ui.unmount()
+})
+
+test('a ticket file with a space in its name shows its goal', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  world(on, {
+    '/repo/.brigade/config.md': { text: '- source: local\n- database_id: ./board\n', mtimeMs: at },
+    '/repo/board/my ticket.md': { text: '---\nid: acme-8\ntitle: Cache the price list\nstatus: todo\nkind: feature\n---\n## Goal\n\nServe prices without a database trip.\n', mtimeMs: at + 1 },
+  })
+  const ui = await board($)
+  await ui.post({ open: { kind: 'card', id: 'acme-8' } }, { in: 'stage' })
+  expect(await inBox(ui, 'Cache the price list')).toBeDefined()
+  expect(await inBox(ui, 'Serve prices without a database trip.')).toBeDefined()
+  await ui.unmount()
+})
+
+test('a ticket whose file name could leave the folder opens without reading anything', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const ticket = (id: string) => ({ text: `---\nid: ${id}\ntitle: Ticket ${id}\nstatus: todo\n---\n## Goal\n\nSecret goal.\n`, mtimeMs: at + 2 })
+  const { reads, looks } = world(
+    on,
+    {
+      '/repo/.brigade/config.md': { text: '- source: local\n- database_id: ./board\n', mtimeMs: at },
+      '/repo/board/sub/slash.md': ticket('acme-slash'),
+      '/repo/board/sub\\back.md': ticket('acme-back'),
+      '/repo/board/.dot.md': ticket('acme-dot'),
+      '/repo/board/..dots.md': ticket('acme-dots'),
+    },
+    // The listing names a file one folder down, as a broken or hostile listing might.
+    { '/repo/board': [{ name: 'sub/slash.md', kind: 'file', size: 0, mtimeMs: at + 2, isLink: false }] },
+  )
+  const ui = await board($)
+  for (const id of ['acme-slash', 'acme-back', 'acme-dot', 'acme-dots']) {
+    const before = reads.length
+    const looked = looks.length
+    await ui.post({ open: { kind: 'card', id } }, { in: 'stage' })
+    expect(await inBox(ui, `Ticket ${id}`)).toBeDefined()
+    expect(reads.slice(before)).toEqual([])
+    expect(looks.slice(looked)).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /Secret goal/, in: 'stage' })).toBeUndefined()
+  }
+  await ui.unmount()
+})
+
+const LEARNINGS = '/repo/.brigade/LEARNINGS.md'
+
+// Fails the test, rather than hanging it, when the board never gets as far as a held read.
+const within = <V>(promise: Promise<V>, what: string) =>
+  Promise.race([promise, new Promise<never>((resolve, reject) => setTimeout(() => reject(new Error(`never got to ${what}`)), 2000))])
+
+// Waits until `check` holds, looking every few milliseconds, and fails after two seconds.
+async function until(check: () => Promise<boolean>, what: string) {
+  for (let waited = 0; waited < 2000; waited += 5) {
+    if (await check()) return
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  throw new Error(`never saw ${what}`)
+}
+
+// Gives a write from a tick nobody awaits the time to land and redraw before the board is read.
+const settle = () => new Promise(resolve => setTimeout(resolve, 50))
+
+test('a tick that started before a click never writes the older card over the newer box', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const queue = '/repo/.brigade/dishes/acme-queue'
+  const verdict = (item: string) => `---\ndoc: verdict\ndish: acme-queue\nitem: ${item}\nrole: inspector\nverdict: FAIL\nattempt: 1\nfindings:\n  - { id: F1, severity: high, summary: ${item} drops a job }\n---\n`
+  const { hold, when } = world(on, {
+    [`${queue}/PLAN.md`]: { text: '---\ndoc: plan\ndish: acme-queue\nticket: acme-30\nitems:\n  - { slug: enqueue, status: todo }\n  - { slug: dequeue, status: todo }\n---\n', mtimeMs: at + 100 },
+    [`${queue}/reports/enqueue-verdict.md`]: { text: verdict('enqueue'), mtimeMs: at + 101 },
+    [`${queue}/reports/dequeue-verdict.md`]: { text: verdict('dequeue'), mtimeMs: at + 102 },
+  })
+  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  const ui = await board($)
+  await ui.post({ open: { kind: 'card', id: 'enqueue' } }, { in: 'stage' })
+  expect(await inBox(ui, 'enqueue · Rework')).toBeDefined()
+
+  // The click on dequeue is still reading its verdict when the tick starts rebuilding enqueue's
+  // box, and the tick's read comes back last.
+  const second = hold(`${queue}/reports/dequeue-verdict.md`)
+  const clicking = ui.post({ open: { kind: 'card', id: 'dequeue' } }, { in: 'stage' })
+  await within(second.seen, 'the click on dequeue')
+  const first = hold(`${queue}/reports/enqueue-verdict.md`)
+  const ticking = clock.advance(2000)
+  await within(first.seen, "the tick's rebuild of enqueue")
+  second.release()
+  await clicking
+  await until(async () => (await inBox(ui, 'dequeue · Rework')) !== undefined, "dequeue's box")
+  // The tick goes on to the learnings once it is done with the box; a fresh refresh here would
+  // rebuild the box from the newer click and hide what the tick wrote.
+  const tickDone = when(LEARNINGS)
+  first.release()
+  await ticking
+  await within(tickDone, 'the end of the tick')
+  await settle()
+  expect(await inBox(ui, 'dequeue · Rework')).toBeDefined()
+  expect(await inBox(ui, 'enqueue · Rework')).toBeUndefined()
+
+  // A close while a tick is rebuilding the box leaves it closed.
+  const third = hold(`${queue}/reports/dequeue-verdict.md`)
+  const again = clock.advance(2000)
+  await within(third.seen, "the tick's rebuild of dequeue")
+  await ui.post({ close: true }, { in: 'stage' })
+  const againDone = when(LEARNINGS)
+  third.release()
+  await again
+  await within(againDone, 'the end of the second tick')
+  await settle()
+  expect(await boxUp(ui)).toBe(false)
   await ui.unmount()
 })

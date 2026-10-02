@@ -13,8 +13,9 @@ type Listing = { name: string; kind: 'file' | 'dir' | 'other'; size: number; mti
 // Stands in for the engine beneath the plugin and for a project on disk. `files` maps a path to
 // its text and mtime; folders are implied by the paths. Tests change `files` as they go, and each
 // test uses its own mtimes so the board's file caches, which live for the whole module, never
-// hand one test another's files.
+// hand one test another's files. Every path the board lists or reads is written down in `touched`.
 function world(on: On, files: Record<string, { text: string; mtimeMs: number }>) {
+  const touched: string[] = []
   const dirsOf = () => {
     const dirs = new Set<string>()
     for (const path of Object.keys(files)) {
@@ -27,10 +28,12 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
   on('session.root', async () => ({ value: '/repo' }))
   on('fs.exists', async ($$, e) => ({ value: e.path in files || dirsOf().has(e.path) }))
   on('fs.read', async ($$, e) => {
+    touched.push(e.path)
     if (!(e.path in files)) throw new Error(`no such file: ${e.path}`)
     return { value: files[e.path].text }
   })
   on('fs.list', async ($$, e) => {
+    touched.push(e.path)
     const names = new Map<string, Listing>()
     const dirs = dirsOf()
     for (const path of [...Object.keys(files), ...dirs]) {
@@ -49,6 +52,7 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
   })
+  return { touched }
 }
 
 const ticket = (id: string, status: string) => `---\nid: ${id}\ntitle: Ticket ${id}\nstatus: ${status}\n---\n`
@@ -188,5 +192,38 @@ test('a work item moves To do, Cooking, In review, Rework as events and files ar
   await clock.advance(2000)
   expect(await laneOfCard(ui, 'token-bucket')).toBe('Rework')
   expect(await ui.find({ type: 'Text', text: /sent back · 1 finding/, in: 'stage' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a dish with a plan days old still reads its notes while an agent works it, and only then', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const old = at - 3 * 24 * 60 * 60 * 1000
+  const files: Record<string, { text: string; mtimeMs: number }> = {
+    [`${DISH}/PLAN.md`]: { text: PLAN, mtimeMs: old },
+    [`${DISH}/briefs/limits.md`]: { text: '---\ndoc: brief\ndish: acme-limits\nquestion: Which clock is steady?\n---\n', mtimeMs: old + 1 },
+  }
+  const { touched } = world(on, files)
+  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  const ui = await open($)
+  // Nobody is working the dish, so its notes stay unread, tick after tick.
+  await clock.advance(2000)
+  expect(touched.filter(path => path.startsWith(`${DISH}/briefs`))).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /^Ticket board/, in: 'stage' })).toBeDefined()
+
+  // Two cooks pick up the dish's items.
+  for (const [id, item, file] of [['q1', 'token-bucket', 'src/bucket.ts'], ['q2', 'usage-docs', 'docs/limits.md']]) {
+    for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-4-5', messageCount: 1, agentId: id })) void chunk
+    await $.tool.call({ agentId: id, tool: 'Read', file_path: `${DISH}/packets/${item}.md` } as never)
+    await $.tool.call({ agentId: id, tool: 'Edit', file_path: `/repo/.brigade/worktrees/limits--${item}/${file}` } as never)
+  }
+  await clock.advance(2000)
+  expect(await laneOfCard(ui, 'token-bucket')).toBe('Cooking')
+
+  // One finishes and its report lands while the other is still at work.
+  await $.turn.complete({ agentId: 'q1', answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)
+  files[`${DISH}/reports/token-bucket-cook.md`] = { text: REPORT, mtimeMs: at + 50 }
+  await clock.advance(2000)
+  expect(await laneOfCard(ui, 'token-bucket')).toBe('In review')
   await ui.unmount()
 })
