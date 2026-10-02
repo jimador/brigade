@@ -148,15 +148,15 @@ test('starting the session three times still scans the board once per tick', asy
     lists++
     return { value: [] }
   })
-  // A second apart, so timers that were each started would come due one after another.
+  // Half a second apart, so timers that were each started would come due one after another.
   for (let i = 0; i < 3; i++) {
     await $.session.start({ cwd: ROOT })
-    await clock.advance(1000)
+    await clock.advance(500)
   }
   // Opening the board waits for whatever scan is in flight, so the count below starts clean.
   await $.command.run(OPEN)
   const before = lists
-  await clock.advance(5000)
+  await clock.advance(2000)
   // One scan of the empty board folder is one listing.
   expect(lists - before).toBe(1)
 })
@@ -192,13 +192,13 @@ test('agent.spawn hands back exactly what the engine answered', { plugins: [watc
   expect(clean(traces)).toEqual([])
 })
 
-test('a note time out of range draws as --:-- and the pane still renders', async ($, on) => {
+test('a note time out of range still lets the pane render', async ($, on) => {
   const clock = mock.clock(on)
   const at = await clock.now()
   engine(on)
   const report = (item: string) => `---\ndoc: report\ndish: obsidian-example\nitem: ${item}\nrole: cook\nstatus: done\n---\n`
   const files: Record<string, { text: string; mtimeMs: number }> = {
-    [`${DISH}/PLAN.md`]: { text: '---\ndoc: plan\ndish: obsidian-example\nticket: example\n---\n', mtimeMs: at },
+    [`${DISH}/PLAN.md`]: { text: '---\ndoc: plan\ndish: obsidian-example\nticket: example\nitems:\n  - { slug: far, status: todo }\n---\n', mtimeMs: at },
     [`${DISH}/reports/far-cook.md`]: { text: report('far'), mtimeMs: 8.64e15 + 1 },
     [`${DISH}/reports/never-cook.md`]: { text: report('never'), mtimeMs: Infinity },
   }
@@ -215,10 +215,14 @@ test('a note time out of range draws as --:-- and the pane still renders', async
     return { value: out }
   })
   await $.command.run(OPEN)
-  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'mobile', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
-  expect(await ui.find({ type: 'Text', text: /BRIGADE/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^--:-- cook far · report done/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^--:-- cook never · report done/ })).toBeDefined()
+  const text = await $.ui.mount({ plugin: 'brigade', surface: 'mobile', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  expect(await text.find({ type: 'Text', text: /^In review 1: far$/ })).toBeDefined()
+  expect(await text.find({ type: 'Text', text: /^cook → inspector: far ready for review$/ })).toBeDefined()
+  expect(await text.find({ type: 'Text', text: /^cook → inspector: never ready for review$/ })).toBeDefined()
+  await text.unmount()
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+  expect(await ui.find({ type: 'Text', text: /far ready for review/, in: 'stage' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -240,7 +244,11 @@ test('tool calls and finished turns pass through when the state store fails', { 
   )
   const write = { agentId: 'a2', tool: 'Write', file_path: `${DISH}/reports/x-cook.md` }
   expect(await $.tool.call(write as never)).toEqual({ result: 'ok' })
+  // The main loop's calls, and calls whose fields are not what they should be, pass through too.
+  expect(await $.tool.call({ tool: 'Read', file_path: `${DISH}/PLAN.md` } as never)).toEqual({ result: 'ok' })
+  expect(await $.tool.call({ agentId: 'a2', tool: 'Bash', command: { not: 'text' }, file_path: 42 } as never)).toEqual({ result: 'ok' })
+  expect(await $.tool.call({ agentId: 'a2', tool: 'Edit', file_path: 'x'.repeat(100000) } as never)).toEqual({ result: 'ok' })
   expect(await $.turn.complete({ agentId: 'a2', reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't' } as never)).toEqual({ text: 'done' })
   expect(clean(traces)).toEqual([])
-  expect(traces.length).toBe(2)
+  expect(traces.length).toBe(5)
 })

@@ -1,114 +1,141 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-const PANE = { title: 'Brigade board', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } as const
-const OPEN = { command: 'brigade-board', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const
+const PANE = { title: 'Brigade board', isFocused: false, bodyColumns: 124, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
+const OPEN = { command: 'brigade-board', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 124 } } as const
 const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-4-5' }
-const DISH = '/repo/.brigade/dishes/obsidian-example'
+const DISH = '/repo/.brigade/dishes/acme-notes'
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Listing = { name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number; isLink: boolean }
 
-const PLAN = '---\ndoc: plan\ndish: obsidian-example\nticket: example\nitems:\n  - { slug: board-parse, status: cooking }\n---\n'
-const report = (item: string) => `---\ndoc: report\ndish: obsidian-example\nitem: ${item}\nrole: cook\nstatus: done\n---\n## Summary\n`
-const LEDGER = '---\ndoc: ledger\ndish: obsidian-example\nitem: board-parse\nrole: cook\n---\n## Canon\nC1. stay in the file list\n## World state\nW1. parser reads the frontmatter\nW2. tests green on terminal\n'
+const PLAN = '---\ndoc: plan\ndish: acme-notes\nticket: acme-7\nitems:\n  - { slug: board-parse, status: todo }\n---\n'
+const report = (item: string) => `---\ndoc: report\ndish: acme-notes\nitem: ${item}\nrole: cook\nstatus: done\n---\n## Summary\n`
+const VERDICT = '---\ndoc: verdict\ndish: acme-notes\nitem: board-parse\nrole: inspector\nverdict: FAIL\nfindings:\n  - { id: F1, severity: high, summary: Parser drops quoted colons }\n---\n'
 
-// Stands in for the engine beneath the plugin and for a project on disk: one dish with a plan,
-// a cook report and the cook's ledger, all written at `at`. Folders are implied by file paths.
-function world(on: On, files: Record<string, string>, at: number) {
-  const dirs = new Set<string>()
-  for (const path of Object.keys(files)) {
-    const parts = path.split('/')
-    for (let i = 2; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'))
+// Stands in for the engine beneath the plugin and for a project on disk. `files` maps a path to
+// its text and mtime; folders are implied by the paths, and tests change `files` as they go.
+function world(on: On, files: Record<string, { text: string; mtimeMs: number }>) {
+  const dirsOf = () => {
+    const dirs = new Set<string>()
+    for (const path of Object.keys(files)) {
+      const parts = path.split('/')
+      for (let i = 2; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'))
+    }
+    return dirs
   }
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('session.root', async () => ({ value: '/repo' }))
-  on('fs.exists', async ($$, e) => ({ value: e.path in files || dirs.has(e.path) }))
+  on('fs.exists', async ($$, e) => ({ value: e.path in files || dirsOf().has(e.path) }))
   on('fs.read', async ($$, e) => {
     if (!(e.path in files)) throw new Error(`no such file: ${e.path}`)
-    return { value: files[e.path] }
+    return { value: files[e.path].text }
+  })
+  on('fs.stat', async ($$, e) => {
+    if (!(e.path in files)) throw new Error(`no such file: ${e.path}`)
+    return { value: { kind: 'file', size: files[e.path].text.length, mtimeMs: files[e.path].mtimeMs, isLink: false } }
   })
   on('fs.list', async ($$, e) => {
     const names = new Map<string, Listing>()
+    const dirs = dirsOf()
     for (const path of [...Object.keys(files), ...dirs]) {
       if (!path.startsWith(`${e.path}/`)) continue
       const rest = path.slice(e.path.length + 1)
       if (rest.includes('/')) continue
-      const kind = path in files ? 'file' : 'dir'
-      names.set(rest, { name: rest, kind, size: kind === 'file' ? files[path].length : 0, mtimeMs: at, isLink: false })
+      const file = files[path]
+      names.set(rest, { name: rest, kind: file ? 'file' : 'dir', size: file ? file.text.length : 0, mtimeMs: file ? file.mtimeMs : 0, isLink: false })
     }
     return { value: [...names.values()] }
   })
   on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 0, window: 100000, percent: 0 }, rateLimits: [] } }))
   on('command.register', async () => ({ value: {} }))
+  on('tool.call', async () => ({ result: 'ok' }))
+  on('turn.complete', async () => ({ text: '' }))
   on('agent.spawn', async () => ({ model: 'claude-haiku-4-5', agentId: 'a1' }))
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
   })
 }
 
-const mount = ($: Parameters<Parameters<typeof test>[1]>[0], surface: 'terminal' | 'mobile') =>
-  $.ui.mount({ plugin: 'brigade', surface, component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+const mount = async ($: Parameters<Parameters<typeof test>[1]>[0], surface: 'terminal' | 'mobile') => {
+  const ui = await $.ui.mount({ plugin: 'brigade', surface, component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 124, rows: 40 } })
+  if (surface === 'terminal') await ui.resize({ columns: 124, rows: 40, in: 'stage' })
+  return ui
+}
 
-test('notes show under the board, and a clicked agent shows its working memory', async ($, on) => {
+test('a cook report shows as a message to the inspector', async ($, on) => {
   const clock = mock.clock(on)
   const at = await clock.now()
-  world(
-    on,
-    {
-      [`${DISH}/PLAN.md`]: PLAN,
-      [`${DISH}/reports/board-parse-cook.md`]: report('board-parse'),
-      [`${DISH}/state/board-parse.md`]: LEDGER,
-    },
-    at,
-  )
-  // The five-second timer starts in session.start; nothing beneath the plugin answers it.
-  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  world(on, {
+    [`${DISH}/PLAN.md`]: { text: PLAN, mtimeMs: at },
+    [`${DISH}/reports/board-parse-cook.md`]: { text: report('board-parse'), mtimeMs: at + 1 },
+  })
   await $.command.run(OPEN)
-  for (const surface of ['terminal', 'mobile'] as const) {
-    const ui = await mount($, surface)
-    expect(await ui.find({ type: 'Text', text: /NOTES/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /cook board-parse · report done/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /MEMORY/ })).toBeUndefined()
-    await ui.unmount()
-  }
-  await $.agent.spawn({ tool_use_id: 't1', prompt: 'Cook the packet in /repo/.brigade/dishes/obsidian-example/ now.', description: 'cook:board-parse:0', subagentType: 'brigade:brigade-cook', provider: 'anthropic', model: 'haiku', parentModel: 'x', fork: false } as never)
   const ui = await mount($, 'terminal')
-  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
-  await ui.post({ select: 'a1' }, { in: 'stage' })
-  await clock.advance(5000)
-  await ui.redraw()
-  expect(await ui.find({ type: 'Text', text: /MEMORY · Basil/ })).toBeDefined()
-  expect(await ui.find({ type: 'Markdown', text: /W1\. parser reads the frontmatter/ })).toBeDefined()
-  expect(await ui.find({ type: 'Markdown', text: /C1\./ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /│ cook → inspector +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│ board-parse ready for review +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /NOTES/ })).toBeUndefined()
+  await ui.unmount()
+  const text = await mount($, 'mobile')
+  expect(await text.find({ type: 'Text', text: /^cook → inspector: board-parse ready for review$/ })).toBeDefined()
+  await text.unmount()
+})
+
+test('a verdict that lands while the board is open shows as a message to the cook within a tick', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const files: Record<string, { text: string; mtimeMs: number }> = {
+    [`${DISH}/PLAN.md`]: { text: PLAN, mtimeMs: at + 100 },
+    [`${DISH}/reports/board-parse-cook.md`]: { text: report('board-parse'), mtimeMs: at + 101 },
+  }
+  world(on, files)
+  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  await $.agent.spawn({ tool_use_id: 't1', prompt: `Cook the packet in ${DISH}/ now.`, description: 'cook:board-parse:0', subagentType: 'brigade:brigade-cook', provider: 'anthropic', model: 'haiku', parentModel: 'x', fork: false } as never)
+  await $.turn.complete({ agentId: 'a1', answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)
+  await $.command.run(OPEN)
+  const ui = await mount($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /│ Basil → inspector +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /inspector → Basil/, in: 'stage' })).toBeUndefined()
+  files[`${DISH}/reports/board-parse-verdict.md`] = { text: VERDICT, mtimeMs: at + 102 }
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /│ inspector → Basil +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│ board-parse sent back: Parser drops quoted colons +│/, in: 'stage' })).toBeDefined()
   await ui.unmount()
 })
 
-test('a clicked agent without a memory file says so', async ($, on) => {
+test("the repo's learnings show in their panel, and change when the file does", async ($, on) => {
   const clock = mock.clock(on)
   const at = await clock.now()
-  world(on, { [`${DISH}/PLAN.md`]: PLAN }, at)
+  const files: Record<string, { text: string; mtimeMs: number }> = {
+    [`${DISH}/PLAN.md`]: { text: PLAN, mtimeMs: at + 200 },
+    '/repo/.brigade/LEARNINGS.md': { text: '# Learnings\n\n## Keep fixtures invented\n\n## Run the bundle check first\n', mtimeMs: at + 200 },
+  }
+  world(on, files)
   await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
-  await $.agent.spawn({ tool_use_id: 't1', prompt: 'Cook the packet in /repo/.brigade/dishes/obsidian-example/ now.', description: 'cook:board-parse:0', subagentType: 'brigade:brigade-cook', provider: 'anthropic', model: 'haiku', parentModel: 'x', fork: false } as never)
   await $.command.run(OPEN)
   const ui = await mount($, 'terminal')
-  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
-  await ui.post({ select: 'a1' }, { in: 'stage' })
-  await clock.advance(5000)
-  await ui.redraw()
-  expect(await ui.find({ type: 'Text', text: /MEMORY · Basil/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /no memory file yet/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│ Run the bundle check first +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│ Keep fixtures invented +│/, in: 'stage' })).toBeDefined()
+  files['/repo/.brigade/LEARNINGS.md'] = { text: '## Name the failing input\n', mtimeMs: at + 201 }
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /│ Name the failing input +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Keep fixtures invented/, in: 'stage' })).toBeUndefined()
   await ui.unmount()
 })
 
 test('a hostile item name is shown as literal text, never as a link', async ($, on) => {
   const clock = mock.clock(on)
   const at = await clock.now()
-  world(on, { [`${DISH}/PLAN.md`]: PLAN, [`${DISH}/reports/x-cook.md`]: report('[x](http://example.invalid)') }, at)
+  world(on, {
+    [`${DISH}/PLAN.md`]: { text: PLAN, mtimeMs: at + 300 },
+    [`${DISH}/reports/x-cook.md`]: { text: report('[x](http://example.invalid)'), mtimeMs: at + 301 },
+  })
   await $.command.run(OPEN)
   for (const surface of ['terminal', 'mobile'] as const) {
     const ui = await mount($, surface)
-    expect(await ui.find({ type: 'Text', text: /cook \[x\]\(http:\/\/example\.invalid\) · report done/ })).toBeDefined()
+    const scope = surface === 'terminal' ? { in: 'stage' } : {}
+    expect(await ui.find({ type: 'Text', text: /\[x\]\(http:\/\/example\.invalid\) ready for review/, ...scope })).toBeDefined()
     expect(await ui.find({ type: 'Link' })).toBeUndefined()
+    expect(await ui.find({ type: 'Link', ...scope })).toBeUndefined()
     await ui.unmount()
   }
 })

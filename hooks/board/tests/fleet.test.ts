@@ -8,8 +8,8 @@ type On = Parameters<Parameters<typeof test>[1]>[1]
 type Ui = Awaited<ReturnType<Parameters<Parameters<typeof test>[1]>[0]['ui']['mount']>>
 
 // Answers every event the board's hooks pass on, standing in for the engine beneath the plugin,
-// and a project with an empty ticket folder, so opening the board lays out all six lanes and
-// the hover card has room to draw.
+// and a project with an empty ticket folder, so opening the board lays out its five empty lanes
+// and every agent stands with the crew.
 function engine(on: On) {
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('session.root', async () => ({ value: '/repo' }))
@@ -30,7 +30,8 @@ async function step($: Parameters<Parameters<typeof test>[1]>[0], agentId: strin
 }
 
 // Lets the sprites walk in and stand still, then moves the pointer onto the sprite whose name
-// tag matches. The tag sits on the row under the sprite and starts at the sprite's left edge.
+// tag matches. On a card the tag sits on the row under the sprite, from its left edge; in the
+// crew it sits beside the sprite, one cell to its right, level with its lower rows.
 async function hover(ui: Ui, tag: RegExp) {
   await ui.advance(250 * 60)
   const rows = (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object'))
@@ -38,7 +39,8 @@ async function hover(ui: Ui, tag: RegExp) {
   expect(y).toBeGreaterThan(0)
   const at = rows[y].text.search(tag)
   const x = Array.from(rows[y].text.slice(0, at)).length
-  await ui.pointer({ type: 'move', x, y: y - 1, in: 'stage' })
+  const onCard = rows[y].text[at - 1] === '│'
+  await ui.pointer(onCard ? { type: 'move', x, y: y - 1, in: 'stage' } : { type: 'move', x: x - 2, y, in: 'stage' })
 }
 
 test('a spawned agent shows as a named sprite, adds its tokens, and stays two minutes after it fails', async ($, on) => {
@@ -87,7 +89,7 @@ test('a tool call from the main loop adds no agent and passes its result through
   await $.command.run(OPEN)
   const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
   await ui.resize({ columns: 80, rows: 30, in: 'stage' })
-  expect(await ui.find({ type: 'Text', text: /BRIGADE/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /To do 0/, in: 'stage' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Basil/, in: 'stage' })).toBeUndefined()
   await ui.unmount()
 })
@@ -173,6 +175,80 @@ test('a tool call that teaches nothing writes no state', async ($, on) => {
   const before = writes
   for (let i = 0; i < 5; i++) {
     expect(await $.tool.call({ agentId: 'a2', tool: 'Bash', command: 'ls' } as never)).toEqual({ result: 'ok' })
+    expect(await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)).toEqual({ result: 'ok' })
   }
   expect(writes).toBe(before)
+  // The next pass folds what the calls were doing into the roster in one write, and a pass with
+  // nothing new to say writes nothing.
+  await $.command.run(OPEN)
+  expect(writes).toBe(before + 1)
+  await $.command.run(OPEN)
+  expect(writes).toBe(before + 1)
+})
+
+const DISH = '/repo/.brigade/dishes/acme-limits'
+const PLAN = '---\ndoc: plan\ndish: acme-limits\nticket: acme-12\nitems:\n  - { slug: token-bucket, status: todo }\n---\n'
+
+// The engine as above, but over a project with one dish in it, written at `at`.
+function dishEngine(on: On, at: number) {
+  const files: Record<string, string> = { [`${DISH}/PLAN.md`]: PLAN }
+  const dirs = new Set(['/repo/.brigade', '/repo/.brigade/dishes', DISH])
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('session.root', async () => ({ value: '/repo' }))
+  on('fs.exists', async ($$, e) => ({ value: e.path in files || dirs.has(e.path) }))
+  on('fs.read', async ($$, e) => ({ value: files[e.path] ?? '' }))
+  on('fs.list', async ($$, e) => {
+    if (e.path === '/repo/.brigade/dishes') return { value: [{ name: 'acme-limits', kind: 'dir', size: 0, mtimeMs: at, isLink: false }] }
+    if (e.path === DISH) return { value: [{ name: 'PLAN.md', kind: 'file', size: PLAN.length, mtimeMs: at, isLink: false }] }
+    return { value: [] }
+  })
+  on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 0, window: 100000, percent: 0 }, rateLimits: [] } }))
+  on('command.register', async () => ({ value: {} }))
+  on('tool.call', async () => ({ result: 'ok' }))
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
+  })
+}
+
+test('what an agent is doing shows on its card within a tick, for its whole life', async ($, on) => {
+  const clock = mock.clock(on)
+  dishEngine(on, await clock.now())
+  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  await $.command.run(OPEN)
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 124, rows: 40 } })
+  await ui.resize({ columns: 124, rows: 40, in: 'stage' })
+  expect(await ui.find({ type: 'Text', text: /│token-bucket +│/, in: 'stage' })).toBeDefined()
+  await step($, 'c1')
+  await $.tool.call({ agentId: 'c1', tool: 'Read', file_path: `${DISH}/packets/token-bucket.md` } as never)
+  await $.tool.call({ agentId: 'c1', tool: 'Edit', file_path: '/repo/.brigade/worktrees/limits--token-bucket/src/bucket.ts' } as never)
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /│♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│editing bucket\.ts +│/, in: 'stage' })).toBeDefined()
+  // Long past the calls that work out who an agent is, what it is doing still reaches its card.
+  for (let i = 0; i < 400; i++) await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'ls' } as never)
+  await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'node --test test/bucket.test.mjs' } as never)
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /│running tests +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /editing bucket\.ts/, in: 'stage' })).toBeUndefined()
+  await ui.unmount()
+  // Surfaces without a region say the same in a line per agent.
+  const text = await $.ui.mount({ plugin: 'brigade', surface: 'mobile', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  expect(await text.find({ type: 'Text', text: /^Basil · cook · token-bucket · running tests$/ })).toBeDefined()
+  expect(await text.find({ type: 'Text', text: /^Cooking 1: token-bucket$/ })).toBeDefined()
+  await text.unmount()
+})
+
+test("the Planner's own tool calls show as what it is doing", async ($, on) => {
+  const clock = mock.clock(on)
+  engine(on)
+  on('command.register', async () => ({ value: {} }))
+  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-4-5', messageCount: 1 })) void chunk
+  const ui = await board($)
+  expect(await ui.find({ type: 'Text', text: /✦ Basil · planner/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /searching/, in: 'stage' })).toBeUndefined()
+  expect(await $.tool.call({ tool: 'Grep', pattern: 'bucket' } as never)).toEqual({ result: 'ok' })
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /searching/, in: 'stage' })).toBeDefined()
+  await ui.unmount()
 })
