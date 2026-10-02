@@ -88,7 +88,9 @@ plugin-level suite is `claude plugin eval . --trust-plugin --scaffold --runs 1
 --allow-tools Write Edit --model sonnet --judge-model haiku --no-publish --max-cost-usd
 25` — it loads the plugin the way a user's session does and reports a with/without delta
 per case; `--max-cost-usd 0` is a free load check (exit 2 = every case loaded). Results
-land in `evals/results/` and are never committed.
+land in `evals/results/` and are never committed. The writing-rules experiment kit in
+`evals/experiments/writing-rules/` (E-004) is operator-run too: nothing in the gate runs it,
+and its README says how to run the grid by hand.
 
 Workflow scripts are not run through `node --check`: they execute inside an async
 function the Workflow tool builds, where a top-level `return` is legal, and Node 22+

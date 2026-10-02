@@ -171,6 +171,7 @@ Resolve once per dish (zero model tokens):
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" resolve --json     # merged settings + which layer set each key
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" prompts --json     # prompt-override stacks, by role
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" doctor             # validate every layer; exit 1 on problems
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" writing --json     # writing preset, rules, and checks, by artifact
 ```
 
 Pass the resolved settings into every workflow script as `overrides`, the prompt stacks as

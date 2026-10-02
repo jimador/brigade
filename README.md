@@ -248,6 +248,7 @@ board's own code and draws every frame with it; the whole run plays in under 30 
 | `skills/brigade/TIERS.md` | service-tier reference and difficult-planning triggers |
 | `skills/brigade/GRAPHITE.md` | optional Graphite modes, both off by default |
 | `skills/brigade/sources/` | one adapter per ticket source, plus the four-operation template for writing your own |
+| `skills/brigade/writing/` | writing presets; `ste-80.md` holds the sentence rules the Planner writes work packets to when the preset is on |
 | `skills/brigade/templates/` | per-repo board config, one example per settings layer, and the work-packet format |
 | `skills/groom/SKILL.md` | board-grooming session: cluster, split, merge, sharpen. Never cooks |
 | `agents/` | scout, cook, heavy cook, inspector, analyst, design, designer |
@@ -264,6 +265,30 @@ board's own code and draws every frame with it; the whole run plays in under 30 
 | `hooks/board/` | the live board pane (`/brigade-board`): the task board with agents as pixel sprites coloured by model, a context meter, Messages and Learnings panels, and a detail box on click in the terminal, from a button on desktop |
 | `evals/` | `claude plugin eval` suite: eleven expected-workflow cases with scaffolded fixtures; results stay local |
 | `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
+
+## Writing rules
+
+Each artifact can carry its own writing rules: plain sentences in the `writing` block of any
+config layer, handed only to the agent that writes that artifact (`packet`, `plan`, `brief`,
+`report`, `verdict`, `ticket_comment`, `pr_body`). Rules stack across layers like prompt
+overrides.
+
+The `ste-80` preset holds work packets to short sentences with one instruction each, based
+on the sentence rules of Simplified Technical English. It is off by default. Turn it on in
+any layer:
+
+```json
+{ "writing": { "preset": "ste-80" } }
+```
+
+`brigade-config writing --json` prints the resolved block. With the preset on, the Planner
+writes `writing: ste-80` into the plan, and `brigade-validate` warns on a step sentence over
+20 words, a description sentence over 25, a step with more than one instruction,
+vendor-specific markup, and any word the `checks.packet.terms` map bans. Misses are warnings
+only; none fails a plan. Details in `skills/brigade/CONFIG.md`.
+
+Whether the preset helps is experiment E-004 in `docs/experiments.md`, run by an operator
+with the kit in `evals/experiments/writing-rules/`. It is pending: no result yet.
 
 ## Requirements
 

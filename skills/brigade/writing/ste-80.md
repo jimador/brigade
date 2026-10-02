@@ -33,7 +33,7 @@ Apply the C rules to the contracts and to each acceptance criterion in the packe
 
 - C1. Write the requirement keywords MUST, SHOULD and MAY in capitals.
 - C2. Give each keyword the usual meaning. MUST is required, SHOULD applies unless the packet states a reason, and MAY is optional.
-- C3. Write each criterion as a fact that a command or a reader can observe, as in "`npm test` exits 0".
+- C3. Write each criterion as a fact that a command or a reader can observe, as in "`./test/regression.sh` exits 0".
 - C4. State one fact in each criterion. If a criterion holds two facts, split the criterion in two.
 
 ## Any language model must be able to read it
