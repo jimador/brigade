@@ -39,5 +39,15 @@
         "Database work goes through the repository layer; never write raw SQL in a handler."
       ]
     }
+  },
+
+  "_writing_comment": "Writing rules for what brigade writes. preset is none or ste-80; a later layer replaces it. Rules for each artifact (packet, plan, brief, report, verdict, ticket_comment, pr_body) stack across layers, so a personal layer can add a rule but never remove this one. Run `brigade-config writing` to see what applies.",
+  "writing": {
+    "preset": "ste-80",
+    "rules": {
+      "ticket_comment": [
+        "Start with the outcome in one sentence, then link the pull request."
+      ]
+    }
   }
 }

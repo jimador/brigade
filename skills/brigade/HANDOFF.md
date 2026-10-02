@@ -57,12 +57,15 @@ in the repo config this step becomes `gt sync` + `gt submit --stack`, one PR per
 see `GRAPHITE.md`. With `remote_pr: false` in `.brigade/config.md`, or an operator
 directive to land without a PR: rebase onto the latest main, prove the gate on the tip,
 fast-forward push (never `--force`), and say so in the handoff; the ticket then moves
-on the human's review of the pushed branch.
+on the human's review of the pushed branch. When the session start listed writing rules, the
+PR body follows the preset's rule text and every `pr_body` rule.
 
 ## 4. Ticket and comment
 
 Move the ticket to its in-review-equivalent status; post a handoff comment — what changed,
 how it was verified, how to review — plain language, nothing a board reader can't open.
+When the session start listed writing rules, the comment follows the preset's rule text and
+every `ticket_comment` rule.
 
 ## 5. Retro
 

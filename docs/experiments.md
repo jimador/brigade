@@ -66,3 +66,40 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   choreography.
 - decision: reject
 - evidence: `docs/architecture.md` § Git model.
+
+### E-004 The ste-80 writing preset for work packets
+
+- date: 2026-10-02
+- hypothesis: an agent given a packet whose steps follow the `ste-80` preset
+  (`skills/brigade/writing/ste-80.md`) passes the packet's Verify step on the first attempt
+  more often than an agent given the same packet written as packets are today.
+- setup: the kit in `evals/experiments/writing-rules/` — one fixture repo (`fixture.sh`,
+  plain JavaScript, `node --test`) and six work items of graded difficulty, two of them with
+  a hazard a hasty reader gets wrong. Each item has a `plain.md` and a `ste-80.md` packet with
+  the same files, contracts, Verify command and facts; only the writing differs. Each
+  item-and-style cell runs at least three times on one model: a fresh fixture copy, one
+  agent, the packet as its whole instruction, one attempt, judged by the item's hidden test
+  through `verify.sh`. The grid repeats on a second model family when one is available.
+  Held constant: fixture, facts, Verify command, judge and model.
+- metric: first-attempt pass rate per style (passes / runs, with the run count), per model.
+- result: three runs a cell, six items, two models. claude-haiku (run as an in-session haiku subagent, packet handed as a file, one line naming the fixture folder): plain 15/18, ste-80 16/18. gpt-5.5 (run with codex exec, reasoning effort low, packet as the prompt, fixture folder as the working directory): plain 18/18, ste-80 18/18. Totals: plain 33/36, ste-80 34/36. gpt-5.5 passed every run in both styles, so these six items cannot show a difference between the styles on it: they do not measure the preset on that model. On claude-haiku the styles differed on two items, in opposite directions: `2-compound-duration` plain 3/3, ste-80 2/3; `6-limiter-retry` plain 0/3, ste-80 2/3. Three runs a cell is too few to call either difference real; each is a direction, not a finding. The one-run gap on claude-haiku (1/18 of pass rate, under 6 points) is far short of the 15 points adoption needs.
+- decision: keep watching — `ste-80` did not beat plain by 15 points on any model and was not lower on every model; the preset stays off by default. A rerun needs items hard enough that neither model passes every run.
+- evidence: `.brigade/evals/writing-rules/results.json` (cells, totals, per-model rates and
+  how each model was run), with per-run records beside it; local, never committed. The
+  kit's `README.md` says how a run goes. The task of the `packet-is-model-neutral` eval case
+  was run once on gpt-5.5, as the planner reading the skill's files, and the packet it wrote
+  passed the case's three pattern graders and its self-contained grader; the record is
+  `.brigade/evals/writing-rules/neutrality/result.json`, local, never committed.
+  The three eval cases for the writing rules (`evals/packet-follows-writing-preset`,
+  `evals/writing-rules-reach-ticket-comment`, `evals/packet-is-model-neutral`) were run with
+  `claude plugin eval` after the last change to the graders and the preset, on sonnet with a haiku
+  judge, three runs with the plugin and three without. Score with against score without, and runs
+  that passed every grader: preset case 0.89 against 0.33, 2 of 3 against 0 of 3; ticket comment
+  case 1.00 against 0.67, 3 of 3 against 1 of 3; neutrality case 1.00 against 0.92, 3 of 3 against
+  2 of 3. The neutrality case is a guard: a careful model passes it without the plugin. The one miss
+  with the plugin was a step sentence of more than 20 words. One run without the plugin read the
+  repository's config file and followed the comment rules by itself. An earlier run, before two
+  graders and rules S1, C1 and C3 of the preset were corrected, scored 0.78 against 0.56 on the
+  preset case and 0.89 against 0.44 on the ticket comment case. Three runs an arm is a direction,
+  not a rate. The records are `.brigade/evals/writing-rules/cases-2/` and `cases-3/`, local, never
+  committed.

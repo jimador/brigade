@@ -1,0 +1,77 @@
+diff --git a/src/rate-limiter.js b/src/rate-limiter.js
+index 277ae8e..815a4c2 100644
+--- a/src/rate-limiter.js
++++ b/src/rate-limiter.js
+@@ -1,15 +1,29 @@
+-// A fixed-window rate limiter. Each key may make `limit` calls per window of
+-// `windowMs` milliseconds; the window starts at the key's first call. `now` is the
++// A fixed-window rate limiter. Each key may make `limit` calls per window; the
++// window starts at the key's first call. Give the window length either as `window`,
++// a duration string such as "5m", or as `windowMs` in milliseconds. `now` is the
+ // clock, which tests replace with a fake one.
+-function createRateLimiter({ limit, windowMs, now = Date.now }) {
++const { parseDuration } = require('./duration.js')
++
++function createRateLimiter({ limit, window, windowMs, now = Date.now }) {
++  if ((window === undefined) === (windowMs === undefined)) {
++    throw new Error('give exactly one of window and windowMs')
++  }
++  const lengthMs = window === undefined ? windowMs : parseDuration(window)
+   const windows = new Map()
+ 
++  // The key's window if it is still running at `time`, otherwise undefined.
++  function liveWindow(key, time) {
++    const current = windows.get(key)
++    if (!current || time - current.start >= lengthMs) return undefined
++    return current
++  }
++
+   return {
+     // Records one call for the key and says whether the call is allowed.
+     allow(key) {
+       const time = now()
+-      let current = windows.get(key)
+-      if (!current || time - current.start >= windowMs) {
++      let current = liveWindow(key, time)
++      if (!current) {
+         current = { start: time, count: 0 }
+         windows.set(key, current)
+       }
+@@ -17,6 +31,14 @@ function createRateLimiter({ limit, windowMs, now = Date.now }) {
+       current.count += 1
+       return true
+     },
++    // How long the key must wait before allow() would pass: 0 when it would pass
++    // now. It only looks; it records no call and starts no window.
++    retryAfterMs(key) {
++      const time = now()
++      const current = liveWindow(key, time)
++      if (!current || current.count < limit) return 0
++      return current.start + lengthMs - time
++    },
+   }
+ }
+ 
+diff --git a/test/rate-limiter.test.js b/test/rate-limiter.test.js
+index 155a621..d48f769 100644
+--- a/test/rate-limiter.test.js
++++ b/test/rate-limiter.test.js
+@@ -12,3 +12,18 @@ test('rate limiter allows `limit` calls per window, per key', () => {
+   time = 1000
+   assert.equal(limiter.allow('alex'), true)
+ })
++
++test('rate limiter reads a window string and says when to retry', () => {
++  let time = 0
++  const limiter = createRateLimiter({ limit: 1, window: '1s', now: () => time })
++  assert.equal(limiter.retryAfterMs('alex'), 0)
++  assert.equal(limiter.allow('alex'), true)
++  time = 250
++  assert.equal(limiter.retryAfterMs('alex'), 750)
++})
++
++test('rate limiter needs exactly one window option', () => {
++  assert.throws(() => createRateLimiter({ limit: 1 }), {
++    message: 'give exactly one of window and windowMs',
++  })
++})

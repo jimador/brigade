@@ -14,9 +14,11 @@
 //   brigade-validate --json          # machine-readable results
 //
 // Exit codes: 0 = all conforming, 1 = violations found, 2 = usage/IO error.
+// Writing checks on a plan's packets (`writing: <preset>`) only ever add warnings.
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 const STATUSES = ['todo', 'dispatched', 'in_review', 'rework', 'done', 'blocked']
 const SEVERITIES = ['blocking', 'high', 'medium', 'low']
@@ -104,6 +106,312 @@ function nestedFieldValues(fm, listKey, field) {
     if (m && m[1]) values.push(m[1].trim())
   }
   return values
+}
+
+// --- writing checks on packets ----------------------------------------------
+//
+// A plan that says `writing: <preset>` gets its packets checked against the writing
+// rules a script can check: sentence length, one instruction per step, no
+// vendor-specific markup, approved terms. Plans are model-written and can be huge or
+// hostile, so every scan here is one pass over each line, and every pattern has at
+// most one unbounded run. Every miss is a warning; none of them can fail a plan.
+
+const WRITING_SKIPPED = 'writing checks skipped: could not resolve writing config'
+const WRITING_CONFIG_TIMEOUT_MS = 5000
+
+// The plan's value of `writing:`, without a trailing comment or quotes.
+function writingPreset(fm) {
+  let value = fmValue(fm, 'writing') || ''
+  const comment = value.search(/\s#/)
+  if (comment >= 0) value = value.slice(0, comment)
+  value = value.trim()
+  if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
+    value = value.slice(1, -1)
+  }
+  return value
+}
+
+// The repository a plan belongs to: the nearest folder above it holding `.brigade`,
+// else its git top level, else the plan's own folder.
+function planRepo(file) {
+  const start = path.dirname(path.resolve(file))
+  for (let cursor = start; ; ) {
+    if (fs.existsSync(path.join(cursor, '.brigade'))) return cursor
+    const parent = path.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: start,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return start
+  }
+}
+
+// Asks the brigade-config next to this script for the plan's packet checks, once per
+// plan. The plan's own preset is passed in, so a plan validated from a worktree or a
+// subfolder still gets its preset. Returns null when the answer can't be trusted:
+// the command failed, hung past the timeout, or printed something other than the
+// expected shape.
+function loadPacketChecks(file, preset) {
+  const repo = planRepo(file)
+  const sibling = path.join(path.dirname(fileURLToPath(import.meta.url)), 'brigade-config')
+  let out
+  try {
+    out = execFileSync(process.execPath, [sibling, 'writing', '--json', '--preset', preset], {
+      cwd: repo,
+      // brigade-config prefers these variables over its working directory, so point
+      // them at the plan's repository too.
+      env: { ...process.env, BRIGADE_PROJECT_DIR: repo },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: WRITING_CONFIG_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    })
+  } catch {
+    return null
+  }
+  let packet
+  try {
+    packet = JSON.parse(out)?.checks?.packet
+  } catch {
+    return null
+  }
+  return packetChecks(packet)
+}
+
+// Checks the shape of `checks.packet` and compiles the approved terms. Any value of the
+// wrong type means the output is not what we asked for, so nothing gets checked.
+function packetChecks(raw) {
+  const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  const isLimit = (v) => Number.isInteger(v) && v >= 0
+  if (!isObject(raw) || !isObject(raw.terms)) return null
+  if (!isLimit(raw.maxStepWords) || !isLimit(raw.maxDescriptionWords)) return null
+  if (typeof raw.oneInstructionPerStep !== 'boolean' || typeof raw.vendorNeutral !== 'boolean') return null
+  const terms = []
+  for (const [term, banned] of Object.entries(raw.terms)) {
+    if (!Array.isArray(banned)) return null
+    for (const word of banned) {
+      if (typeof word !== 'string') return null
+      if (word.trim() === '') continue
+      // A whole word: no letter, digit or underscore right before or after it.
+      const literal = word.trim().replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+      terms.push({ term, banned: word.trim(), pattern: new RegExp(`(?<![\\p{L}\\p{N}_])${literal}(?![\\p{L}\\p{N}_])`, 'iu') })
+    }
+  }
+  return {
+    maxStepWords: raw.maxStepWords,
+    maxDescriptionWords: raw.maxDescriptionWords,
+    oneInstructionPerStep: raw.oneInstructionPerStep,
+    vendorNeutral: raw.vendorNeutral,
+    terms,
+  }
+}
+
+// XML-style tags, chat-template tokens, and the agent's tools named as proper nouns.
+// Each alternative starts on a fixed character and has at most one run, which stops at
+// the first character outside its class, so a line of 100,000 `<` stays linear.
+const VENDOR_MARKUP = /<\/?[A-Za-z][\w:.-]*>|<\|[^|\n]{0,64}\|>|\[\/?INST\]|\b[Tt]he (?:Read|Grep|Bash|Edit|Write) tool\b/
+
+const FENCE = /^\s*(`{3,}|~{3,})(.*)$/
+// `- `, `* `, `+ `, `1. `, `1) `, optionally followed by a `[ ]` checkbox.
+const LIST_MARKER = /^\s*(?:[-*+]|(\d{1,9})[.)])(?:\s+\[[ xX]\])?(?=\s|$)/
+const JOINED_INSTRUCTIONS = [', then ', ' and then ', '; ']
+
+// Splits a line into prose and inline code. A run of backticks opens a code span that
+// the next run of the same length closes; a run with no partner is plain text. One
+// forward cursor per run length keeps this a single pass even for a line of backticks.
+function codeSegments(line) {
+  const runs = []
+  for (let i = line.indexOf('`'); i >= 0; i = line.indexOf('`', i)) {
+    let end = i
+    while (line[end] === '`') end++
+    runs.push({ start: i, len: end - i })
+    i = end
+  }
+  if (runs.length === 0) return [{ text: line, code: false }]
+  const byLen = new Map()
+  runs.forEach((run, k) => {
+    if (!byLen.has(run.len)) byLen.set(run.len, { at: [], cursor: 0 })
+    byLen.get(run.len).at.push(k)
+  })
+  const segments = []
+  let pos = 0
+  for (let k = 0; k < runs.length; ) {
+    const same = byLen.get(runs[k].len)
+    while (same.cursor < same.at.length && same.at[same.cursor] <= k) same.cursor++
+    if (same.cursor >= same.at.length) {
+      k++
+      continue
+    }
+    const close = same.at[same.cursor]
+    if (runs[k].start > pos) segments.push({ text: line.slice(pos, runs[k].start), code: false })
+    segments.push({ text: line.slice(runs[k].start + runs[k].len, runs[close].start), code: true })
+    pos = runs[close].start + runs[close].len
+    k = close + 1
+  }
+  if (pos < line.length) segments.push({ text: line.slice(pos), code: false })
+  return segments
+}
+
+// Walks every packet in a plan body and adds a warning for each writing miss.
+// `firstLine` is the file line number of body[0], so messages point into the file.
+function checkPackets(body, firstLine, checks, warnings) {
+  let fence = null // the open fence's marker while inside fenced code
+  let slug = null // the packet we are in, if any
+  let section = '' // its current `### ` heading, lower-cased
+  let hasSection = false // whether the packet has had a `### ` heading yet
+  let block = null // the prose block being read for the sentence checks
+
+  const warn = (n, message) => warnings.push(`packet ${slug} line ${n}: ${message}`)
+
+  // A word is a whitespace-separated token with a letter or digit in it, or with inline
+  // code in it; a sentence ends at . ! or ? followed by a space or the end of the line.
+  const endToken = () => {
+    if (block.inToken && block.tokenIsWord) {
+      if (block.words === 0) block.start = block.tokenLine
+      block.words++
+    }
+    block.inToken = false
+    block.tokenIsWord = false
+  }
+  const endSentence = () => {
+    endToken()
+    if (block.limit > 0 && block.words > block.limit) {
+      warn(block.start, `${block.kind} sentence has ${block.words} words (limit ${block.limit})`)
+    }
+    block.words = 0
+    if (block.step && !block.firstDone) {
+      block.firstDone = true
+      const first = block.firstText.toLowerCase()
+      if (JOINED_INSTRUCTIONS.some((joint) => first.includes(joint))) {
+        warn(block.stepLine, 'step holds more than one instruction')
+      }
+    }
+  }
+  const endBlock = () => {
+    if (block) endSentence()
+    block = null
+  }
+  const startToken = (n) => {
+    if (!block.inToken) {
+      block.inToken = true
+      block.tokenLine = n
+    }
+  }
+
+  // Reads one line of prose into the current block.
+  const readProse = (segments, n) => {
+    for (let s = 0; s < segments.length; s++) {
+      const { text, code } = segments[s]
+      if (code) {
+        startToken(n)
+        block.tokenIsWord = true
+        // A placeholder with no spaces, so a joint can't run across inline code.
+        if (block.step && !block.firstDone) block.firstText += '\u0000'
+        continue
+      }
+      const lastSegment = s === segments.length - 1
+      for (let j = 0; j < text.length; j++) {
+        const c = text[j]
+        if (block.step && !block.firstDone) block.firstText += c
+        if (c === ' ' || c === '\t') {
+          endToken()
+          continue
+        }
+        startToken(n)
+        if (!block.tokenIsWord && /[\p{L}\p{N}]/u.test(c)) block.tokenIsWord = true
+        if (c === '.' || c === '!' || c === '?') {
+          const next = j + 1 < text.length ? text[j + 1] : lastSegment ? '' : '`'
+          if (next === '' || next === ' ' || next === '\t') endSentence()
+        }
+      }
+    }
+    endToken()
+    // A wrapped line carries on the same sentence, joined by a space.
+    if (block.step && !block.firstDone) block.firstText += ' '
+  }
+
+  for (let i = 0; i < body.length; i++) {
+    const line = body[i]
+    const n = firstLine + i
+
+    const fenceMatch = line.match(FENCE)
+    if (fence) {
+      const [, marker, rest] = fenceMatch || []
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === '') fence = null
+      continue
+    }
+    if (fenceMatch) {
+      endBlock()
+      fence = fenceMatch[1]
+      continue
+    }
+
+    if (line.startsWith('## ')) {
+      // A `## ` line right under `## Packet:`, before any `### ` section, is the packet's
+      // title line from the template. It keeps the packet open and is not checked itself.
+      if (slug !== null && !hasSection && !line.startsWith('## Packet:')) continue
+      endBlock()
+      slug = line.startsWith('## Packet:') ? line.slice('## Packet:'.length).trim() : null
+      section = ''
+      hasSection = false
+    }
+    if (slug === null) continue
+
+    const segments = codeSegments(line)
+    const prose = segments.map((seg) => (seg.code ? seg : { text: seg.text.replace(/\*\*|__/g, ''), code: false }))
+
+    if (checks.vendorNeutral) {
+      for (const seg of prose) {
+        const hit = seg.code ? null : seg.text.match(VENDOR_MARKUP)
+        if (hit) {
+          warn(n, `vendor-specific markup "${hit[0]}"`)
+          break
+        }
+      }
+    }
+    for (const { term, banned, pattern } of checks.terms) {
+      if (prose.some((seg) => !seg.code && pattern.test(seg.text))) {
+        warn(n, `says "${banned}", the approved term is "${term}"`)
+      }
+    }
+
+    if (/^#{1,6}\s/.test(line)) {
+      endBlock()
+      if (line.startsWith('### ')) {
+        section = line.slice(4).trim().toLowerCase()
+        hasSection = true
+      }
+      continue
+    }
+    if (line.trim() === '') {
+      endBlock()
+      continue
+    }
+
+    const kind = section === 'steps' ? 'step' : section === 'goal' || section === 'preconditions & hazards' ? 'description' : null
+    if (kind === null) continue
+    const limit = kind === 'step' ? checks.maxStepWords : checks.maxDescriptionWords
+
+    // A list marker starts a new block and is not a word; a numbered one in Steps is a step.
+    const marker = prose[0] && !prose[0].code ? prose[0].text.match(LIST_MARKER) : null
+    if (marker) {
+      endBlock()
+      prose[0] = { text: prose[0].text.slice(marker[0].length), code: false }
+    }
+    if (!block) {
+      const step = kind === 'step' && Boolean(marker && marker[1]) && checks.oneInstructionPerStep
+      block = { kind, limit, words: 0, start: n, inToken: false, tokenIsWord: false, tokenLine: n,
+        step, stepLine: n, firstDone: false, firstText: '' }
+    }
+    readProse(prose, n)
+  }
+  if (block) endBlock()
 }
 
 function validateFile(file) {
@@ -217,6 +525,11 @@ function validateFile(file) {
             }
           }
         }
+      }
+      if (keys.has('writing')) {
+        const checks = loadPacketChecks(file, writingPreset(fm))
+        if (checks) checkPackets(body, fm.length + 3, checks, warnings)
+        else warnings.push(WRITING_SKIPPED)
       }
       break
     }

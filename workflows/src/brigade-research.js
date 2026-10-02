@@ -53,9 +53,11 @@ Budget: the brief body must be ≤ 150 lines.`
 
   // Text the operator's config layers add to every scout dispatch.
   const scoutExtras = (A.promptOverrides || {}).scout
+  // The repo's writing rules per artifact (`brigade-config writing --json`); may be absent.
+  const writing = A.writing
 
   const results = await parallel(
-    kept.map((q) => async () => agent(withPromptOverrides(scoutPrompt(q), scoutExtras), {
+    kept.map((q) => async () => agent(withWritingRules(withPromptOverrides(scoutPrompt(q), scoutExtras), writing, 'brief'), {
       label: `scout:${q.topic}`,
       phase: 'Scout',
       schema: SCHEMA_BRIEF_RETURN,

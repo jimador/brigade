@@ -1,0 +1,46 @@
+diff --git a/src/tasks.js b/src/tasks.js
+index 392bccf..bdc4eba 100644
+--- a/src/tasks.js
++++ b/src/tasks.js
+@@ -9,4 +9,20 @@ function openTasks(tasks) {
+   return tasks.filter((task) => !task.done)
+ }
+ 
+-module.exports = { PRIORITY_RANK, openTasks }
++// Returns a new array of the same tasks, done or not: high priority first, then by
++// due date, earliest first, with undated tasks after the dated ones. Ties keep their
++// input order. The caller's array is copied first because sort() works in place.
++function orderTasks(tasks) {
++  return [...tasks].sort((a, b) => {
++    const byPriority = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
++    if (byPriority !== 0) return byPriority
++    if (a.due === undefined || b.due === undefined) {
++      return (a.due === undefined ? 1 : 0) - (b.due === undefined ? 1 : 0)
++    }
++    if (a.due < b.due) return -1
++    if (a.due > b.due) return 1
++    return 0
++  })
++}
++
++module.exports = { PRIORITY_RANK, openTasks, orderTasks }
+diff --git a/test/tasks.test.js b/test/tasks.test.js
+index 79c43e4..495b9ee 100644
+--- a/test/tasks.test.js
++++ b/test/tasks.test.js
+@@ -10,3 +10,15 @@ test('openTasks keeps the tasks that are not done, in order', () => {
+   ]
+   assert.deepEqual(openTasks(tasks).map((task) => task.id), ['t1', 't3'])
+ })
++
++const { orderTasks } = require('../src/tasks.js')
++
++test('orderTasks sorts a copy by priority, then due date', () => {
++  const tasks = [
++    { id: 't1', title: 'Tidy notes', priority: 'normal', done: false },
++    { id: 't2', title: 'Pay rent', priority: 'high', due: '2026-03-02', done: false },
++    { id: 't3', title: 'Book room', priority: 'normal', due: '2026-03-09', done: false },
++  ]
++  assert.deepEqual(orderTasks(tasks).map((task) => task.id), ['t2', 't3', 't1'])
++  assert.deepEqual(tasks.map((task) => task.id), ['t1', 't2', 't3'])
++})

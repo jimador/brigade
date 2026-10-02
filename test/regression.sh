@@ -488,6 +488,225 @@ if order != sorted(order):
 ' || fail "brigade-config prompt stacked overrides in the wrong order"
 }
 
+test_config_writing_layers() {
+  # Writing rules stack like prompt overrides; the preset and each check key are
+  # replaced by a later layer; `terms` is replaced whole, never merged.
+  fixture="$TMP_ROOT/config-writing-layers"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+  cat >"$fixture/home/config.json" <<'EOF'
+{ "writing": { "preset": "ste-80",
+  "rules": { "packet": ["GLOBAL PACKET"], "ticket_comment": ["GLOBAL COMMENT"] },
+  "checks": { "packet": { "maxDescriptionWords": 40, "terms": { "work item": ["task", "slice"] } } } } }
+EOF
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "writing": { "rules": { "packet": ["TEAM PACKET"] },
+  "checks": { "packet": { "terms": { "dish": ["epic"] } } } } }
+EOF
+  cat >"$fixture/.brigade/config.local.json" <<'EOF'
+{ "writing": { "preset": "none", "rules": { "packet": ["LOCAL PACKET"] },
+  "checks": { "packet": { "maxStepWords": 12 } } } }
+EOF
+
+  writing="$(config_run "$fixture" writing --json)" ||
+    fail "brigade-config writing --json failed on three stacked layers"
+  resolved="$(config_run "$fixture" resolve --json)"
+  python3 - "$writing" "$resolved" <<'PY' || fail "brigade-config writing layers resolved wrong"
+import json, sys
+
+w = json.loads(sys.argv[1])
+resolved = json.loads(sys.argv[2])
+artifacts = ["packet", "plan", "brief", "report", "verdict", "ticket_comment", "pr_body"]
+if sorted(w) != ["checks", "preset", "presetFile", "rules"]:
+    raise SystemExit(f"top-level keys wrong: {sorted(w)}")
+if sorted(w["rules"]) != sorted(artifacts):
+    raise SystemExit(f"rules keys wrong: {sorted(w['rules'])}")
+if w["preset"] != "none" or w["presetFile"] is not None:
+    raise SystemExit(f"local layer should replace the preset: {w['preset']!r} {w['presetFile']!r}")
+if w["rules"]["packet"] != ["GLOBAL PACKET", "TEAM PACKET", "LOCAL PACKET"]:
+    raise SystemExit(f"rules did not stack in layer order: {w['rules']['packet']!r}")
+if w["rules"]["ticket_comment"] != ["GLOBAL COMMENT"]:
+    raise SystemExit(f"an untouched artifact lost its rule: {w['rules']['ticket_comment']!r}")
+if any(w["rules"][a] for a in artifacts if a not in ("packet", "ticket_comment")):
+    raise SystemExit(f"unset artifacts should resolve to []: {w['rules']!r}")
+expected = {"maxStepWords": 12, "maxDescriptionWords": 40, "oneInstructionPerStep": False,
+            "vendorNeutral": False, "terms": {"dish": ["epic"]}}
+if w["checks"] != {"packet": expected}:
+    raise SystemExit(f"checks resolved wrong: {w['checks']!r}")
+if resolved["config"].get("writing") != w:
+    raise SystemExit(f"resolve --json and writing --json disagree: {resolved['config'].get('writing')!r}")
+PY
+}
+
+test_config_writing_preset() {
+  ste_checks='{"maxStepWords": 20, "maxDescriptionWords": 25, "oneInstructionPerStep": true, "vendorNeutral": true, "terms": {}}'
+
+  # The preset alone fills the default checks. The command must not fail when the
+  # preset's rule text is not on disk yet.
+  fixture="$TMP_ROOT/config-writing-preset"
+  mkdir -p "$fixture/home"
+  printf '{ "writing": { "preset": "ste-80" } }\n' >"$fixture/home/config.json"
+  writing="$(config_run "$fixture" writing --json)" ||
+    fail "brigade-config writing --json failed with preset ste-80"
+  python3 - "$writing" "$ste_checks" "$ROOT" <<'PY' || fail "preset ste-80 did not fill the default checks"
+import json, os, sys
+
+w, expected, root = json.loads(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3]
+if w["preset"] != "ste-80":
+    raise SystemExit(f"preset: {w['preset']!r}")
+if w["checks"]["packet"] != expected:
+    raise SystemExit(f"default checks wrong: {w['checks']['packet']!r}")
+want = os.path.join(root, "skills", "brigade", "writing", "ste-80.md")
+if not os.path.isabs(w["presetFile"] or "") or os.path.realpath(w["presetFile"]) != os.path.realpath(want):
+    raise SystemExit(f"presetFile: expected {want!r}, got {w['presetFile']!r}")
+PY
+
+  # An explicit 0 or false from any layer turns a check off, even under the preset.
+  off="$TMP_ROOT/config-writing-off"
+  mkdir -p "$off/home"
+  printf '{ "writing": { "preset": "ste-80" } }\n' >"$off/home/config.json"
+  cat >"$off/brigade.config.json" <<'EOF'
+{ "writing": { "checks": { "packet": { "maxStepWords": 0, "vendorNeutral": false } } } }
+EOF
+  writing="$(config_run "$off" writing --json)"
+  python3 - "$writing" <<'PY' || fail "an explicit 0 or false lost to the preset's default"
+import json, sys
+
+packet = json.loads(sys.argv[1])["checks"]["packet"]
+if packet["maxStepWords"] != 0 or packet["vendorNeutral"] is not False:
+    raise SystemExit(f"explicit off values were overwritten: {packet!r}")
+if packet["maxDescriptionWords"] != 25 or packet["oneInstructionPerStep"] is not True:
+    raise SystemExit(f"preset defaults for untouched keys were lost: {packet!r}")
+PY
+
+  # --preset resolves as if writing.preset were set, with no config at all.
+  empty="$TMP_ROOT/config-writing-empty"
+  mkdir -p "$empty/home"
+  writing="$(config_run "$empty" writing --json)" ||
+    fail "brigade-config writing --json failed with no config"
+  python3 - "$writing" <<'PY' || fail "writing --json with no config is not the empty shape"
+import json, sys
+
+w = json.loads(sys.argv[1])
+empty_checks = {"maxStepWords": 0, "maxDescriptionWords": 0, "oneInstructionPerStep": False,
+                "vendorNeutral": False, "terms": {}}
+artifacts = ["packet", "plan", "brief", "report", "verdict", "ticket_comment", "pr_body"]
+if w != {"preset": "none", "presetFile": None, "rules": {a: [] for a in artifacts},
+         "checks": {"packet": empty_checks}}:
+    raise SystemExit(f"unexpected empty shape: {w!r}")
+PY
+  writing="$(config_run "$empty" writing --json --preset ste-80)" ||
+    fail "brigade-config writing --json --preset ste-80 failed"
+  python3 - "$writing" "$ste_checks" <<'PY' || fail "--preset ste-80 did not resolve the default checks"
+import json, sys
+
+w, expected = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+if w["preset"] != "ste-80" or w["checks"]["packet"] != expected:
+    raise SystemExit(f"--preset ste-80 resolved {w!r}")
+PY
+  writing="$(config_run "$fixture" writing --json --preset none)"
+  python3 - "$writing" <<'PY' || fail "--preset none did not win over a configured preset"
+import json, sys
+
+w = json.loads(sys.argv[1])
+if w["preset"] != "none" or w["presetFile"] is not None or w["checks"]["packet"]["maxStepWords"] != 0:
+    raise SystemExit(f"--preset none resolved {w!r}")
+PY
+  if err="$(config_run "$empty" writing --json --preset ste-99 2>&1 >/dev/null)"; then
+    fail "brigade-config writing accepted an unknown --preset"
+  fi
+  [ "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" = 1 ] ||
+    fail "unknown --preset should print one error line, got: $err"
+
+  text="$(config_run "$fixture" writing)" || fail "brigade-config writing (human form) failed"
+  printf '%s\n' "$text" | grep -Fq "ste-80" ||
+    fail "brigade-config writing did not print the preset: $text"
+}
+
+test_config_writing_doctor() {
+  fixture="$TMP_ROOT/config-writing-doctor"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+  cat >"$fixture/home/config.json" <<'EOF'
+{ "writing": { "checks": { "packet": { "maxStepWords": -1 } } } }
+EOF
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "writing": { "rules": { "pakcet": ["Spelled wrong."], "packet": ["Fine.", 7] } } }
+EOF
+  cat >"$fixture/.brigade/config.local.json" <<'EOF'
+{ "writing": { "preset": "ste-99" } }
+EOF
+
+  if config_run "$fixture" doctor >/dev/null 2>&1; then
+    fail "brigade-config doctor passed a malformed writing block"
+  fi
+  json="$(config_run "$fixture" doctor --json || true)"
+  python3 - "$json" "$fixture" <<'PY' || fail "brigade-config doctor missed a writing problem"
+import json, os, sys
+
+doc, fixture = json.loads(sys.argv[1]), sys.argv[2]
+files = {
+    "global": os.path.join(fixture, "home", "config.json"),
+    "team": os.path.join(fixture, "brigade.config.json"),
+    "local": os.path.join(fixture, ".brigade", "config.local.json"),
+}
+cases = [
+    ("writing.rules.pakcet", "team"),                 # unknown artifact
+    ("writing.rules.packet[1]", "team"),              # a rule that is not a string
+    ("writing.preset", "local"),                      # unknown preset
+    ("writing.checks.packet.maxStepWords", "global"), # negative number
+]
+for dotted, layer in cases:
+    hits = [p for p in doc["problems"] if dotted in p["problem"]]
+    if not hits:
+        raise SystemExit(f"doctor did not name {dotted}: {doc['problems']!r}")
+    # TMPDIR often ends in "/", so compare normalised paths rather than raw strings.
+    if not any(p["layer"] == layer and os.path.realpath(p["file"] or "") == os.path.realpath(files[layer])
+               for p in hits):
+        raise SystemExit(f"{dotted}: expected layer {layer} and its file, got {hits!r}")
+PY
+}
+
+test_config_writing_warns_bad_layer() {
+  # A bad `writing` block in one layer must not change what the command prints or its
+  # exit code, but it must not hide either: stderr names the layer's file and the key.
+  fixture="$TMP_ROOT/config-writing-warn"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+  cat >"$fixture/home/config.json" <<'EOF'
+{ "writing": { "preset": "ste-80", "rules": { "packet": ["GLOBAL PACKET"] } } }
+EOF
+  clean_err="$TMP_ROOT/config-writing-warn.clean.err"
+  clean="$(config_run "$fixture" writing --json 2>"$clean_err")" ||
+    fail "brigade-config writing --json failed with one valid layer"
+  [ ! -s "$clean_err" ] || fail "brigade-config writing warned with no bad layer: $(cat "$clean_err")"
+
+  printf '{ "writing": "ste-80" }\n' >"$fixture/.brigade/config.local.json"
+  bad_err="$TMP_ROOT/config-writing-warn.bad.err"
+  status=0
+  bad="$(config_run "$fixture" writing --json 2>"$bad_err")" || status=$?
+  [ "$status" = 0 ] || fail "brigade-config writing exited $status on a bad local layer"
+  [ "$bad" = "$clean" ] || fail "a bad local layer changed writing --json stdout: $bad"
+  python3 -c 'import json, sys; json.loads(sys.argv[1])' "$bad" ||
+    fail "writing --json stdout is not JSON with a bad layer"
+  err="$(cat "$bad_err")"
+  [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] ||
+    fail "expected one stderr line for one bad layer, got: $err"
+  # TMPDIR often ends in "/", so compare normalised paths rather than raw strings.
+  python3 - "$err" "$fixture/.brigade/config.local.json" <<'PY' || fail "stderr does not name the bad layer's file: $err"
+import os, re, sys
+
+found = re.search(r"\(([^()]*)\)\s*$", sys.argv[1])
+if not found or os.path.realpath(found.group(1)) != os.path.realpath(sys.argv[2]):
+    raise SystemExit(f"no layer file at the end of the line: {sys.argv[1]!r}")
+PY
+  printf '%s\n' "$err" | grep -Fq "[local] writing must be an object" ||
+    fail "stderr does not use doctor's words for the bad key: $err"
+
+  # The human form warns the same way and still exits 0.
+  config_run "$fixture" writing >/dev/null 2>"$bad_err" ||
+    fail "brigade-config writing (human form) failed on a bad local layer"
+  grep -Fq "[local] writing must be an object" "$bad_err" ||
+    fail "human form did not warn about the bad layer: $(cat "$bad_err")"
+}
+
 test_config_doctor_catches_problems() {
   fixture="$TMP_ROOT/config-doctor"
   mkdir -p "$fixture/home" "$fixture/.brigade"
@@ -869,6 +1088,70 @@ EOF
   rc=$?
   [ "$rc" -eq 0 ] || fail "hook exited $rc on a non-brigade fixture"
   [ -z "$out3" ] || fail "hook produced output in a non-brigade repo: $out3"
+}
+
+# The Planner writes plans, packets, the ticket comment and the PR body itself, so the
+# session-start hook is the only place its writing rules can reach it. The block shows up
+# when the repo sets a preset or a planner-side rule, and stays away otherwise. A broken
+# or failing config must never fail the hook.
+test_hook_writing_rules() {
+  base="$TMP_ROOT/hook-writing"
+  heading="## writing rules (for the artifacts YOU write"
+  mkdir -p "$base/home"
+  hook_run() { CLAUDE_PROJECT_DIR="$1" BRIGADE_HOME="$base/home" HOME="$base/home" bash "$2"; }
+
+  # (a) a preset and one ticket_comment rule: the block names both.
+  withrules="$base/with-rules"
+  mkdir -p "$withrules/.brigade"
+  (cd "$withrules" && git init -q)
+  cat >"$withrules/.brigade/config.local.json" <<'EOF'
+{ "writing": { "preset": "ste-80",
+  "rules": { "ticket_comment": ["Tell alex which acme service changed in the first sentence."] } } }
+EOF
+  out="$(hook_run "$withrules" "$ROOT/hooks/session-start.sh")" ||
+    fail "hook failed on a repo with writing rules"
+  printf '%s\n' "$out" | grep -Fq "$heading" ||
+    fail "hook did not print the writing rules block: $out"
+  printf '%s\n' "$out" | grep -Fq "ste-80" || fail "writing rules block does not name the preset: $out"
+  printf '%s\n' "$out" | grep -Fq "skills/brigade/writing/ste-80.md" ||
+    fail "writing rules block does not give the preset's rule text path: $out"
+  printf '%s\n' "$out" | grep -Fq "ticket_comment" || fail "writing rules block does not name the artifact: $out"
+  printf '%s\n' "$out" | grep -Fq "Tell alex which acme service changed in the first sentence." ||
+    fail "writing rules block does not carry the ticket_comment rule: $out"
+
+  # (b) no writing config at all: nothing new.
+  plain="$base/plain"
+  mkdir -p "$plain/.brigade"
+  (cd "$plain" && git init -q)
+  out="$(hook_run "$plain" "$ROOT/hooks/session-start.sh")" || fail "hook failed on a repo with no writing config"
+  printf '%s\n' "$out" | grep -Fq "## writing rules" && fail "hook printed writing rules for a repo with none: $out"
+
+  # (c) only a scout-side rule (brief): the Planner writes none of those, so still nothing.
+  briefonly="$base/brief-only"
+  mkdir -p "$briefonly/.brigade"
+  (cd "$briefonly" && git init -q)
+  printf '%s\n' '{ "writing": { "rules": { "brief": ["Lead with the answer."] } } }' \
+    >"$briefonly/.brigade/config.local.json"
+  out="$(hook_run "$briefonly" "$ROOT/hooks/session-start.sh")" || fail "hook failed on a brief-only writing config"
+  printf '%s\n' "$out" | grep -Fq "## writing rules" && fail "hook printed writing rules with no planner-side rule: $out"
+
+  # (d) a config file that is not JSON: the hook still exits 0.
+  broken="$base/broken"
+  mkdir -p "$broken/.brigade"
+  (cd "$broken" && git init -q)
+  printf '%s\n' '{ "writing": { "preset": "ste-80", ' >"$broken/.brigade/config.local.json"
+  hook_run "$broken" "$ROOT/hooks/session-start.sh" >/dev/null 2>&1 || fail "hook failed on an invalid JSON config"
+
+  # (e) a brigade-config that fails and prints junk: the hook still exits 0 and stays quiet.
+  stubroot="$base/stub-plugin"
+  mkdir -p "$stubroot/hooks" "$stubroot/scripts"
+  cp "$ROOT/hooks/session-start.sh" "$stubroot/hooks/session-start.sh"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$stubroot/scripts/brigade-status"
+  printf '%s\n' '#!/bin/sh' 'echo "{ not json"' 'exit 3' >"$stubroot/scripts/brigade-config"
+  chmod +x "$stubroot/scripts/brigade-status" "$stubroot/scripts/brigade-config"
+  out="$(hook_run "$plain" "$stubroot/hooks/session-start.sh")" || fail "hook failed when brigade-config failed"
+  printf '%s\n' "$out" | grep -Fq "## writing rules" && fail "hook printed writing rules from a failing brigade-config: $out"
+  return 0
 }
 
 test_validate_ledger_artifacts() {
@@ -1368,6 +1651,79 @@ for (const [out, re, label] of checks) {
 JS
 }
 
+test_execute_writing_rules() {
+  # Each agent that writes an artifact gets that artifact's writing rules and nobody
+  # else's. args.writing comes from the operator's config, so a bad shape there has to
+  # leave the prompt alone rather than throw: a type mismatch in this path once ended a
+  # whole run before a single agent started.
+  node - "$ROOT/workflows/config.js" <<'JS' || fail "withWritingRules does not append exactly one artifact's rules, or mishandles a bad shape"
+const fs = require('fs')
+const assert = require('assert')
+const src = fs.readFileSync(process.argv[2], 'utf8')
+const fn = new Function(src + '; return typeof withWritingRules === "function" ? withWritingRules : null')()
+assert.ok(fn, 'withWritingRules is missing from workflows/config.js')
+
+const writing = {
+  preset: 'ste-80',
+  presetFile: '/path/to/repo/skills/brigade/writing/ste-80.md',
+  rules: {
+    report: ['Report rule one.', 'Report rule two.'],
+    verdict: ['Verdict rule.'],
+    brief: ['Brief rule.'],
+    packet: ['Packet rule.'],
+    ticket_comment: ['Comment rule.'],
+    pr_body: ['PR rule.'],
+  },
+  checks: {},
+}
+const head = (artifact) => `BASE\n\nWRITING RULES for the ${artifact} you write (from this repo's brigade configuration):\n\n`
+assert.strictEqual(fn('BASE', writing, 'report'), `${head('report')}- Report rule one.\n- Report rule two.\n`, 'report block')
+assert.strictEqual(fn('BASE', writing, 'verdict'), `${head('verdict')}- Verdict rule.\n`, 'verdict block')
+assert.strictEqual(fn('BASE', writing, 'brief'), `${head('brief')}- Brief rule.\n`, 'brief block')
+// The preset's own rule text is for packets only, so the file path never shows up here.
+assert.ok(!fn('BASE', writing, 'report').includes('ste-80'), 'presetFile leaked into a prompt')
+
+// Bad entries are skipped; the good ones still land.
+assert.strictEqual(
+  fn('BASE', { rules: { report: [42, 'Kept rule.', null, '', '   ', { x: 1 }] } }, 'report'),
+  `${head('report')}- Kept rule.\n`,
+  'non-string entries were not skipped',
+)
+
+// Every one of these leaves the prompt exactly as it was, and none of them throws.
+const unchanged = [
+  [undefined, 'report', 'writing undefined'],
+  [null, 'report', 'writing null'],
+  ['a string', 'report', 'writing a string'],
+  [['report'], 'report', 'writing an array'],
+  [42, 'report', 'writing a number'],
+  [{}, 'report', 'rules missing'],
+  [{ rules: null }, 'report', 'rules null'],
+  [{ rules: 'report' }, 'report', 'rules a string'],
+  [{ rules: ['Report rule.'] }, 'report', 'rules an array'],
+  [{ rules: { report: 'a bare string' } }, 'report', 'list a bare string'],
+  [{ rules: { report: [] } }, 'report', 'list empty'],
+  [{ rules: { report: [42, null, '  '] } }, 'report', 'list of non-strings'],
+  [writing, 'nope', 'unknown artifact'],
+  [writing, undefined, 'no artifact'],
+  [writing, 'constructor', 'artifact named after an Object property'],
+  [writing, '__proto__', 'artifact named __proto__'],
+]
+for (const [w, artifact, label] of unchanged) {
+  let out
+  try {
+    out = fn('BASE', w, artifact)
+  } catch (err) {
+    console.error(`${label}: threw ${err && err.message}`)
+    process.exit(1)
+  }
+  assert.strictEqual(out, 'BASE', `${label}: expected the prompt unchanged, got ${JSON.stringify(out)}`)
+}
+JS
+  # The three call sites are pinned by test_workflow_smoke, which runs each workflow
+  # and reads every prompt it hands an agent.
+}
+
 test_workflow_scripts_parse() {
   # Workflow scripts run inside an async function the Workflow tool builds, where a
   # top-level return and the agent()/parallel() globals are legal. Plain node --check
@@ -1665,6 +2021,274 @@ P0: applied — LEARNINGS.md line 3."
     fail "unknown analyst mode validated clean: $output"
   printf '%s\n' "$output" | grep -Fq "invalid analyst mode: exhaustive" ||
     fail "no invalid-mode violation reported: $output"
+}
+
+# Writes the writing-checks fixture plan. $1 is frontmatter line 10: `writing: ste-80`
+# opts the plan in, anything else keeps every line number where the test expects it.
+# The one packet breaks each of the five checks exactly once; the text outside the
+# packet, inside the fenced block and inside backticks breaks them too, and must not count.
+write_writing_plan() {
+  cat >"$2" <<EOF
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-10-01T00:00:00Z
+ticket: TEST-1
+source: local
+$1
+items:
+  - { slug: alpha, status: todo, depends_on: [], heavy: false, files: [src/alpha.ts], attempts: [] }
+---
+
+## Dish
+Fixture for the writing checks. The dish text sits outside every packet, so this long sentence with far more than twenty-five words in it, then a task and a <b> tag, is never checked at all.
+
+## Waves
+- Wave 1: alpha
+
+## Packet: alpha
+
+### Goal
+
+Add a greeting to the acme banner so that every visitor who opens the page sees one short and friendly welcome line before anything else on the screen loads.
+
+### Preconditions & hazards
+
+- Keep the banner short. Alex reads it on a phone.
+
+### Steps
+
+1. **Explore (read-only):** read \`src/alpha.ts\` and the banner tests.
+2. **Implement** the greeting, then run the banner tests.
+3. Write the greeting as one plain line of text that each visitor reads first when the acme page opens in a browser window.
+4. Ask the Read tool for the banner file.
+
+\`\`\`bash
+the Read tool reads <tag> here, then a very long fenced line with far more than twenty words that is code and is never checked by the step rule at all; task
+\`\`\`
+
+### Acceptance criteria
+
+- [ ] Each slice of the banner shows the greeting; \`the Bash tool\` and \`<slug>\` in backticks are fine.
+
+## Notes
+After the packet: the Grep tool and a task here are not checked.
+EOF
+}
+
+test_validate_writing_checks() {
+  fixture="$TMP_ROOT/validate-writing"
+  mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  rel=".brigade/dishes/sample/PLAN.md"
+  # The team layer adds one approved term; ste-80 supplies the other four checks.
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "writing": { "checks": { "packet": { "terms": { "work item": ["task", "slice"] } } } } }
+EOF
+  writing_validate() { CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" "$@"; }
+
+  write_writing_plan "writing: ste-80" "$plan"
+  output="$(writing_validate "$ROOT/scripts/brigade-validate" "$plan" 2>&1)" ||
+    fail "a writing check changed the validator's exit code: $output"
+  expected="warn  $rel: packet alpha line 25: description sentence has 29 words (limit 25)
+warn  $rel: packet alpha line 34: step holds more than one instruction
+warn  $rel: packet alpha line 35: step sentence has 23 words (limit 20)
+warn  $rel: packet alpha line 36: vendor-specific markup \"the Read tool\"
+warn  $rel: packet alpha line 44: says \"slice\", the approved term is \"work item\""
+  got="$(printf '%s\n' "$output" | grep '^warn ' | sort || true)"
+  [ "$got" = "$(printf '%s\n' "$expected" | sort)" ] ||
+    fail "writing checks did not give exactly the five expected warnings:
+--- expected
+$expected
+--- got
+$output"
+  printf '%s\n' "$output" | grep -q '^FAIL' && fail "a writing check produced a FAIL: $output"
+
+  # The same plan without the key validates exactly as it always did.
+  write_writing_plan "tier: two-star" "$plan"
+  output="$(writing_validate "$ROOT/scripts/brigade-validate" "$plan" 2>&1)" ||
+    fail "the plan without writing: failed validation: $output"
+  [ "$output" = "ok    $rel (plan)
+
+1 checked, 0 nonconforming" ] || fail "a plan without writing: was checked differently: $output"
+
+  # A sibling brigade-config that fails, prints the wrong thing or hangs gives one
+  # warning and nothing else. The validator finds its sibling next to itself, so a copy
+  # in a fixture folder picks up the fake.
+  bin="$fixture/bin"
+  mkdir -p "$bin"
+  cp "$ROOT/scripts/brigade-validate" "$bin/brigade-validate"
+  calls="$fixture/calls"
+  skipped="warn  $rel: writing checks skipped: could not resolve writing config"
+  write_writing_plan "writing: ste-80" "$plan"
+  for mode in exit garbage shape hang; do
+    cat >"$bin/brigade-config" <<'EOF'
+const fs = require('fs')
+fs.appendFileSync(process.env.FAKE_CALLS, process.argv.slice(2).join(' ') + '\n')
+const mode = process.env.FAKE_MODE
+if (mode === 'exit') process.exit(1)
+if (mode === 'garbage') console.log('not json at all')
+if (mode === 'shape') console.log(JSON.stringify({ preset: 'ste-80', checks: {} }))
+if (mode === 'hang') setTimeout(() => {}, 60000)
+EOF
+    rm -f "$calls"
+    output="$(FAKE_MODE="$mode" FAKE_CALLS="$calls" writing_validate node "$bin/brigade-validate" "$plan" 2>&1)" ||
+      fail "a broken brigade-config ($mode) changed the validator's exit code: $output"
+    [ "$(printf '%s\n' "$output" | grep '^warn ' || true)" = "$skipped" ] ||
+      fail "a broken brigade-config ($mode) did not give exactly the skipped warning: $output"
+    [ "$(cat "$calls")" = "writing --json --preset ste-80" ] ||
+      fail "the validator did not call brigade-config once with the plan's preset ($mode): $(cat "$calls")"
+  done
+  rm -f "$calls"
+  write_writing_plan "tier: two-star" "$plan"
+  FAKE_MODE=exit FAKE_CALLS="$calls" writing_validate node "$bin/brigade-validate" "$plan" >/dev/null 2>&1 ||
+    fail "the plan without writing: failed next to a broken brigade-config"
+  [ ! -e "$calls" ] || fail "the validator called brigade-config for a plan without writing:"
+}
+
+test_validate_writing_title_line() {
+  # The packet template puts a title line, `## <slug> — <title>`, right under
+  # `## Packet: <slug>`. The writing checks once ended the packet at that line and went
+  # silent on everything below it. A `## ` line ends a packet only after the packet has
+  # had a `### ` section; before that, it is the packet's title and is not checked.
+  fixture="$TMP_ROOT/validate-writing-title"
+  mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  rel=".brigade/dishes/sample/PLAN.md"
+  title_validate() { CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" "$ROOT/scripts/brigade-validate" "$plan" 2>&1; }
+  # Writes a ste-80 plan whose body is the packet text given on stdin.
+  title_plan() {
+    {
+      printf '%s\n' '---' 'doc: plan' 'schema: 1' 'dish: sample' 'role: planner' 'model: haiku' \
+        'created: 2026-10-01T00:00:00Z' 'ticket: TEST-1' 'source: local' 'writing: ste-80' 'items:' \
+        '  - { slug: alpha, status: todo, depends_on: [], heavy: false, files: [src/alpha.ts], attempts: [] }' \
+        '---' '' '## Dish' 'Fixture for the packet title line.' ''
+      cat
+    } >"$plan"
+  }
+  long_step='Write the greeting as one line of text that each visitor to the acme site reads first when the banner page opens in a browser.'
+  long_note='1. Alex wants the greeting to read as one line of text that each visitor to the acme site sees first when the banner page opens.'
+
+  # With the title line: the long step is still found, and `## Notes` after the packet's
+  # sections still ends the packet.
+  printf '%s\n' '## Packet: alpha' '' '## alpha — a title' '' '### Steps' '' "1. $long_step" '' \
+    '## Notes' '' "$long_note" | title_plan
+  n="$(grep -n 'Write the greeting' "$plan" | cut -d: -f1)"
+  got="$(title_validate | grep '^warn ' || true)"
+  [ "$got" = "warn  $rel: packet alpha line $n: step sentence has 25 words (limit 20)" ] ||
+    fail "a packet with a title line did not get exactly the long-step warning on line $n: $got"
+
+  # The same packet without the title line gets the same warning.
+  printf '%s\n' '## Packet: alpha' '' '### Steps' '' "1. $long_step" | title_plan
+  n="$(grep -n 'Write the greeting' "$plan" | cut -d: -f1)"
+  got="$(title_validate | grep '^warn ' || true)"
+  [ "$got" = "warn  $rel: packet alpha line $n: step sentence has 25 words (limit 20)" ] ||
+    fail "a packet without a title line did not get exactly the long-step warning on line $n: $got"
+
+  # A `## ` heading after the packet's sections ends it: the long line under it is not checked.
+  printf '%s\n' '## Packet: alpha' '' '### Steps' '' '1. Read the banner file.' '' \
+    '## Notes' '' "$long_note" | title_plan
+  got="$(title_validate | grep '^warn ' || true)"
+  [ -z "$got" ] || fail "a line under ## Notes after the packet's sections was checked: $got"
+
+  # A title line of more than 25 words is not checked as prose.
+  printf '%s\n' '## Packet: alpha' '' "## alpha — $long_step" '' '### Steps' '' '1. Read the banner file.' |
+    title_plan
+  got="$(title_validate | grep '^warn ' || true)"
+  [ -z "$got" ] || fail "a long packet title line was checked as prose: $got"
+}
+
+test_validate_writing_cost() {
+  # A model-written plan can be huge and hostile. 5,000 lines, with one 100,000-character
+  # step made of ", then " joins and one made of "<", must validate in under 2 seconds.
+  fixture="$TMP_ROOT/validate-writing-cost"
+  mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  node - "$plan" <<'JS'
+const fs = require('fs')
+const head = ['---', 'doc: plan', 'schema: 1', 'dish: sample', 'role: planner', 'model: haiku',
+  'created: 2026-10-01T00:00:00Z', 'ticket: TEST-1', 'source: local', 'writing: ste-80', 'items:',
+  '  - { slug: alpha, status: todo, depends_on: [], heavy: false, files: [src/alpha.ts], attempts: [] }',
+  '---', '', '## Dish', 'Cost fixture.', '', '## Packet: alpha', '', '### Goal', '', 'Stay fast.', '',
+  '### Steps', '', '1. ' + 'a, then '.repeat(12500), '', '<'.repeat(100000), '']
+const lines = head.slice()
+for (let i = 0; lines.length < 4999; i++) lines.push(`- Keep the banner short, line ${i}.`)
+lines.push('### Out of scope')
+fs.writeFileSync(process.argv[2], lines.join('\n') + '\n')
+JS
+  [ "$(wc -l <"$plan" | tr -d ' ')" -ge 5000 ] || fail "the cost fixture plan is shorter than 5,000 lines"
+  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" node - "$ROOT/scripts/brigade-validate" "$plan" <<'JS' ||
+const { spawnSync } = require('child_process')
+const started = Date.now()
+const run = spawnSync(process.execPath, [process.argv[2], process.argv[3]], { encoding: 'utf8', timeout: 20000 })
+const elapsed = Date.now() - started
+console.log(`hostile plan validated in ${elapsed} ms (status ${run.status})`)
+if (run.error) throw run.error
+if (run.status !== 0) throw new Error(`validator exited ${run.status}: ${run.stdout}${run.stderr}`)
+if (!/line 26: step holds more than one instruction/.test(run.stdout)) throw new Error(`no instruction warning: ${run.stdout}`)
+if (elapsed >= 2000) throw new Error(`hostile plan took ${elapsed} ms (limit 2000 ms)`)
+JS
+    fail "the hostile writing plan was not validated quickly"
+}
+
+test_writing_long_step_grader() {
+  # The eval grader no-long-step must count words in a sentence, not in a line. It once
+  # failed every packet written under the preset, because a step holds a label and two
+  # short sentences on one line. The pattern comes from the grader file itself, so the
+  # file and this test cannot drift.
+  node - "$ROOT/evals/packet-follows-writing-preset/graders/no-long-step.md" <<'JS' ||
+const fs = require('fs')
+const text = fs.readFileSync(process.argv[2], 'utf8')
+const raw = /^pattern: '(.*)'$/m.exec(text)
+if (!raw) throw new Error('no single-quoted pattern: line in the grader')
+if (!/^match: not_contains$/m.test(text)) throw new Error('the grader no longer says match: not_contains')
+const re = new RegExp(raw[1].replace(/''/g, "'"))
+const words = (n) => Array.from({ length: n }, () => 'word').join(' ')
+const cases = [
+  ['1. **Explore (read-only, 1 file):** Read `src/profile.js` and no other file. If the file differs from the pasted anchor, report BLOCKED with what you found.', false, 'label and two short sentences'],
+  ['1. ' + words(19) + ' end.', false, 'a 20-word sentence'],
+  ['1. ' + words(20) + ' end.', true, 'a 21-word sentence'],
+  ['2. **Implement:** ' + words(20) + ' end.', true, 'a label then a 21-word sentence'],
+  ['2. **Implement:** ' + words(19) + ' end.', false, 'a label then a 20-word sentence'],
+  ['- ' + words(30) + ' end.', false, 'a long bullet that is not a numbered line'],
+  ['1. Short.\n2. ' + words(21) + ' end.', true, 'a long step on the second line'],
+]
+for (const [line, want, label] of cases) {
+  if (re.test(line) !== want) throw new Error(`${label}: expected ${want ? 'a match' : 'no match'}`)
+}
+JS
+    fail "the no-long-step grader does not count words in a sentence"
+}
+
+test_writing_sentence_count_grader() {
+  # The eval grader at-most-five-sentences must count sentence ends with a pattern. A judge
+  # once failed two comments of exactly five sentences. The pattern comes from the grader
+  # file itself, so the file and this test cannot drift.
+  node - "$ROOT/evals/writing-rules-reach-ticket-comment/graders/at-most-five-sentences.md" <<'JS' ||
+const fs = require('fs')
+const text = fs.readFileSync(process.argv[2], 'utf8')
+const raw = /^pattern: '(.*)'$/m.exec(text)
+if (!raw) throw new Error('no single-quoted pattern: line in the grader')
+if (!/^type: regex$/m.test(text)) throw new Error('the grader is not type: regex')
+if (!/^match: not_contains$/m.test(text)) throw new Error('the grader does not say match: not_contains')
+const re = new RegExp(raw[1].replace(/''/g, "'"))
+const sentences = (n) => Array.from({ length: n }, (_, i) => `Sentence ${i} is here.`).join(' ')
+const paths = (n) => Array.from({ length: n }, () => 'Open src/a.js now.').join(' ')
+const cases = [
+  [sentences(5), false, 'five sentences'],
+  [sentences(5) + '\n', false, 'five sentences and a newline'],
+  [sentences(6), true, 'six sentences'],
+  [paths(5), false, 'five sentences that each hold a path'],
+  [sentences(5) + ' He wrote "done."', true, 'six sentences, the last with a closing quote'],
+]
+for (const [comment, want, label] of cases) {
+  if (re.test(comment) !== want) throw new Error(`${label}: expected ${want ? 'a match' : 'no match'}`)
+}
+JS
+    fail "the at-most-five-sentences grader does not count sentence ends"
 }
 
 test_guard_arithmetic() {
@@ -2119,7 +2743,12 @@ function typeDefault(propSchema) {
 function phaseStub() {}
 function logStub() {}
 
+// Every prompt handed to an agent, with its label, so the writing-rules check below can
+// see exactly what each agent was told.
+let CAPTURED = []
+
 async function agentStub(prompt, opts) {
+  CAPTURED.push({ label: (opts && opts.label) || '', prompt })
   const result = { ...KITCHEN_SINK }
   const schema = (opts && opts.schema) || {}
   const required = schema.required || []
@@ -2187,14 +2816,79 @@ const WORKFLOWS = [
   },
 ]
 
-async function runOne(wf) {
+async function runOne(wf, extraArgs) {
   const src = fs.readFileSync(path.join(ROOT, wf.file), 'utf8').replace('export const meta', 'const meta')
   const fn = new Function('args', 'phase', 'log', 'agent', 'parallel', 'pipeline', 'workflow', src)
-  const result = await fn(wf.args, phaseStub, logStub, agentStub, parallelStub, pipelineStub, undefined)
+  const result = await fn({ ...wf.args, ...(extraArgs || {}) }, phaseStub, logStub, agentStub, parallelStub, pipelineStub, undefined)
   if (result === null || typeof result !== 'object') {
     throw new Error(`expected a non-null object return, got: ${JSON.stringify(result)}`)
   }
   return result
+}
+
+// Run one workflow and hand back every prompt it gave an agent, in order.
+async function capture(wf, extraArgs) {
+  CAPTURED = []
+  await runOne(wf, extraArgs)
+  return CAPTURED.slice()
+}
+
+// Writing rules: one distinct marker sentence per artifact, so a prompt that picks up
+// another artifact's rules is easy to spot. Only the cook (report), inspector (verdict)
+// and scout (brief) write a ruled artifact in these runs; every other prompt, the
+// review workflow's included, must come out exactly as it does with no rules at all.
+const MARKERS = {
+  report: 'Marker: alex wants the report rules here.',
+  verdict: 'Marker: alex wants the verdict rules here.',
+  brief: 'Marker: alex wants the brief rules here.',
+  packet: 'Marker: alex wants the packet rules here.',
+  ticket_comment: 'Marker: alex wants the ticket_comment rules here.',
+  pr_body: 'Marker: alex wants the pr_body rules here.',
+}
+const WRITING = {
+  preset: 'none',
+  presetFile: null,
+  rules: Object.fromEntries(Object.entries(MARKERS).map(([artifact, marker]) => [artifact, [marker]])),
+  checks: {},
+}
+const OWNERS = [['cook:', 'report'], ['inspect:', 'verdict'], ['scout:', 'brief']]
+const ownerOf = (label) => (OWNERS.find(([prefix]) => label.startsWith(prefix)) || [])[1] || null
+const MALFORMED = [
+  undefined, null, 'report', ['report'], {}, { rules: null }, { rules: ['x'] },
+  { rules: { report: 'a bare string', verdict: 'a bare string', brief: 'a bare string' } },
+  { rules: { report: [42, null], verdict: [{}], brief: [''] } },
+]
+
+async function checkWritingRules() {
+  const problems = []
+  const seen = { report: 0, verdict: 0, brief: 0 }
+  for (const wf of WORKFLOWS) {
+    const plain = await capture(wf, {})
+    const ruled = await capture(wf, { writing: WRITING })
+    if (ruled.length !== plain.length) {
+      problems.push(`${wf.name}: ${ruled.length} prompts with writing rules, ${plain.length} without`)
+      continue
+    }
+    ruled.forEach((call, i) => {
+      const owner = ownerOf(call.label)
+      if (owner) seen[owner] += 1
+      for (const [artifact, marker] of Object.entries(MARKERS)) {
+        const has = call.prompt.includes(marker)
+        if (artifact === owner && !has) problems.push(`${wf.name} ${call.label}: missing the ${artifact} rules`)
+        if (artifact !== owner && has) problems.push(`${wf.name} ${call.label}: carries the ${artifact} rules`)
+      }
+      if (owner && !call.prompt.startsWith(plain[i].prompt)) problems.push(`${wf.name} ${call.label}: the rules did not go on the end of the prompt`)
+      if (!owner && call.prompt !== plain[i].prompt) problems.push(`${wf.name} ${call.label}: prompt changed though it writes no ruled artifact`)
+    })
+    for (const bad of MALFORMED) {
+      const got = await capture(wf, { writing: bad })
+      if (JSON.stringify(got) !== JSON.stringify(plain)) problems.push(`${wf.name}: writing=${JSON.stringify(bad)} changed a prompt`)
+    }
+  }
+  for (const [artifact, count] of Object.entries(seen)) {
+    if (!count) problems.push(`no agent that writes a ${artifact} was dispatched, so its rules went unchecked`)
+  }
+  return problems
 }
 
 async function main() {
@@ -2208,6 +2902,20 @@ async function main() {
       console.error(`FAIL ${wf.name}`)
       console.error(err && err.stack ? err.stack : String(err))
     }
+  }
+  try {
+    const problems = await checkWritingRules()
+    if (problems.length) {
+      failed = true
+      console.error('FAIL writing rules')
+      for (const p of problems) console.error(`  ${p}`)
+    } else {
+      console.log('OK   writing rules reach the cook, inspector and scout only')
+    }
+  } catch (err) {
+    failed = true
+    console.error('FAIL writing rules')
+    console.error(err && err.stack ? err.stack : String(err))
   }
   if (failed) {
     console.error('WORKFLOW SMOKE: at least one workflow threw or returned a non-object — see above')
@@ -3839,21 +4547,32 @@ test_guard_quoted_substitution
 test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
+test_config_writing_layers
+test_config_writing_preset
+test_config_writing_doctor
+test_config_writing_warns_bad_layer
 test_config_doctor_catches_problems
 test_config_override_consumer_path
 test_onboard_status
 test_onboard_apply
 test_onboard_detect
 test_hook_onboard_drift
+test_hook_writing_rules
 test_validate_ledger_artifacts
 test_validate_design_ledger
 test_validate_retro_readiness
 test_validate_analyst_modes
+test_validate_writing_checks
+test_validate_writing_title_line
+test_validate_writing_cost
+test_writing_long_step_grader
+test_writing_sentence_count_grader
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_execute_verdict_scribe
 test_execute_guarded_agent_calls
 test_execute_prompt_overrides_normalize
+test_execute_writing_rules
 test_workflow_scripts_parse
 test_schema_examples_validate
 test_review_config

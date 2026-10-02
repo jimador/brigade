@@ -20,16 +20,55 @@
 //   brigade-config prompts [--json]        override stacks, by name
 //   brigade-config prompt <name>           the resolved override text for one name
 //   brigade-config doctor [--json]         validate every layer; explain what is wrong
+//   brigade-config writing [--json] [--preset <name>]
+//                                          the writing rules and checks for each artifact
 //
-// Exit codes: 0 ok, 1 validation failed (doctor) or key not found (get), 2 usage/IO error.
+// Exit codes: 0 ok, 1 validation failed (doctor), key not found (get) or unknown
+// preset (writing), 2 usage/IO error.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 const TIERS = ['three-star', 'two-star', 'one-star']
 const PLAN_CHECKS = ['always', 'triggers', 'never']
 const SOURCE_TYPES = ['static-file', 'mcp', 'skill', 'command']
+
+// The plugin checkout this script lives in. Preset rule text ships with the plugin,
+// so it is found next to the script, not in the repo being worked on.
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+// Writing settings: extra sentences for each kind of artifact brigade writes, plus
+// checks a script can run on them. A preset is a named bundle of rule text and
+// check defaults.
+const WRITING_PRESETS = ['none', 'ste-80']
+const WRITING_ARTIFACTS = ['packet', 'plan', 'brief', 'report', 'verdict', 'ticket_comment', 'pr_body']
+const isCount = (v) => Number.isInteger(v) && v >= 0
+const isBoolean = (v) => typeof v === 'boolean'
+const isSentence = (v) => typeof v === 'string' && v.trim() !== ''
+// `terms` maps the one approved term to the words that must not stand in for it.
+const isTerms = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) &&
+  Object.entries(v).every(([term, words]) => term.trim() !== '' && Array.isArray(words) && words.every(isSentence))
+// Every check an artifact supports, what a valid value looks like, and the value
+// that means "off". Only packets have checks so far.
+const WRITING_CHECKS = {
+  packet: {
+    maxStepWords: { off: 0, valid: isCount, want: 'a whole number, 0 or more (0 turns the check off)' },
+    maxDescriptionWords: { off: 0, valid: isCount, want: 'a whole number, 0 or more (0 turns the check off)' },
+    oneInstructionPerStep: { off: false, valid: isBoolean, want: 'true or false' },
+    vendorNeutral: { off: false, valid: isBoolean, want: 'true or false' },
+    terms: { off: {}, valid: isTerms, want: 'an object mapping each approved term to a list of words that must not replace it' },
+  },
+}
+// What turning a preset on fills in before any config layer is read. A layer can
+// still set any of these back to 0 or false.
+const PRESET_CHECKS = {
+  none: {},
+  'ste-80': {
+    packet: { maxStepWords: 20, maxDescriptionWords: 25, oneInstructionPerStep: true, vendorNeutral: true },
+  },
+}
 
 // What brigade does when nothing is configured. Every key here is overridable.
 const DEFAULTS = {
@@ -80,6 +119,12 @@ const DEFAULTS = {
     dimensions: [], // empty = ship the workflow's built-in defaults; layers only override
   },
   prompts: {}, // name -> { append: [...text] }
+  writing: {
+    preset: 'none',
+    rules: Object.fromEntries(WRITING_ARTIFACTS.map((artifact) => [artifact, []])),
+    checks: Object.fromEntries(Object.entries(WRITING_CHECKS).map(([artifact, checks]) =>
+      [artifact, Object.fromEntries(Object.entries(checks).map(([name, check]) => [name, check.off]))])),
+  },
 }
 
 const KNOWN_TOP_LEVEL = new Set(Object.keys(DEFAULTS))
@@ -151,6 +196,10 @@ function mergeLayer(target, provenance, source, layerName, prefix = '') {
       target[key] = mergeReviewDimensions(target[key] || [], value, provenance, layerName)
       continue
     }
+    if (dotted === 'writing') {
+      target[key] = mergeWriting(target[key], value, provenance, layerName)
+      continue
+    }
     if (isPlainObject(value)) {
       if (!isPlainObject(target[key])) target[key] = {}
       mergeLayer(target[key], provenance, value, layerName, dotted)
@@ -190,7 +239,81 @@ function mergeReviewDimensions(current, incoming, provenance, layerName) {
   return mergeArrayById(current, incoming, provenance, layerName, 'review.dimensions')
 }
 
-function resolveConfig() {
+// Writing settings merge by their own rules, because the generic merge would get two
+// of them wrong: it replaces arrays (rules must stack) and merges nested objects
+// (a later `terms` map must replace the earlier one whole).
+//   preset                  a later layer replaces it
+//   rules.<artifact>        every layer's sentences are appended, in layer order; no
+//                           layer can take away a rule an earlier layer added
+//   checks.<artifact>.<key> a later layer replaces it, key by key
+// A value doctor would reject is skipped here, so one bad entry never wipes out
+// what an earlier layer set.
+function mergeWriting(current, incoming, provenance, layerName) {
+  const out = {
+    preset: current ? current.preset : 'none',
+    rules: { ...(current ? current.rules : {}) },
+    checks: Object.fromEntries(Object.entries(current ? current.checks : {}).map(([a, c]) => [a, { ...c }])),
+  }
+  if (!isPlainObject(incoming)) return out
+  if (WRITING_PRESETS.includes(incoming.preset)) {
+    out.preset = incoming.preset
+    provenance['writing.preset'] = layerName
+  }
+  if (isPlainObject(incoming.rules)) {
+    for (const [artifact, list] of Object.entries(incoming.rules)) {
+      if (!WRITING_ARTIFACTS.includes(artifact) || !Array.isArray(list)) continue
+      out.rules[artifact] = [...(out.rules[artifact] || []), ...list.filter(isSentence).map((r) => r.trim())]
+      provenance[`writing.rules.${artifact}`] = layerName
+    }
+  }
+  if (isPlainObject(incoming.checks)) {
+    for (const [artifact, values] of Object.entries(incoming.checks)) {
+      const known = WRITING_CHECKS[artifact]
+      if (!known || !isPlainObject(values)) continue
+      out.checks[artifact] = { ...(out.checks[artifact] || {}) }
+      for (const [name, value] of Object.entries(values)) {
+        if (!known[name] || !known[name].valid(value)) continue
+        // Copy terms so a later layer's map replaces this one instead of sharing it.
+        out.checks[artifact][name] = name === 'terms' ? JSON.parse(JSON.stringify(value)) : value
+        provenance[`writing.checks.${artifact}.${name}`] = layerName
+      }
+    }
+  }
+  return out
+}
+
+// Put the preset's check defaults underneath the layers and settle the final shape.
+// A check key still marked 'defaults' was set by no layer, so the preset fills it;
+// anything a layer set, including an explicit 0 or false, wins over the preset.
+// `presetOverride` is `writing --preset <name>`: resolve as if a layer had set it.
+function finishWriting(merged, provenance, presetOverride) {
+  const preset = presetOverride || merged.preset
+  if (presetOverride) provenance['writing.preset'] = '--preset'
+  const presetChecks = PRESET_CHECKS[preset] || {}
+  const checks = {}
+  for (const [artifact, known] of Object.entries(WRITING_CHECKS)) {
+    checks[artifact] = {}
+    for (const name of Object.keys(known)) {
+      const dotted = `writing.checks.${artifact}.${name}`
+      const fromPreset = (presetChecks[artifact] || {})[name]
+      if (provenance[dotted] === 'defaults' && fromPreset !== undefined) {
+        checks[artifact][name] = fromPreset
+        provenance[dotted] = `preset ${preset}`
+      } else {
+        checks[artifact][name] = merged.checks[artifact][name]
+      }
+    }
+  }
+  return {
+    preset,
+    // The file may not exist yet; doctor reports that, nothing here fails on it.
+    presetFile: preset === 'none' ? null : path.join(PLUGIN_ROOT, 'skills', 'brigade', 'writing', `${preset}.md`),
+    rules: Object.fromEntries(WRITING_ARTIFACTS.map((artifact) => [artifact, merged.rules[artifact] || []])),
+    checks,
+  }
+}
+
+function resolveConfig({ preset = null } = {}) {
   const layers = layerFiles().map(readLayer)
   const provenance = {}
   const merged = {}
@@ -198,6 +321,7 @@ function resolveConfig() {
     const data = layer.name === 'defaults' ? DEFAULTS : layer.data
     mergeLayer(merged, provenance, data, layer.name)
   }
+  merged.writing = finishWriting(merged.writing, provenance, preset)
   return { config: merged, provenance, layers }
 }
 
@@ -258,7 +382,7 @@ function validate() {
     if (layer.error) problems.push({ layer: layer.name, file: layer.file, problem: layer.error })
   }
 
-  const { config } = resolveConfig()
+  const { config, provenance } = resolveConfig()
 
   for (const key of Object.keys(config)) {
     if (!KNOWN_TOP_LEVEL.has(key)) {
@@ -345,6 +469,83 @@ function validate() {
     }
   }
 
+  // Writing settings are checked per layer, because the merge quietly skips a bad
+  // value and the person fixing it needs to know which file holds it.
+  for (const layer of layers) {
+    if (!layer.file || !isPlainObject(layer.data) || !('writing' in layer.data)) continue
+    for (const problem of writingProblems(layer.data.writing)) {
+      problems.push({ layer: layer.name, file: layer.file, problem })
+    }
+  }
+
+  // A preset with no rule text on disk would hand every agent nothing to follow.
+  const writing = config.writing
+  if (writing.presetFile && !fs.existsSync(writing.presetFile)) {
+    const from = provenance['writing.preset']
+    const layer = layers.find((l) => l.name === from)
+    problems.push({
+      layer: from || 'merged',
+      file: layer ? layer.file : null,
+      problem: `writing.preset "${writing.preset}": the preset's rule text is missing (${writing.presetFile})`,
+    })
+  }
+
+  return problems
+}
+
+// Everything wrong with one layer's `writing` block, each naming its dotted key.
+function writingProblems(writing) {
+  const problems = []
+  if (!isPlainObject(writing)) return ['writing must be an object with preset, rules and checks']
+  for (const key of Object.keys(writing)) {
+    if (!['preset', 'rules', 'checks'].includes(key)) problems.push(`writing.${key}: unknown key (allowed: preset, rules, checks)`)
+  }
+  if ('preset' in writing && !WRITING_PRESETS.includes(writing.preset)) {
+    problems.push(`writing.preset must be one of ${WRITING_PRESETS.join(', ')} (got ${JSON.stringify(writing.preset)})`)
+  }
+  if ('rules' in writing) {
+    if (!isPlainObject(writing.rules)) {
+      problems.push('writing.rules must be an object mapping each artifact to a list of sentences')
+    } else {
+      for (const [artifact, list] of Object.entries(writing.rules)) {
+        const dotted = `writing.rules.${artifact}`
+        if (!WRITING_ARTIFACTS.includes(artifact)) {
+          problems.push(`${dotted}: unknown artifact (allowed: ${WRITING_ARTIFACTS.join(', ')})`)
+        } else if (!Array.isArray(list)) {
+          problems.push(`${dotted} must be a list of sentences`)
+        } else {
+          list.forEach((rule, i) => {
+            if (!isSentence(rule)) problems.push(`${dotted}[${i}] must be a non-empty string (got ${JSON.stringify(rule)})`)
+          })
+        }
+      }
+    }
+  }
+  if ('checks' in writing) {
+    if (!isPlainObject(writing.checks)) {
+      problems.push('writing.checks must be an object mapping each artifact to its checks')
+    } else {
+      for (const [artifact, values] of Object.entries(writing.checks)) {
+        const dotted = `writing.checks.${artifact}`
+        const known = WRITING_CHECKS[artifact]
+        if (!WRITING_ARTIFACTS.includes(artifact)) {
+          problems.push(`${dotted}: unknown artifact (allowed: ${WRITING_ARTIFACTS.join(', ')})`)
+        } else if (!known) {
+          problems.push(`${dotted}: this artifact has no checks (only ${Object.keys(WRITING_CHECKS).join(', ')} does)`)
+        } else if (!isPlainObject(values)) {
+          problems.push(`${dotted} must be an object of checks`)
+        } else {
+          for (const [name, value] of Object.entries(values)) {
+            if (!known[name]) {
+              problems.push(`${dotted}.${name}: unknown check (allowed: ${Object.keys(known).join(', ')})`)
+            } else if (!known[name].valid(value)) {
+              problems.push(`${dotted}.${name} must be ${known[name].want} (got ${JSON.stringify(value)})`)
+            }
+          }
+        }
+      }
+    }
+  }
   return problems
 }
 
@@ -471,11 +672,59 @@ function printGet(dotted, json) {
   return 0
 }
 
+// The writing rules and checks that apply in this repo. `--json` prints exactly the
+// resolved `writing` settings, the same object `resolve --json` carries.
+// The merge skips a bad value, so a broken layer would otherwise vanish without a word:
+// each layer with a bad `writing` block gets one stderr line, in doctor's words. Stdout
+// and the exit code stay as they are, so a caller reading the JSON is not broken.
+function printWriting(json, preset) {
+  if (preset !== null && !WRITING_PRESETS.includes(preset)) {
+    console.error(`brigade-config: unknown preset "${preset}" (allowed: ${WRITING_PRESETS.join(', ')})`)
+    return 1
+  }
+  const { config, layers } = resolveConfig({ preset })
+  for (const layer of layers) {
+    if (!layer.file || !isPlainObject(layer.data) || !('writing' in layer.data)) continue
+    const problems = writingProblems(layer.data.writing)
+    if (problems.length) console.error(`brigade-config: [${layer.name}] ${problems.join('; ')} (${layer.file})`)
+  }
+  const writing = config.writing
+  if (json) {
+    console.log(JSON.stringify(writing, null, 2))
+    return 0
+  }
+  const missing = writing.presetFile && !fs.existsSync(writing.presetFile) ? ' (missing)' : ''
+  console.log(`## writing (preset: ${writing.preset}${writing.presetFile ? `, rule text ${writing.presetFile}${missing}` : ''})`)
+  const withRules = WRITING_ARTIFACTS.filter((artifact) => writing.rules[artifact].length)
+  if (!withRules.length) console.log('  rules: (none)')
+  for (const artifact of withRules) {
+    console.log(`  rules.${artifact}: ${writing.rules[artifact].map((rule) => JSON.stringify(rule)).join(' ')}`)
+  }
+  for (const [artifact, checks] of Object.entries(writing.checks)) {
+    const shown = Object.entries(checks).map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(', ')
+    console.log(`  checks.${artifact}: ${shown}`)
+  }
+  return 0
+}
+
 // --- entry point -------------------------------------------------------------
 
 const argv = process.argv.slice(2)
 const json = argv.includes('--json')
-const positional = argv.filter((a) => !a.startsWith('--'))
+// `--preset` takes a value, so pull it (and its value) out before reading positionals.
+let presetFlag = null
+const rest = []
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === '--preset') {
+    presetFlag = argv[i + 1] === undefined ? '' : argv[i + 1]
+    i++
+  } else if (argv[i].startsWith('--preset=')) {
+    presetFlag = argv[i].slice('--preset='.length)
+  } else {
+    rest.push(argv[i])
+  }
+}
+const positional = rest.filter((a) => !a.startsWith('--'))
 const command = positional[0] || 'resolve'
 
 switch (command) {
@@ -505,8 +754,17 @@ switch (command) {
   case 'doctor':
     process.exit(printDoctor(json))
     break
+  case 'writing':
+    if (presetFlag === '') {
+      console.error('usage: brigade-config writing [--json] [--preset <name>]')
+      process.exit(2)
+    }
+    // exitCode rather than exit(): on macOS a pipe is written asynchronously, and a
+    // hard exit could cut off a long rule list before the reader sees it.
+    process.exitCode = printWriting(json, presetFlag)
+    break
   default:
     console.error(`brigade-config: unknown command "${command}"`)
-    console.error('commands: resolve | get <key> | layers | prompts | prompt <name> | doctor')
+    console.error('commands: resolve | get <key> | layers | prompts | prompt <name> | doctor | writing')
     process.exit(2)
 }

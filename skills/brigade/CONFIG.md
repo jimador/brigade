@@ -66,3 +66,26 @@ dish start and follow it.
 
 Overrides only ADD instructions. They never remove the Inspector gate, the Analyst pass,
 or the evidence requirements — forking the agent file is the honest way to do that.
+
+## Writing rules
+
+The `writing` block says how each artifact is written. It goes in any JSON layer:
+
+```json
+{ "writing": { "preset": "ste-80", "rules": { "ticket_comment": ["Write at most five sentences."] }, "checks": { "packet": { "terms": { "work item": ["task", "slice"] } } } } }
+```
+
+- `preset`: `none` (the default) or `ste-80`, the sentence rules in `writing/ste-80.md` that
+  the Planner writes packets to. A later layer replaces it.
+- `rules.<artifact>`: plain sentences for whoever writes that artifact. Rules **stack** like
+  prompt overrides: every layer's list is appended in layer order, and no layer removes one.
+- `checks.<artifact>`: what a script can check; only `packet` has checks. Checks **replace**
+  key by key, `terms` whole; `0` or `false` turns a preset's check off. `terms` maps the one
+  approved term to the words that must not stand in for it.
+
+Artifacts: `packet`, `plan`, `brief`, `report`, `verdict`, `ticket_comment`, `pr_body`.
+Resolve once per dish with `brigade-config writing --json`, which prints
+`{ preset, presetFile, rules, checks }`. Each rule set goes only to the agent that writes
+that artifact: `report` to the cook, `verdict` to the inspector, `brief` to the scout, and
+`packet`, `plan`, `ticket_comment`, `pr_body` to you. An agent never pays context for rules
+it does not use, and never follows rules meant for another artifact.
