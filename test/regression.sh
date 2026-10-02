@@ -665,6 +665,48 @@ for dotted, layer in cases:
 PY
 }
 
+test_config_writing_warns_bad_layer() {
+  # A bad `writing` block in one layer must not change what the command prints or its
+  # exit code, but it must not hide either: stderr names the layer's file and the key.
+  fixture="$TMP_ROOT/config-writing-warn"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+  cat >"$fixture/home/config.json" <<'EOF'
+{ "writing": { "preset": "ste-80", "rules": { "packet": ["GLOBAL PACKET"] } } }
+EOF
+  clean_err="$TMP_ROOT/config-writing-warn.clean.err"
+  clean="$(config_run "$fixture" writing --json 2>"$clean_err")" ||
+    fail "brigade-config writing --json failed with one valid layer"
+  [ ! -s "$clean_err" ] || fail "brigade-config writing warned with no bad layer: $(cat "$clean_err")"
+
+  printf '{ "writing": "ste-80" }\n' >"$fixture/.brigade/config.local.json"
+  bad_err="$TMP_ROOT/config-writing-warn.bad.err"
+  status=0
+  bad="$(config_run "$fixture" writing --json 2>"$bad_err")" || status=$?
+  [ "$status" = 0 ] || fail "brigade-config writing exited $status on a bad local layer"
+  [ "$bad" = "$clean" ] || fail "a bad local layer changed writing --json stdout: $bad"
+  python3 -c 'import json, sys; json.loads(sys.argv[1])' "$bad" ||
+    fail "writing --json stdout is not JSON with a bad layer"
+  err="$(cat "$bad_err")"
+  [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] ||
+    fail "expected one stderr line for one bad layer, got: $err"
+  # TMPDIR often ends in "/", so compare normalised paths rather than raw strings.
+  python3 - "$err" "$fixture/.brigade/config.local.json" <<'PY' || fail "stderr does not name the bad layer's file: $err"
+import os, re, sys
+
+found = re.search(r"\(([^()]*)\)\s*$", sys.argv[1])
+if not found or os.path.realpath(found.group(1)) != os.path.realpath(sys.argv[2]):
+    raise SystemExit(f"no layer file at the end of the line: {sys.argv[1]!r}")
+PY
+  printf '%s\n' "$err" | grep -Fq "[local] writing must be an object" ||
+    fail "stderr does not use doctor's words for the bad key: $err"
+
+  # The human form warns the same way and still exits 0.
+  config_run "$fixture" writing >/dev/null 2>"$bad_err" ||
+    fail "brigade-config writing (human form) failed on a bad local layer"
+  grep -Fq "[local] writing must be an object" "$bad_err" ||
+    fail "human form did not warn about the bad layer: $(cat "$bad_err")"
+}
+
 test_config_doctor_catches_problems() {
   fixture="$TMP_ROOT/config-doctor"
   mkdir -p "$fixture/home" "$fixture/.brigade"
@@ -4399,6 +4441,7 @@ test_config_prompt_overrides_stack
 test_config_writing_layers
 test_config_writing_preset
 test_config_writing_doctor
+test_config_writing_warns_bad_layer
 test_config_doctor_catches_problems
 test_config_override_consumer_path
 test_onboard_status

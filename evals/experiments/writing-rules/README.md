@@ -93,6 +93,10 @@ First-attempt pass rate per style: passes divided by runs, always with the count
 for example `ste-80 14/18` against `plain 12/18`. Give it per model, and give the two hazard
 items (4 and 5) on their own as well, since that is where clearer steps should matter most.
 
+The decision rule the first run was judged by: adopt `ste-80` only when it beats plain by at
+least 15 points of pass rate on every model run; reject it when it is lower than plain on
+every model; otherwise keep watching.
+
 At this size the result is directional, not proof. Six items and a few dozen runs cannot
 separate a real effect from noise when the styles differ by one or two passes; read a gap
 that small as "keep watching", and read a large, repeated gap as a reason to build a bigger

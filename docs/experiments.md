@@ -86,4 +86,7 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
 - decision: keep watching — `ste-80` did not beat plain by 15 points on any model and was not lower on every model; the preset stays off by default. A rerun needs items hard enough that neither model passes every run.
 - evidence: `.brigade/evals/writing-rules/results.json` (cells, totals, per-model rates and
   how each model was run), with per-run records beside it; local, never committed. The
-  kit's `README.md` says how a run goes.
+  kit's `README.md` says how a run goes. The task of the `packet-is-model-neutral` eval case
+  was run once on gpt-5.5, as the planner reading the skill's files, and the packet it wrote
+  passed the case's three pattern graders and its self-contained grader; the record is
+  `.brigade/evals/writing-rules/neutrality/result.json`, local, never committed.

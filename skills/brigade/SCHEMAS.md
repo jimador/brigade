@@ -160,7 +160,10 @@ turns one off):
 - `maxDescriptionWords` — the same test in `### Goal` and `### Preconditions & hazards`,
   reported as a `description sentence`.
 - `oneInstructionPerStep` — a numbered step whose first sentence joins two instructions with
-  `, then `, ` and then ` or `; `: `packet <slug> line <n>: step holds more than one instruction`.
+  `, then `, ` and then ` or `; ` outside code:
+  `packet <slug> line <n>: step holds more than one instruction`. It is a heuristic that looks
+  for those three joiners only: a step that joins two instructions another way (`, and `, a
+  second sentence) passes.
 - `vendorNeutral` — anywhere in the packet, an XML-style tag (`<word>`, `</word>`), a
   chat-template token (`[INST]`, `<|...|>`) or a tool named as a proper noun (`the Read tool`,
   likewise Grep, Bash, Edit, Write): `packet <slug> line <n>: vendor-specific markup "<match>"`.

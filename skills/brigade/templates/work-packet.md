@@ -138,6 +138,10 @@ Only when they apply — omit the section if neither does:
 
 ### Steps
 
+Every packet follows the M rules in `writing/ste-80.md`, with or without a preset. Planners
+break four of them most often. Use plain Markdown only. Use headings and fenced code, not
+XML-style tags. Name the action, not a tool, agent or model as a proper noun. Put in the
+packet everything that the reader needs, because the reader cannot ask a question.
 If the plan declares `writing: <preset>`, write the steps and hazards to the S rules in
 `writing/<preset>.md`.
 

@@ -674,12 +674,21 @@ function printGet(dotted, json) {
 
 // The writing rules and checks that apply in this repo. `--json` prints exactly the
 // resolved `writing` settings, the same object `resolve --json` carries.
+// The merge skips a bad value, so a broken layer would otherwise vanish without a word:
+// each layer with a bad `writing` block gets one stderr line, in doctor's words. Stdout
+// and the exit code stay as they are, so a caller reading the JSON is not broken.
 function printWriting(json, preset) {
   if (preset !== null && !WRITING_PRESETS.includes(preset)) {
     console.error(`brigade-config: unknown preset "${preset}" (allowed: ${WRITING_PRESETS.join(', ')})`)
     return 1
   }
-  const writing = resolveConfig({ preset }).config.writing
+  const { config, layers } = resolveConfig({ preset })
+  for (const layer of layers) {
+    if (!layer.file || !isPlainObject(layer.data) || !('writing' in layer.data)) continue
+    const problems = writingProblems(layer.data.writing)
+    if (problems.length) console.error(`brigade-config: [${layer.name}] ${problems.join('; ')} (${layer.file})`)
+  }
+  const writing = config.writing
   if (json) {
     console.log(JSON.stringify(writing, null, 2))
     return 0
