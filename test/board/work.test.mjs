@@ -368,3 +368,55 @@ test('pickDish skips a stale plan and returns null when nothing is left', () => 
   assert.equal(pickDish([], [], 0), null)
   assert.equal(pickDish(null, null, 0), null)
 })
+
+// Two dishes with work left: alpha's plan is old, beta's changed a minute before `now`.
+const NOW = 1_000_000
+const both = [
+  { dish: 'alpha', mtimeMs: 0, items: [{ slug: 'a', status: 'todo' }] },
+  { dish: 'beta', mtimeMs: NOW - 60_000, items: [{ slug: 'b', status: 'todo' }] },
+]
+const on = (id, dish, over) => agent('cook', { id, dish, ...over })
+
+test('pickDish follows the working agent seen most recently, not the one started last', () => {
+  const agents = [
+    on('a1', 'alpha', { startedAt: 980_000, seenAt: 990_000 }),
+    on('a2', 'beta', { startedAt: 970_000, seenAt: 999_000 }),
+  ]
+  assert.equal(pickDish(both, agents, NOW), 'beta')
+})
+
+test('pickDish passes over an agent quiet for more than ten minutes', () => {
+  assert.equal(pickDish(both, [on('a1', 'alpha', { startedAt: 200_000, seenAt: 300_000 })], NOW), 'beta')
+  assert.equal(pickDish(both, [on('a1', 'alpha', { startedAt: 300_000 })], NOW), 'beta')
+  assert.equal(pickDish(both, [on('a1', 'alpha', { seenAt: 400_000 })], NOW), 'alpha')
+  assert.equal(pickDish(both, [on('a1', 'alpha', { seenAt: 399_999 })], NOW), 'beta')
+})
+
+test('pickDish falls back to the start time for an agent never stamped', () => {
+  assert.equal(pickDish(both, [on('a1', 'alpha', { startedAt: 995_000 })], NOW), 'alpha')
+  const agents = [
+    on('a1', 'alpha', { startedAt: 998_000 }),
+    on('a2', 'beta', { startedAt: 990_000, seenAt: 997_000 }),
+  ]
+  assert.equal(pickDish(both, agents, NOW), 'alpha')
+})
+
+test('pickDish treats a seenAt that is not a finite number as missing', () => {
+  for (const seenAt of ['999000', NaN, Infinity, null]) {
+    assert.equal(pickDish(both, [on('a1', 'alpha', { startedAt: 995_000, seenAt })], NOW), 'alpha', String(seenAt))
+    assert.equal(pickDish(both, [on('a1', 'alpha', { startedAt: 300_000, seenAt })], NOW), 'beta', String(seenAt))
+  }
+  const agents = [
+    on('a1', 'alpha', { startedAt: 998_000, seenAt: 'later' }),
+    on('a2', 'beta', { startedAt: 990_000, seenAt: 997_000 }),
+  ]
+  assert.equal(pickDish(both, agents, NOW), 'alpha')
+})
+
+test('pickDish uses ten minutes when quietMs is zero or not a number', () => {
+  const agents = [on('a1', 'alpha', { seenAt: 900_000 })]
+  assert.equal(pickDish(both, agents, NOW, day, 50_000), 'beta')
+  for (const quietMs of [0, -1, NaN, '50000', null, undefined]) {
+    assert.equal(pickDish(both, agents, NOW, day, quietMs), 'alpha', String(quietMs))
+  }
+})

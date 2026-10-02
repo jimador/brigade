@@ -331,18 +331,33 @@ export function toWorkLanes(cards, pinned = [], caps = { default: 4, done: 2 }) 
   })
 }
 
+// How long a working agent can go unseen before it stops deciding the dish: ten minutes. An agent
+// that went quiet without finishing would otherwise hold the board on its dish for good.
+const QUIET_MS = 600000
+
+// When an agent was last seen, in epoch milliseconds, or null when we can't tell. Agents stored
+// before sightings were kept have no `seenAt`, so their start time stands in. Anything that isn't
+// a finite number counts as missing.
+function lastSeen(agent) {
+  if (Number.isFinite(agent.seenAt)) return agent.seenAt
+  return Number.isFinite(agent.startedAt) ? agent.startedAt : null
+}
+
 // The dish the board should show. A dish someone is working on right now wins: the one belonging
-// to the most recently started working agent, as long as there's a plan for it. Otherwise the plan
-// that changed most recently in the last `recentMs` and still has unfinished items. Otherwise none.
-export function pickDish(plans, agents, now, recentMs = 86400000) {
+// to the working agent seen most recently, as long as there's a plan for it and the agent was
+// seen within `quietMs` (ten minutes when it isn't a positive number). Otherwise the plan that
+// changed most recently in the last `recentMs` and still has unfinished items. Otherwise none.
+export function pickDish(plans, agents, now, recentMs = 86400000, quietMs = QUIET_MS) {
+  const quiet = Number.isFinite(quietMs) && quietMs > 0 ? quietMs : QUIET_MS
   const known = (plans ?? []).filter((p) => p && typeof p.dish === 'string' && p.dish !== '')
   const dishes = new Set(known.map((p) => p.dish))
 
   let busiest = null
   for (const a of agents ?? []) {
     if (!a || a.state !== 'working' || !dishes.has(a.dish)) continue
-    const started = Number.isFinite(a.startedAt) ? a.startedAt : -Infinity
-    if (!busiest || started > busiest.started) busiest = { dish: a.dish, started }
+    const seen = lastSeen(a)
+    if (seen === null || !(now - seen <= quiet)) continue
+    if (!busiest || seen > busiest.seen) busiest = { dish: a.dish, seen }
   }
   if (busiest) return busiest.dish
 
