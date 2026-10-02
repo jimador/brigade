@@ -65,7 +65,11 @@ test('a spawned agent shows as a named sprite, adds its tokens, and stays two mi
   expect(await ui.find({ type: 'Text', text: /⌕ Basil/, in: 'stage' })).toBeDefined()
   await hover(ui, /⌕ Basil/)
   expect(await ui.find({ type: 'Text', text: /failed · 15 tokens/, in: 'stage' })).toBeDefined()
-  await ui.post({ select: 'a1' }, { in: 'stage' })
+  // Its box says it failed, and still lists what it spent.
+  await ui.post({ open: { kind: 'agent', id: 'a1' } }, { in: 'stage' })
+  expect(await ui.find({ type: 'Text', text: /║ Now: failed/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /║ Tokens: 15/, in: 'stage' })).toBeDefined()
+  await ui.post({ close: true }, { in: 'stage' })
   await ui.unmount()
   // A minute on it is still there; past two minutes the next refresh takes it off the board.
   await clock.advance(60000)

@@ -3,12 +3,12 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Detail, Fleet, Lane, Learnings, Message, Note, Project, Snapshot, Weather, WorkLane } from '../../types'
 import { boardDirFrom, laneOf, parseTicket, toLanes } from './lib/board.mjs'
-import { projectOf } from './lib/detail.mjs'
-import { latest, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
+import { agentDetail, cardDetail, messageDetail, projectOf, ticketDetail } from './lib/detail.mjs'
+import { envelope, findingsOf, latest, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
 import { activityOf, applyEvent, prune } from './lib/fleet.mjs'
 import { ROLES } from './lib/sprites.mjs'
 import { forecast } from './lib/weather.mjs'
-import { pickDish, planItems, ticketCards, toWorkLanes, workCards } from './lib/work.mjs'
+import { PHASES, pickDish, planItems, ticketCards, toWorkLanes, workCards } from './lib/work.mjs'
 
 const PANE = 'brigade-board'
 // The dock width that fits all five lanes side by side.
@@ -21,7 +21,6 @@ const TICK_MS = 2000
 const lanes = atom({ plugin: 'brigade', key: 'lanes' } as const, [] as Lane[])
 const fleet = atom({ plugin: 'brigade', key: 'fleet' } as const, { agents: {}, order: [] } as Fleet)
 const weather = atom({ plugin: 'brigade', key: 'weather' } as const, null as Weather | null)
-const selected = atom({ plugin: 'brigade', key: 'selected' } as const, null as string | null)
 // Which ticket each dish belongs to, by dish folder name. A missing dish is just unknown.
 const dishes = atom({ plugin: 'brigade', key: 'dishes' } as const, {} as Record<string, string>)
 // Every note in the dish on the board (reports, verdicts, briefs, ledgers), newest first.
@@ -153,23 +152,6 @@ async function snapshotOf($: EngineInterface): Promise<Snapshot> {
     detail: await read($, detail),
     now: await $.clock.now(),
   }
-}
-
-// The pane's region posts what it wants selected. That comes from code, so only a known
-// agent id or null gets through; anything else is dropped.
-async function selectFrom($: EngineInterface, data: unknown) {
-  if (data === null || typeof data !== 'object' || Array.isArray(data)) return
-  const keys = Object.keys(data)
-  if (keys.length !== 1 || keys[0] !== 'select') return
-  const pick = (data as { select: unknown }).select
-  if (pick === null) {
-    await update($, selected, () => null)
-    return
-  }
-  if (typeof pick !== 'string') return
-  const roster = await read($, fleet)
-  if (!Object.hasOwn(roster.agents, pick)) return
-  await update($, selected, () => pick)
 }
 
 type Ticket = NonNullable<ReturnType<typeof parseTicket>>
@@ -408,6 +390,11 @@ const refresh = async ($: EngineInterface) => {
       // The lanes, header and messages stay as they were.
     }
     try {
+      await refreshDetail($)
+    } catch {
+      // The detail box stays as it was.
+    }
+    try {
       await refreshLearnings($)
     } catch {
       // The learnings stay as they were.
@@ -422,6 +409,202 @@ const refresh = async ($: EngineInterface) => {
     running = null
   })
   return running
+}
+
+// What the detail box is about: the kind of thing clicked and its id, or null when no box is up.
+// The box itself lives in state; this is what each tick rebuilds it from.
+type Target = { kind: 'card' | 'agent' | 'message'; id: string }
+let target: Target | null = null
+// Goes up on every open and close, so a rebuild that started before one can't put back a box
+// that has since closed, or swap in the box for an older click.
+let generation = 0
+
+const KINDS = new Set(['card', 'agent', 'message'])
+const MAX_ID = 200
+// A note's place inside its dish folder that is safe to put in a path.
+const NOTE_PATH = /^(briefs|reports|state)\/[A-Za-z0-9._-]+\.md$/
+// How many lines of an agent's working memory the box shows, and of a message's source file.
+const MEMORY_LINES = 8
+const BODY_LINES = 12
+
+function isPlain(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+// What the pane asked for, when it is exactly `{ open: { kind, id } }` or `{ close: true }`.
+// The pane is our own code, but its message crosses a boundary, so anything else is dropped.
+function requestOf(data: unknown): { open: Target } | { close: true } | null {
+  if (!isPlain(data)) return null
+  const keys = Object.keys(data)
+  if (keys.length !== 1) return null
+  if (keys[0] === 'close') return data.close === true ? { close: true } : null
+  if (keys[0] !== 'open') return null
+  const open = data.open
+  if (!isPlain(open)) return null
+  const fields = Object.keys(open)
+  if (fields.length !== 2 || !Object.hasOwn(open, 'kind') || !Object.hasOwn(open, 'id')) return null
+  const { kind, id } = open
+  if (typeof kind !== 'string' || !KINDS.has(kind)) return null
+  if (typeof id !== 'string' || id === '' || id.length > MAX_ID) return null
+  return { open: { kind: kind as Target['kind'], id } }
+}
+
+// A file's text, or null when it isn't there.
+async function readIfThere($: EngineInterface, path: string) {
+  return (await $.fs.exists(path)) ? await $.fs.read(path) : null
+}
+
+// The first `limit` non-empty lines of a file after its frontmatter.
+function bodyLines(text: string, limit: number) {
+  const lines = text.split(/\r?\n/)
+  let start = 0
+  if (lines[0]?.trim() === '---') {
+    const end = lines.findIndex((line, i) => i > 0 && line.trim() === '---')
+    if (end !== -1) start = end + 1
+  }
+  return lines.slice(start).filter(line => line.trim() !== '').slice(0, limit)
+}
+
+// The first paragraph under a ticket's `## Goal` heading, as one line, or '' when it has none.
+function goalOf(text: string) {
+  const out: string[] = []
+  let inGoal = false
+  for (const line of text.split(/\r?\n/)) {
+    const bare = line.trim()
+    if (!inGoal) {
+      if (bare === '## Goal') inGoal = true
+      continue
+    }
+    if (bare === '') {
+      if (out.length > 0) break
+      continue
+    }
+    if (bare.startsWith('#')) break
+    out.push(bare)
+  }
+  return out.join(' ')
+}
+
+// The newest note of one kind, by time; a note without a time counts as the oldest.
+function newest(notes: Note[], kind: string) {
+  const timeOf = (note: Note) => (Number.isFinite(note.at) ? note.at : 0)
+  let best: Note | null = null
+  for (const note of notes) if (note.kind === kind && (best === null || timeOf(note) > timeOf(best))) best = note
+  return best
+}
+
+// A card's box. In a dish the id has to be one of the plan's items; on the ticket board it has
+// to be a ticket we have read. Every path below comes from what the board already holds, never
+// from the click: the dish and item slugs, a note's own file, a ticket's file name.
+async function cardBox($: EngineInterface, id: string): Promise<Detail | null> {
+  if (currentDish === null) return ticketBox($, id)
+  const seen = dishesSeen.find(entry => entry.dish === currentDish)
+  if (!seen || !SLUG.test(seen.dish)) return null
+  const item = seen.plan.items.find(entry => entry.slug === id)
+  if (!item || !SLUG.test(item.slug)) return null
+  const crew = rosterAgents(await read($, fleet)).filter(agent => agent.dish === seen.dish)
+  const [card] = workCards([item], seen.notes, crew) as { phase: string }[]
+  const phaseTitle = PHASES.find(phase => phase.key === card?.phase)?.title ?? ''
+  const mine = seen.notes.filter(note => note.item === item.slug)
+  const report = newest(mine, 'report')
+  const verdict = newest(mine, 'verdict')
+  let findings: unknown[] = []
+  if (verdict !== null && typeof verdict.file === 'string' && NOTE_PATH.test(verdict.file)) {
+    const text = await readIfThere($, `${await rootOf($)}/.brigade/dishes/${seen.dish}/${verdict.file}`)
+    if (text !== null) findings = findingsOf(text)
+  }
+  const agents = crew
+    .filter(agent => agent.item === item.slug)
+    .map(agent => ({ name: agent.name, role: roleLabel(agent.role), activity: agent.activity, state: agent.state }))
+  return cardDetail({ item, phaseTitle, report, verdict, findings, agents }) as Detail
+}
+
+async function ticketBox($: EngineInterface, id: string): Promise<Detail | null> {
+  const hit = Object.entries(cache).find(([, entry]) => entry.ticket !== null && entry.ticket.id === id)
+  if (!hit || cacheDir === null) return null
+  const [name, { ticket }] = hit
+  let goal = ''
+  if (NOTE_FILE.test(name)) {
+    const text = await readIfThere($, `${cacheDir}/${name}`)
+    if (text !== null) goal = goalOf(text)
+  }
+  return ticketDetail({ ticket, goal }) as Detail
+}
+
+// An agent's box, for an agent on the roster. Its working memory is read from its own dish and
+// item, when both are plain slugs.
+async function agentBox($: EngineInterface, id: string): Promise<Detail | null> {
+  const roster = await read($, fleet)
+  if (!Object.hasOwn(roster.agents, id)) return null
+  const agent = roster.agents[id]
+  if (agent == null) return null
+  const ticket = ticketOf(agent, await read($, dishes))
+  let memory: string[] = []
+  if (typeof agent.dish === 'string' && typeof agent.item === 'string' && SLUG.test(agent.dish) && SLUG.test(agent.item)) {
+    const text = await readIfThere($, `${await rootOf($)}/.brigade/dishes/${agent.dish}/state/${agent.item}.md`)
+    if (text !== null) memory = ledgerTail(text, MEMORY_LINES)
+  }
+  return agentDetail({ agent: { ...agent, ticket }, roleLabel: roleLabel(agent.role), memory, now: await $.clock.now() }) as Detail
+}
+
+// A message's box, for a message in the Messages panel. The file it came from is the note's own,
+// inside the dish on the board.
+async function messageBox($: EngineInterface, id: string): Promise<Detail | null> {
+  const message = (await read($, messages)).find(entry => entry.id === id)
+  if (!message) return null
+  let findings: unknown[] = []
+  let body: string[] = []
+  const dish = currentDish
+  if (dish !== null && SLUG.test(dish) && typeof message.file === 'string' && NOTE_PATH.test(message.file)) {
+    const text = await readIfThere($, `${await rootOf($)}/.brigade/dishes/${dish}/${message.file}`)
+    if (text !== null) {
+      if (envelope(text).doc === 'verdict') findings = findingsOf(text)
+      body = bodyLines(text, BODY_LINES)
+    }
+  }
+  return messageDetail({ message, findings, body }) as Detail
+}
+
+// The box for a target, or null when the board no longer holds what it is about.
+function boxFor($: EngineInterface, want: Target) {
+  if (want.kind === 'card') return cardBox($, want.id)
+  if (want.kind === 'agent') return agentBox($, want.id)
+  return messageBox($, want.id)
+}
+
+// Stores the box, unless an open or a close has come in since `mine` was taken.
+async function showDetail($: EngineInterface, next: Detail | null, mine: number) {
+  if (mine !== generation) return
+  if (same(await read($, detail), next)) return
+  await update($, detail, current => (mine === generation ? next : current))
+}
+
+// Opens or closes the box for what the pane posted. An open whose subject the board doesn't hold
+// leaves everything as it was.
+async function detailFrom($: EngineInterface, data: unknown) {
+  const request = requestOf(data)
+  if (request === null) return
+  const mine = ++generation
+  if ('close' in request) {
+    target = null
+    await showDetail($, null, mine)
+    return
+  }
+  const built = await boxFor($, request.open)
+  if (built === null || mine !== generation) return
+  target = request.open
+  await showDetail($, built, mine)
+}
+
+// Rebuilds the open box so it stays current, and takes it down once its subject has gone. A box
+// with nothing behind it, left over from before a reload, comes down too.
+async function refreshDetail($: EngineInterface) {
+  const mine = generation
+  const want = target
+  const built = want === null ? null : await boxFor($, want)
+  if (mine !== generation) return
+  if (built === null) target = null
+  await showDetail($, built, mine)
 }
 
 // Whether this module load has started its refresh timer. A reload runs the module again and
@@ -559,9 +742,9 @@ export const register: Register = on => {
   on('ui.message', async ($, e, next) => {
     if (e.requestId === PANE) {
       try {
-        await selectFrom($, e.data)
+        await detailFrom($, e.data)
       } catch {
-        // The selection stays as it was until the next click.
+        // The detail box stays as it was until the next click.
       }
     }
     return next(e)

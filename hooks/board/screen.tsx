@@ -67,9 +67,15 @@ export default function Screen(props: Snapshot, surface: ClientSurface<View>) {
       } else if (event.type === 'leave') {
         if (now.hovered !== null || now.over !== null) surface.setState({ ...now, hovered: null, over: null })
       } else if (event.type === 'down') {
-        // A click on an agent selects it; a click anywhere else clears the selection.
+        // A click on an agent, a card or a message opens its detail box. With the box up, a click
+        // on [x] or anywhere off the box closes it, and a click on the box itself does nothing.
         const region = regionAt(drawnRegions, event.x, event.y)
-        surface.post({ select: region !== null && region.kind === 'agent' ? region.id : null })
+        if (region === null) return
+        if (region.kind === 'agent' || region.kind === 'card' || region.kind === 'message') {
+          surface.post({ open: { kind: region.kind, id: region.id } })
+        } else if (region.kind === 'close') {
+          surface.post({ close: true })
+        }
       }
     })
   }

@@ -65,10 +65,10 @@ test('surfaces without a region draw the text board', async ($, on) => {
 
 const AGENT = { id: 'a1', name: 'Basil', role: 'cook', model: 'claude-haiku', dish: null, item: null, ticket: null, state: 'working', tokens: 0, startedAt: 0, endedAt: null, activity: null } as const
 
-test('only a known agent id or null changes the selection', async ($, on) => {
+test('only a well-formed open or close changes the detail', async ($, on) => {
   mock.clock(on)
   // The test's hooks stand in for the engine's state store: one agent on the roster, and
-  // every write to the selection kept so the test can read it back.
+  // every write to the detail box kept so the test can read it back.
   const store = new Map<string, { value: unknown; version: number }>([
     ['fleet', { value: { agents: { a1: AGENT }, order: ['a1'] }, version: 1 }],
   ])
@@ -79,31 +79,49 @@ test('only a known agent id or null changes the selection', async ($, on) => {
     store.set(e.key, { value: e.value, version: now.version + 1 })
     return { value: { isSet: true, version: now.version + 1 } }
   })
-  const chosen = () => store.get('selected')?.value
-  for (const surface of ['terminal', 'desktop'] as const) {
+  const shown = () => store.get('detail')?.value as { kind: string; id: string; title: string } | null | undefined
+  const writes = () => store.get('detail')?.version ?? 0
+  // A pane draws what the store held when it mounted; this store doesn't tell it about writes,
+  // so each step that clicks the board starts from a freshly mounted pane.
+  const mount = async (surface: 'terminal' | 'desktop') => {
     const ui = await $.ui.mount({ plugin: 'brigade', surface, component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 124, rows: 30 } })
     await ui.resize({ columns: 124, rows: 30, in: 'stage' })
+    return ui
+  }
+  for (const surface of ['terminal', 'desktop'] as const) {
+    let ui = await mount(surface)
+    await ui.post({ open: { kind: 'agent', id: 'a1' } }, { in: 'stage' })
+    expect(shown()).toMatchObject({ kind: 'agent', id: 'a1', title: 'Basil · cook' })
+    const before = writes()
+    await ui.post({ open: { kind: 'agent', id: 'nobody' } }, { in: 'stage' })
+    await ui.post({ open: { kind: 'agent', id: 'toString' } }, { in: 'stage' })
+    await ui.post({ open: { kind: 'agent', id: 'a1' }, extra: 1 }, { in: 'stage' })
+    await ui.post({ open: { kind: 'agent', id: 'a1', extra: 1 } }, { in: 'stage' })
+    await ui.post({ open: { kind: 'agent', id: 7 } }, { in: 'stage' })
+    await ui.post({ close: 'yes' }, { in: 'stage' })
     await ui.post({ select: 'a1' }, { in: 'stage' })
-    expect(chosen()).toBe('a1')
-    await ui.post({ select: 'nobody' }, { in: 'stage' })
-    await ui.post({ select: 'toString' }, { in: 'stage' })
-    await ui.post({ select: 'a1', extra: 1 }, { in: 'stage' })
-    await ui.post({ select: 7 }, { in: 'stage' })
+    await ui.post({ select: null }, { in: 'stage' })
     await ui.post({ nonsense: true }, { in: 'stage' })
     await ui.post('a1', { in: 'stage' })
-    expect(chosen()).toBe('a1')
-    // A click on an empty cell clears the selection.
+    expect(writes()).toBe(before)
+    expect(shown()).toMatchObject({ kind: 'agent', id: 'a1' })
+    await ui.unmount()
+    // With the box up, a click on an empty cell off the box closes it.
+    ui = await mount(surface)
+    expect(await ui.find({ type: 'Text', text: /\[x\]/, in: 'stage' })).toBeDefined()
     await ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: 'stage' })
-    expect(chosen()).toBeNull()
-    // A click on the agent's sprite selects it. It stands with the crew, left edge, under the label.
+    expect(shown()).toBeNull()
+    await ui.unmount()
+    // A click on the agent's sprite opens its box. It stands with the crew, left edge, under the label.
+    ui = await mount(surface)
     await ui.advance(250 * 60)
     const rows = (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object'))
     const crew = rows.findIndex(row => /^Crew/.test(row.text))
     expect(crew).toBeGreaterThan(0)
     await ui.pointer({ type: 'down', x: 1, y: crew + 2, button: 'left', in: 'stage' })
-    expect(chosen()).toBe('a1')
-    await ui.post({ select: null }, { in: 'stage' })
-    expect(chosen()).toBeNull()
+    expect(shown()).toMatchObject({ kind: 'agent', id: 'a1' })
+    await ui.post({ close: true }, { in: 'stage' })
+    expect(shown()).toBeNull()
     await ui.unmount()
   }
 })
