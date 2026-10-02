@@ -488,6 +488,183 @@ if order != sorted(order):
 ' || fail "brigade-config prompt stacked overrides in the wrong order"
 }
 
+test_config_writing_layers() {
+  # Writing rules stack like prompt overrides; the preset and each check key are
+  # replaced by a later layer; `terms` is replaced whole, never merged.
+  fixture="$TMP_ROOT/config-writing-layers"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+  cat >"$fixture/home/config.json" <<'EOF'
+{ "writing": { "preset": "ste-80",
+  "rules": { "packet": ["GLOBAL PACKET"], "ticket_comment": ["GLOBAL COMMENT"] },
+  "checks": { "packet": { "maxDescriptionWords": 40, "terms": { "work item": ["task", "slice"] } } } } }
+EOF
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "writing": { "rules": { "packet": ["TEAM PACKET"] },
+  "checks": { "packet": { "terms": { "dish": ["epic"] } } } } }
+EOF
+  cat >"$fixture/.brigade/config.local.json" <<'EOF'
+{ "writing": { "preset": "none", "rules": { "packet": ["LOCAL PACKET"] },
+  "checks": { "packet": { "maxStepWords": 12 } } } }
+EOF
+
+  writing="$(config_run "$fixture" writing --json)" ||
+    fail "brigade-config writing --json failed on three stacked layers"
+  resolved="$(config_run "$fixture" resolve --json)"
+  python3 - "$writing" "$resolved" <<'PY' || fail "brigade-config writing layers resolved wrong"
+import json, sys
+
+w = json.loads(sys.argv[1])
+resolved = json.loads(sys.argv[2])
+artifacts = ["packet", "plan", "brief", "report", "verdict", "ticket_comment", "pr_body"]
+if sorted(w) != ["checks", "preset", "presetFile", "rules"]:
+    raise SystemExit(f"top-level keys wrong: {sorted(w)}")
+if sorted(w["rules"]) != sorted(artifacts):
+    raise SystemExit(f"rules keys wrong: {sorted(w['rules'])}")
+if w["preset"] != "none" or w["presetFile"] is not None:
+    raise SystemExit(f"local layer should replace the preset: {w['preset']!r} {w['presetFile']!r}")
+if w["rules"]["packet"] != ["GLOBAL PACKET", "TEAM PACKET", "LOCAL PACKET"]:
+    raise SystemExit(f"rules did not stack in layer order: {w['rules']['packet']!r}")
+if w["rules"]["ticket_comment"] != ["GLOBAL COMMENT"]:
+    raise SystemExit(f"an untouched artifact lost its rule: {w['rules']['ticket_comment']!r}")
+if any(w["rules"][a] for a in artifacts if a not in ("packet", "ticket_comment")):
+    raise SystemExit(f"unset artifacts should resolve to []: {w['rules']!r}")
+expected = {"maxStepWords": 12, "maxDescriptionWords": 40, "oneInstructionPerStep": False,
+            "vendorNeutral": False, "terms": {"dish": ["epic"]}}
+if w["checks"] != {"packet": expected}:
+    raise SystemExit(f"checks resolved wrong: {w['checks']!r}")
+if resolved["config"].get("writing") != w:
+    raise SystemExit(f"resolve --json and writing --json disagree: {resolved['config'].get('writing')!r}")
+PY
+}
+
+test_config_writing_preset() {
+  ste_checks='{"maxStepWords": 20, "maxDescriptionWords": 25, "oneInstructionPerStep": true, "vendorNeutral": true, "terms": {}}'
+
+  # The preset alone fills the default checks. The command must not fail when the
+  # preset's rule text is not on disk yet.
+  fixture="$TMP_ROOT/config-writing-preset"
+  mkdir -p "$fixture/home"
+  printf '{ "writing": { "preset": "ste-80" } }\n' >"$fixture/home/config.json"
+  writing="$(config_run "$fixture" writing --json)" ||
+    fail "brigade-config writing --json failed with preset ste-80"
+  python3 - "$writing" "$ste_checks" "$ROOT" <<'PY' || fail "preset ste-80 did not fill the default checks"
+import json, os, sys
+
+w, expected, root = json.loads(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3]
+if w["preset"] != "ste-80":
+    raise SystemExit(f"preset: {w['preset']!r}")
+if w["checks"]["packet"] != expected:
+    raise SystemExit(f"default checks wrong: {w['checks']['packet']!r}")
+want = os.path.join(root, "skills", "brigade", "writing", "ste-80.md")
+if not os.path.isabs(w["presetFile"] or "") or os.path.realpath(w["presetFile"]) != os.path.realpath(want):
+    raise SystemExit(f"presetFile: expected {want!r}, got {w['presetFile']!r}")
+PY
+
+  # An explicit 0 or false from any layer turns a check off, even under the preset.
+  off="$TMP_ROOT/config-writing-off"
+  mkdir -p "$off/home"
+  printf '{ "writing": { "preset": "ste-80" } }\n' >"$off/home/config.json"
+  cat >"$off/brigade.config.json" <<'EOF'
+{ "writing": { "checks": { "packet": { "maxStepWords": 0, "vendorNeutral": false } } } }
+EOF
+  writing="$(config_run "$off" writing --json)"
+  python3 - "$writing" <<'PY' || fail "an explicit 0 or false lost to the preset's default"
+import json, sys
+
+packet = json.loads(sys.argv[1])["checks"]["packet"]
+if packet["maxStepWords"] != 0 or packet["vendorNeutral"] is not False:
+    raise SystemExit(f"explicit off values were overwritten: {packet!r}")
+if packet["maxDescriptionWords"] != 25 or packet["oneInstructionPerStep"] is not True:
+    raise SystemExit(f"preset defaults for untouched keys were lost: {packet!r}")
+PY
+
+  # --preset resolves as if writing.preset were set, with no config at all.
+  empty="$TMP_ROOT/config-writing-empty"
+  mkdir -p "$empty/home"
+  writing="$(config_run "$empty" writing --json)" ||
+    fail "brigade-config writing --json failed with no config"
+  python3 - "$writing" <<'PY' || fail "writing --json with no config is not the empty shape"
+import json, sys
+
+w = json.loads(sys.argv[1])
+empty_checks = {"maxStepWords": 0, "maxDescriptionWords": 0, "oneInstructionPerStep": False,
+                "vendorNeutral": False, "terms": {}}
+artifacts = ["packet", "plan", "brief", "report", "verdict", "ticket_comment", "pr_body"]
+if w != {"preset": "none", "presetFile": None, "rules": {a: [] for a in artifacts},
+         "checks": {"packet": empty_checks}}:
+    raise SystemExit(f"unexpected empty shape: {w!r}")
+PY
+  writing="$(config_run "$empty" writing --json --preset ste-80)" ||
+    fail "brigade-config writing --json --preset ste-80 failed"
+  python3 - "$writing" "$ste_checks" <<'PY' || fail "--preset ste-80 did not resolve the default checks"
+import json, sys
+
+w, expected = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+if w["preset"] != "ste-80" or w["checks"]["packet"] != expected:
+    raise SystemExit(f"--preset ste-80 resolved {w!r}")
+PY
+  writing="$(config_run "$fixture" writing --json --preset none)"
+  python3 - "$writing" <<'PY' || fail "--preset none did not win over a configured preset"
+import json, sys
+
+w = json.loads(sys.argv[1])
+if w["preset"] != "none" or w["presetFile"] is not None or w["checks"]["packet"]["maxStepWords"] != 0:
+    raise SystemExit(f"--preset none resolved {w!r}")
+PY
+  if err="$(config_run "$empty" writing --json --preset ste-99 2>&1 >/dev/null)"; then
+    fail "brigade-config writing accepted an unknown --preset"
+  fi
+  [ "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" = 1 ] ||
+    fail "unknown --preset should print one error line, got: $err"
+
+  text="$(config_run "$fixture" writing)" || fail "brigade-config writing (human form) failed"
+  printf '%s\n' "$text" | grep -Fq "ste-80" ||
+    fail "brigade-config writing did not print the preset: $text"
+}
+
+test_config_writing_doctor() {
+  fixture="$TMP_ROOT/config-writing-doctor"
+  mkdir -p "$fixture/home" "$fixture/.brigade"
+  cat >"$fixture/home/config.json" <<'EOF'
+{ "writing": { "checks": { "packet": { "maxStepWords": -1 } } } }
+EOF
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "writing": { "rules": { "pakcet": ["Spelled wrong."], "packet": ["Fine.", 7] } } }
+EOF
+  cat >"$fixture/.brigade/config.local.json" <<'EOF'
+{ "writing": { "preset": "ste-99" } }
+EOF
+
+  if config_run "$fixture" doctor >/dev/null 2>&1; then
+    fail "brigade-config doctor passed a malformed writing block"
+  fi
+  json="$(config_run "$fixture" doctor --json || true)"
+  python3 - "$json" "$fixture" <<'PY' || fail "brigade-config doctor missed a writing problem"
+import json, os, sys
+
+doc, fixture = json.loads(sys.argv[1]), sys.argv[2]
+files = {
+    "global": os.path.join(fixture, "home", "config.json"),
+    "team": os.path.join(fixture, "brigade.config.json"),
+    "local": os.path.join(fixture, ".brigade", "config.local.json"),
+}
+cases = [
+    ("writing.rules.pakcet", "team"),                 # unknown artifact
+    ("writing.rules.packet[1]", "team"),              # a rule that is not a string
+    ("writing.preset", "local"),                      # unknown preset
+    ("writing.checks.packet.maxStepWords", "global"), # negative number
+]
+for dotted, layer in cases:
+    hits = [p for p in doc["problems"] if dotted in p["problem"]]
+    if not hits:
+        raise SystemExit(f"doctor did not name {dotted}: {doc['problems']!r}")
+    # TMPDIR often ends in "/", so compare normalised paths rather than raw strings.
+    if not any(p["layer"] == layer and os.path.realpath(p["file"] or "") == os.path.realpath(files[layer])
+               for p in hits):
+        raise SystemExit(f"{dotted}: expected layer {layer} and its file, got {hits!r}")
+PY
+}
+
 test_config_doctor_catches_problems() {
   fixture="$TMP_ROOT/config-doctor"
   mkdir -p "$fixture/home" "$fixture/.brigade"
@@ -3839,6 +4016,9 @@ test_guard_quoted_substitution
 test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
+test_config_writing_layers
+test_config_writing_preset
+test_config_writing_doctor
 test_config_doctor_catches_problems
 test_config_override_consumer_path
 test_onboard_status
