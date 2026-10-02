@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Fleet, Lane, Snapshot, Weather } from '../../types'
-import { boardDirFrom, parseTicket, toLanes } from './lib/board.mjs'
+import type { Agent, Fleet, Lane, Snapshot, Weather } from '../../types'
+import { boardDirFrom, laneOf, parseTicket, toLanes } from './lib/board.mjs'
+import { applyEvent, prune } from './lib/fleet.mjs'
 import { ROLES } from './lib/sprites.mjs'
 import { forecast } from './lib/weather.mjs'
 
@@ -11,13 +12,76 @@ const lanes = atom({ plugin: 'brigade', key: 'lanes' } as const, [] as Lane[])
 const fleet = atom({ plugin: 'brigade', key: 'fleet' } as const, { agents: {}, order: [] } as Fleet)
 const weather = atom({ plugin: 'brigade', key: 'weather' } as const, null as Weather | null)
 const selected = atom({ plugin: 'brigade', key: 'selected' } as const, null as string | null)
+// Which ticket each dish belongs to, by dish slug. Filled in elsewhere; a missing dish is just unknown.
+const dishes = atom({ plugin: 'brigade', key: 'dishes' } as const, {} as Record<string, string>)
+
+// How long a finished agent stays on the board before it leaves.
+const KEEP_MS = 120000
+// The most tool calls we look at per agent while working out who it is. An agent that never
+// gives itself away stops costing anything after this many. Counted per agent id, for the
+// life of the session.
+const TOOL_LOOKS = 12
+const toolLooks = new Map<string, number>()
+
+// Applies one roster event to the fleet. This runs on the session's hot path, so a failure
+// here is swallowed: the board missing an event is far better than a tool call failing.
+// With `planner`, the Planner is put on the roster first if it isn't there yet.
+const record = async ($: EngineInterface, event: object, planner = false) => {
+  try {
+    const at = await $.clock.now()
+    await update($, fleet, roster => {
+      let next = roster
+      if (planner && !Object.hasOwn(roster.agents, 'main')) {
+        next = applyEvent(next, { type: 'spawn', id: 'main', at, description: 'planner', subagentType: 'planner', model: (event as { model?: string }).model })
+      }
+      return applyEvent(next, { ...event, at }) as Fleet
+    })
+  } catch {
+    // The roster stays as it was.
+  }
+}
+
+// Whether a tool call can still tell us something about this agent: it isn't on the roster
+// yet, or its role, dish or item is still unknown.
+async function stillUnknown($: EngineInterface, id: string) {
+  const roster = await read($, fleet)
+  if (!Object.hasOwn(roster.agents, id)) return true
+  const agent = roster.agents[id]
+  return agent.role === 'agent' || agent.dish == null || agent.item == null
+}
+
+// The ticket id and status of every ticket in the cache, so an agent's lane can be looked up.
+function statusById() {
+  const out = new Map<string, string>()
+  for (const hit of Object.values(cache)) if (hit.ticket) out.set(hit.ticket.id, hit.ticket.status)
+  return out
+}
+
+// The ticket an agent is working, through its dish. Null when either is unknown.
+function ticketOf(agent: Agent, byDish: Record<string, string>) {
+  if (agent.dish == null || !Object.hasOwn(byDish, agent.dish)) return null
+  const id = byDish[agent.dish]
+  return typeof id === 'string' && id !== '' ? id : null
+}
 
 // Everything the board draws, read from state so the pane redraws when any of it changes.
+// An agent's ticket and lane are worked out here, fresh each time, from its dish and the
+// ticket cache; an agent without a known ticket waits on the bench.
 async function snapshotOf($: EngineInterface): Promise<Snapshot> {
   const roster = await read($, fleet)
+  const byDish = await read($, dishes)
+  const statuses = statusById()
+  const agents = roster.order
+    .map(id => roster.agents[id])
+    .filter(agent => agent != null)
+    .map((agent): Agent => {
+      const ticket = ticketOf(agent, byDish)
+      const status = ticket === null ? undefined : statuses.get(ticket)
+      return { ...agent, ticket, lane: status === undefined ? 'bench' : laneOf(status) }
+    })
   return {
     lanes: await read($, lanes),
-    agents: roster.order.map(id => roster.agents[id]).filter(agent => agent != null),
+    agents,
     weather: await read($, weather),
     selected: await read($, selected),
     now: await $.clock.now(),
@@ -76,7 +140,15 @@ async function refreshLanes($: EngineInterface) {
   cacheDir = dir
   cache = fresh
   const tickets = Object.values(fresh).flatMap(hit => (hit.ticket ? [hit.ticket] : []))
-  const next = toLanes(tickets) as Lane[]
+  // Tickets an agent is working always show, however full their lane is.
+  const roster = await read($, fleet)
+  const byDish = await read($, dishes)
+  const pinned = roster.order.flatMap(id => {
+    const agent = roster.agents[id]
+    const ticket = agent ? ticketOf(agent, byDish) : null
+    return ticket === null ? [] : [ticket]
+  })
+  const next = toLanes(tickets, 6, pinned) as Lane[]
   if (!same(await read($, lanes), next)) await update($, lanes, () => next)
 }
 
@@ -87,6 +159,17 @@ let running: Promise<void> | null = null
 const refresh = async ($: EngineInterface) => {
   if (running) return running
   running = (async () => {
+    try {
+      // Agents that finished more than two minutes ago leave the board. Only a pass that
+      // drops someone writes, so an idle board never redraws.
+      const now = await $.clock.now()
+      const before = await read($, fleet)
+      if ((prune(before, now, KEEP_MS) as Fleet).order.length !== before.order.length) {
+        await update($, fleet, roster => prune(roster, now, KEEP_MS) as Fleet)
+      }
+    } catch {
+      // The roster stays as it was.
+    }
     try {
       await refreshLanes($)
     } catch {
@@ -122,6 +205,58 @@ export const register: Register = on => {
     await refresh($)
     await $.ui.open({ id: PANE, title: 'Brigade board' })
     return { text: 'Board opened.' }
+  })
+
+  // Every agent of the session goes on the board as it starts, works and finishes. These hooks
+  // run for every tool call and model request, so each one does as little as it can and always
+  // hands the event on unchanged.
+  on('agent.spawn', async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.agentId !== undefined) {
+      await record($, {
+        type: 'spawn',
+        id: ran.agentId,
+        model: ran.model,
+        description: e.description,
+        subagentType: e.subagentType,
+        name: e.name,
+        prompt: e.prompt,
+      })
+    }
+    return ran
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const ran = yield* next(e)
+    const usage = ran?.usage
+    const tokens = usage ? usage.input_tokens + usage.output_tokens : 0
+    // A step without an agent id is the main loop, which is the Planner.
+    if (e.agentId === undefined) await record($, { type: 'step', id: 'main', model: e.model, tokens }, true)
+    else await record($, { type: 'step', id: e.agentId, model: e.model, tokens })
+    return ran
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const id = e.agentId
+    if (id === undefined) return next(e)
+    try {
+      // Every call counts toward the cap, so past it an agent's tool calls cost nothing at all.
+      const looks = toolLooks.get(id) ?? 0
+      if (looks < TOOL_LOOKS) toolLooks.set(id, looks + 1)
+      if (looks < TOOL_LOOKS && (await stillUnknown($, id))) {
+        const fields = e as unknown as Record<string, unknown>
+        const paths = [fields.file_path, fields.command].filter(value => typeof value === 'string')
+        await record($, { type: 'tool', id, paths })
+      }
+    } catch {
+      // Nothing learned from this call.
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined) await record($, { type: 'complete', id: e.agentId, reason: e.reason })
+    return next(e)
   })
 
   on('ui.message', async ($, e, next) => {

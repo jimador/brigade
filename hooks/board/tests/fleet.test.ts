@@ -1,0 +1,121 @@
+import { expect, mock, test } from 'claude-code/testing'
+
+const PANE = { title: 'Brigade board', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } as const
+const OPEN = { command: 'brigade-board', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const
+const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-4-5' }
+
+type On = Parameters<Parameters<typeof test>[1]>[1]
+type Ui = Awaited<ReturnType<Parameters<Parameters<typeof test>[1]>[0]['ui']['mount']>>
+
+// Answers every event the board's hooks pass on, standing in for the engine beneath the plugin,
+// and a project with an empty ticket folder, so opening the board lays out all six lanes and
+// the hover card has room to draw.
+function engine(on: On) {
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('session.root', async () => ({ value: '/repo' }))
+  on('fs.exists', async ($$, e) => ({ value: e.path === '/repo/.brigade/config.md' }))
+  on('fs.read', async () => ({ value: '- source: local\n- database_id: ./board\n' }))
+  on('fs.list', async () => ({ value: [] }))
+  on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 0, window: 100000, percent: 0 }, rateLimits: [] } }))
+  on('agent.spawn', async () => ({ model: 'claude-haiku-4-5', agentId: 'a1' }))
+  on('turn.complete', async () => ({ text: '' }))
+  on('tool.call', async () => ({ result: 'ok' }))
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
+  })
+}
+
+async function step($: Parameters<Parameters<typeof test>[1]>[0], agentId: string) {
+  for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-4-5', messageCount: 1, agentId })) void chunk
+}
+
+// Lets the sprites walk in and stand still, then moves the pointer onto the sprite whose name
+// tag matches. The tag sits on the row under the sprite and starts at the sprite's left edge.
+async function hover(ui: Ui, tag: RegExp) {
+  await ui.advance(250 * 60)
+  const rows = (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object'))
+  const y = rows.findIndex(row => tag.test(row.text))
+  expect(y).toBeGreaterThan(0)
+  const at = rows[y].text.search(tag)
+  const x = Array.from(rows[y].text.slice(0, at)).length
+  await ui.pointer({ type: 'move', x, y: y - 1, in: 'stage' })
+}
+
+test('a spawned agent shows as a named sprite, adds its tokens, and stays two minutes after it fails', async ($, on) => {
+  const clock = mock.clock(on)
+  engine(on)
+  const ran = await $.agent.spawn({ tool_use_id: 't1', prompt: 'p', description: 'scout:board-data', subagentType: 'brigade:brigade-scout', provider: 'anthropic', model: 'haiku', parentModel: 'x', fork: false } as never)
+  expect(ran).toEqual({ model: 'claude-haiku-4-5', agentId: 'a1' })
+  await step($, 'a1')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    await $.command.run(OPEN)
+    const ui = await $.ui.mount({ plugin: 'brigade', surface, component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+    await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+    expect(await ui.find({ type: 'Text', text: /⌕ Basil/, in: 'stage' })).toBeDefined()
+    await hover(ui, /⌕ Basil/)
+    expect(await ui.find({ type: 'Text', text: /15 tokens/, in: 'stage' })).toBeDefined()
+    await ui.unmount()
+  }
+  await $.turn.complete({ agentId: 'a1', answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'error' } as never)
+  await $.command.run(OPEN)
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+  expect(await ui.find({ type: 'Text', text: /⌕ Basil/, in: 'stage' })).toBeDefined()
+  await hover(ui, /⌕ Basil/)
+  expect(await ui.find({ type: 'Text', text: /failed · 15 tokens/, in: 'stage' })).toBeDefined()
+  await ui.post({ select: 'a1' }, { in: 'stage' })
+  await ui.unmount()
+  // A minute on it is still there; past two minutes the next refresh takes it off the board.
+  await clock.advance(60000)
+  await $.command.run(OPEN)
+  const later = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await later.resize({ columns: 80, rows: 30, in: 'stage' })
+  expect(await later.find({ type: 'Text', text: /⌕ Basil/, in: 'stage' })).toBeDefined()
+  await later.unmount()
+  await clock.advance(61000)
+  await $.command.run(OPEN)
+  const gone = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await gone.resize({ columns: 80, rows: 30, in: 'stage' })
+  expect(await gone.find({ type: 'Text', text: /Basil/, in: 'stage' })).toBeUndefined()
+  await gone.unmount()
+})
+
+test('a tool call from the main loop adds no agent and passes its result through', async ($, on) => {
+  mock.clock(on)
+  engine(on)
+  expect(await $.tool.call({ tool: 'Read', file_path: '/x' } as never)).toEqual({ result: 'ok' })
+  await $.command.run(OPEN)
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+  expect(await ui.find({ type: 'Text', text: /BRIGADE/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Basil/, in: 'stage' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('an agent never spawned is named by the paths it touches', async ($, on) => {
+  mock.clock(on)
+  engine(on)
+  await step($, 'a2')
+  await $.tool.call({ agentId: 'a2', tool: 'Read', file_path: '/repo/.brigade/dishes/obsidian-example/packets/dish-notes.md' } as never)
+  await $.tool.call({ agentId: 'a2', tool: 'Write', file_path: '/repo/.brigade/dishes/obsidian-example/reports/dish-notes-cook.md' } as never)
+  await $.command.run(OPEN)
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+  await hover(ui, /♨ Basil/)
+  expect(await ui.find({ type: 'Text', text: /Basil · cook/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /item dish-notes/, in: 'stage' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the main loop shows as the Planner', async ($, on) => {
+  mock.clock(on)
+  engine(on)
+  for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'claude-opus-4-5', messageCount: 1 })) void chunk
+  await $.command.run(OPEN)
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+  await hover(ui, /✦ Basil/)
+  expect(await ui.find({ type: 'Text', text: /Basil · planner/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /working · 15 tokens/, in: 'stage' })).toBeDefined()
+  await ui.unmount()
+})
