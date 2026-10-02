@@ -62,12 +62,18 @@ node --check scripts/brigade-risk
 node --check scripts/brigade-eval
 node --check scripts/brigade-evidence
 node --check workflows/config.js
+for f in hooks/board/lib/*.mjs; do node --check "$f" || exit 1; done
 scripts/brigade-bundle --check
 python3 -c "import json; [json.load(open(f)) for f in ['.claude-plugin/plugin.json','.claude-plugin/marketplace.json','hooks/hooks.json','settings.json','monitors/monitors.json']]"
 claude plugin validate .claude-plugin/plugin.json
 claude plugin validate .claude-plugin/marketplace.json
+node --test test/board/*.test.mjs
+claude plugin test .
 ./test/regression.sh
 ```
+
+The board's `.tsx` files are checked by `claude plugin validate` and `claude plugin test`,
+since `node --check` cannot read them.
 
 **Eval tier (opt-in).** `scripts/brigade-eval` runs prompt evals against skill and agent
 surfaces; it needs either `ANTHROPIC_API_KEY` or an authenticated Claude Code CLI (`claude`

@@ -3790,6 +3790,39 @@ EOF
     fail "brigade-status --json broke with a planner ledger present"
 }
 
+check_board_libraries() {
+  # Syntax-check every board library and run the board's unit tests under the given root.
+  # An empty library folder fails too, so deleting the board can't sneak past the gate.
+  # node --check can't read .tsx; claude plugin validate and claude plugin test cover those.
+  board_root="$1"
+  libs=0
+  for f in "$board_root"/hooks/board/lib/*.mjs; do
+    [ -f "$f" ] || continue
+    libs=$((libs + 1))
+    node --check "$f" || fail "board library does not parse: $f"
+  done
+  [ "$libs" -gt 0 ] || fail "no board libraries found in $board_root/hooks/board/lib"
+  tests=0
+  for f in "$board_root"/test/board/*.test.mjs; do
+    [ -f "$f" ] && tests=$((tests + 1))
+  done
+  [ "$tests" -gt 0 ] || fail "no board tests found in $board_root/test/board"
+  # Hand node --test the files themselves: Node 24 reads a bare folder as a module path.
+  node --test "$board_root"/test/board/*.test.mjs >"$TMP_ROOT/board-tests.log" 2>&1 || {
+    cat "$TMP_ROOT/board-tests.log" >&2
+    fail "board unit tests failed"
+  }
+}
+
+test_board_libraries() {
+  check_board_libraries "$ROOT"
+  # The empty-folder guard must hold, or a deleted board would pass silently.
+  mkdir -p "$TMP_ROOT/empty-board/hooks/board/lib" "$TMP_ROOT/empty-board/test/board"
+  if (check_board_libraries "$TMP_ROOT/empty-board") 2>/dev/null; then
+    fail "board check passed on an empty library folder"
+  fi
+}
+
 test_plugin_manifests_validate
 test_post_cook_validate_hook
 test_coord_watch_transitions
@@ -3844,4 +3877,5 @@ test_evidence_scope
 test_planner_model_config
 test_skill_surface_budgets
 test_status_planner_ledger
+test_board_libraries
 echo "PASS: brigade operational regressions"
