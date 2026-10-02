@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Fleet, Lane, Snapshot, Weather } from '../../types'
+import type { Agent, Fleet, Lane, Note, Snapshot, Weather } from '../../types'
 import { boardDirFrom, laneOf, parseTicket, toLanes } from './lib/board.mjs'
+import { latest, ledgerTail, noteFrom, planInfo } from './lib/dish.mjs'
 import { applyEvent, prune } from './lib/fleet.mjs'
 import { ROLES } from './lib/sprites.mjs'
 import { forecast } from './lib/weather.mjs'
@@ -14,6 +15,8 @@ const weather = atom({ plugin: 'brigade', key: 'weather' } as const, null as Wea
 const selected = atom({ plugin: 'brigade', key: 'selected' } as const, null as string | null)
 // Which ticket each dish belongs to, by dish slug. Filled in elsewhere; a missing dish is just unknown.
 const dishes = atom({ plugin: 'brigade', key: 'dishes' } as const, {} as Record<string, string>)
+// The newest things agents wrote (reports, verdicts, briefs, memory updates), newest first.
+const notes = atom({ plugin: 'brigade', key: 'notes' } as const, [] as Note[])
 
 // How long a finished agent stays on the board before it leaves.
 const KEEP_MS = 120000
@@ -152,6 +155,105 @@ async function refreshLanes($: EngineInterface) {
   if (!same(await read($, lanes), next)) await update($, lanes, () => next)
 }
 
+// Only dishes whose PLAN.md moved in the last day get their folders scanned for notes.
+const RECENT_MS = 24 * 60 * 60 * 1000
+// How many notes the board keeps, and how many it shows.
+const KEEP_NOTES = 12
+const SHOW_NOTES = 8
+// How many live lines of the clicked agent's working memory to show.
+const MEMORY_LINES = 8
+// The folders inside a dish that hold notes: research briefs, cook and inspector reports, and
+// each agent's working memory.
+const NOTE_DIRS = ['briefs', 'reports', 'state']
+
+type Plan = ReturnType<typeof planInfo>
+// Dish files we have already read, by full path, with the mtime we read them at. A file is only
+// read again when its mtime moves, so quiet dishes cost a few folder listings per tick.
+let dishCache: Record<string, { mtimeMs: number; plan?: Plan; note?: Note | null }> = {}
+
+// The working memory of the agent the operator clicked, read on each tick. `lines` is null when
+// the agent has no memory file yet.
+let memory: { id: string; name: string; lines: string[] | null } | null = null
+
+// Reads every dish's plan to learn which ticket it belongs to, and gathers the newest notes
+// from the dishes that are still moving. Missing folders are skipped; a file that won't read
+// throws, and the board keeps what it had until the next tick.
+async function refreshNotes($: EngineInterface) {
+  const root = (await $.session.root()).replace(/[\\/]+$/, '')
+  const base = `${root}/.brigade/dishes`
+  if (!(await $.fs.exists(base))) return
+  const now = await $.clock.now()
+  const fresh: typeof dishCache = {}
+  const byDish: [string, string][] = []
+  const all: Note[] = []
+  for (const folder of await $.fs.list(base)) {
+    if (folder.kind !== 'dir') continue
+    const dir = `${base}/${folder.name}`
+    const inside = await $.fs.list(dir)
+    const planEntry = inside.find(entry => entry.kind === 'file' && entry.name === 'PLAN.md')
+    if (!planEntry) continue
+    const planPath = `${dir}/PLAN.md`
+    const knownPlan = dishCache[planPath]
+    const plan =
+      knownPlan && knownPlan.mtimeMs === planEntry.mtimeMs && knownPlan.plan
+        ? knownPlan.plan
+        : planInfo(await $.fs.read(planPath))
+    fresh[planPath] = { mtimeMs: planEntry.mtimeMs, plan }
+    if (plan.dish !== '' && plan.ticket !== '') byDish.push([plan.dish, plan.ticket])
+    if (now - planEntry.mtimeMs > RECENT_MS) continue
+    for (const sub of NOTE_DIRS) {
+      if (!inside.some(entry => entry.kind === 'dir' && entry.name === sub)) continue
+      for (const entry of await $.fs.list(`${dir}/${sub}`)) {
+        if (entry.kind !== 'file' || !entry.name.endsWith('.md')) continue
+        const path = `${dir}/${sub}/${entry.name}`
+        const known = dishCache[path]
+        const note =
+          known && known.mtimeMs === entry.mtimeMs && known.note !== undefined
+            ? known.note
+            : (noteFrom(await $.fs.read(path), entry.mtimeMs) as Note | null)
+        fresh[path] = { mtimeMs: entry.mtimeMs, note }
+        if (note) all.push(note)
+      }
+    }
+  }
+  // Only a complete pass replaces the cache, which also drops files that have gone.
+  dishCache = fresh
+  // fromEntries makes plain own keys, so a dish slug like "__proto__" can't touch the prototype.
+  const nextDishes = Object.fromEntries(byDish) as Record<string, string>
+  if (!same(await read($, dishes), nextDishes)) await update($, dishes, () => nextDishes)
+  const nextNotes = latest(all, KEEP_NOTES) as Note[]
+  if (!same(await read($, notes), nextNotes)) await update($, notes, () => nextNotes)
+}
+
+// Reads the working memory of the clicked agent, when it is one with a dish and an item.
+async function refreshMemory($: EngineInterface) {
+  const id = await read($, selected)
+  const agent = id === null ? undefined : (await read($, fleet)).agents[id]
+  if (id === null || !agent || agent.dish == null || agent.item == null) {
+    memory = null
+    return
+  }
+  const root = (await $.session.root()).replace(/[\\/]+$/, '')
+  const path = `${root}/.brigade/dishes/${agent.dish}/state/${agent.item}.md`
+  const lines = (await $.fs.exists(path)) ? (ledgerTail(await $.fs.read(path), MEMORY_LINES) as string[]) : null
+  memory = { id, name: agent.name, lines }
+}
+
+// One line per note: time (UTC), who wrote it, for which item, and what it says.
+function noteLine(note: Note) {
+  const time = Number.isFinite(note.at) ? new Date(note.at).toISOString().slice(11, 16) : '--:--'
+  return `${time} ${note.role} ${note.item} · ${note.kind} ${note.gist}`
+}
+
+// The memory lines as one fenced code block, so nothing in them renders as a link. The fence is
+// longer than any run of backticks inside, so the text can't close it early.
+function memoryBlock(lines: string[]) {
+  const body = lines.join('\n')
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map(run => run.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${fence}text\n${body}\n${fence}`
+}
+
 // Re-reads the ticket folder and the context figures and stores what changed. Runs on a timer,
 // so it never throws: a failed read just leaves the board as it was until the next tick.
 // Overlapping calls share one pass, so a slow tick can't land on top of a newer one.
@@ -174,6 +276,16 @@ const refresh = async ($: EngineInterface) => {
       await refreshLanes($)
     } catch {
       // Lanes stay as they were.
+    }
+    try {
+      await refreshNotes($)
+    } catch {
+      // Notes and the dish tickets stay as they were.
+    }
+    try {
+      await refreshMemory($)
+    } catch {
+      // The memory shown stays as it was.
     }
     try {
       const next = forecast((await $.session.usage()).context) as Weather
@@ -266,16 +378,31 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const snapshot = await snapshotOf($)
+    const recent = (await read($, notes)).slice(0, SHOW_NOTES)
+    const { Box, Client, Markdown, Text } = $.ui.resolve(e)
+    // What agents wrote, and the clicked agent's memory. Note text comes from files, so it only
+    // ever goes through Text; the memory goes through one Markdown as a code block.
+    const shown = memory !== null && memory.id === snapshot.selected ? memory : null
+    const below = (
+      <>
+        <Text bold>NOTES</Text>
+        {recent.map(note => (
+          <Text>{noteLine(note)}</Text>
+        ))}
+        {shown !== null && <Text bold>{`MEMORY · ${shown.name}`}</Text>}
+        {shown !== null &&
+          (shown.lines === null ? <Text>no memory file yet</Text> : <Markdown text={memoryBlock(shown.lines)} />)}
+      </>
+    )
     if (e.surface === 'terminal' || e.surface === 'desktop') {
-      const { Box, Client } = $.ui.resolve(e)
       return (
         <Box flexDirection="column">
           <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
+          {below}
         </Box>
       )
     }
     // Surfaces without a region get the same board as plain lines.
-    const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
         <Text bold>BRIGADE</Text>
@@ -289,6 +416,7 @@ export const register: Register = on => {
             {markOf(agent.role)} {agent.name} · {agent.model} · {agent.state}
           </Text>
         ))}
+        {below}
       </Box>
     )
   })
