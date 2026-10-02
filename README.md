@@ -262,7 +262,7 @@ board's own code and draws every frame with it; the whole run plays in under 30 
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
 | `hooks/board/` | the live board pane (`/brigade-board`): the task board with agents as pixel sprites coloured by model, a context meter, Messages and Learnings panels, and a detail box on click in the terminal, from a button on desktop |
-| `evals/` | `claude plugin eval` suite: eight expected-workflow cases with scaffolded fixtures; results stay local |
+| `evals/` | `claude plugin eval` suite: eleven expected-workflow cases with scaffolded fixtures; results stay local |
 | `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
 
 ## Requirements

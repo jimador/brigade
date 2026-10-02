@@ -146,5 +146,37 @@
     "assertions": [
       { "type": "semantic", "value": "the response asks the operator one decision-ready question naming the exact missing value with options and a recommendation, and neither guesses a value nor re-dispatches the same packet unchanged" }
     ]
+  },
+  {
+    "name": "packet-step-follows-ste-80",
+    "surface": "skills/brigade/templates/work-packet.md",
+    "prompt": "You are the Planner writing a work packet. This repo's brigade.config.json sets { \"writing\": { \"preset\": \"ste-80\" } }. A draft packet has this step:\n\n3. In `src/profile.js`, change `displayName` so any trimmed name longer than 40 characters is cut to its first 39 characters followed by an ellipsis, then add a test that covers a 41-character name, and run `npm test` from the repo root once both edits are saved.\n\nRewrite step 3 so it follows the repo's writing preset. Reply with the rewritten step only.",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the rewrite splits the draft into separate sentences or numbered steps that each give exactly one instruction (change the function, add the test, run the tests), instead of one sentence joined with 'then' and 'and'"
+      },
+      {
+        "type": "semantic",
+        "value": "every sentence in the rewrite has at most 20 words"
+      }
+    ]
+  },
+  {
+    "name": "packet-names-no-vendor-tools",
+    "surface": "skills/brigade/templates/work-packet.md",
+    "prompt": "You are the Planner reviewing a draft work packet before dispatch. One of its steps reads:\n\n\"2. Use the Read tool to open the file, then run /review.\"\n\nDoes this sentence belong in the packet as written? If not, say why and give the wording that should replace it.",
+    "max_tokens": 4096,
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the response says the sentence is specific to one agent runtime or vendor: it names a tool as a proper noun ('the Read tool') and/or relies on a slash command ('/review') that another model or runtime would not have"
+      },
+      {
+        "type": "semantic",
+        "value": "the response gives replacement wording that states the actions plainly (for example 'open/read the file' and 'review the change'), with no tool name and no slash command"
+      }
+    ]
   }
 ]
