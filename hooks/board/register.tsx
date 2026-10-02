@@ -55,6 +55,10 @@ const SLUG = /^[a-z0-9-]+$/
 // Note file names that are safe to put in a path.
 const NOTE_FILE = /^[A-Za-z0-9._-]+\.md$/
 
+// The roster with the Planner on it, under 'main', added now if it isn't there yet.
+const withPlanner = (roster: Fleet, at: number | undefined, model?: string) =>
+  Object.hasOwn(roster.agents, 'main') ? roster : (applyEvent(roster, { type: 'spawn', id: 'main', at, description: 'planner', subagentType: 'planner', model }) as Fleet)
+
 // Applies one roster event to the fleet. This runs on the session's hot path, so a failure
 // here is swallowed: the board missing an event is far better than a tool call failing.
 // With `planner`, the Planner is put on the roster first if it isn't there yet.
@@ -62,10 +66,7 @@ const record = async ($: EngineInterface, event: object, planner = false) => {
   try {
     const at = await $.clock.now()
     await update($, fleet, roster => {
-      let next = roster
-      if (planner && !Object.hasOwn(roster.agents, 'main')) {
-        next = applyEvent(next, { type: 'spawn', id: 'main', at, description: 'planner', subagentType: 'planner', model: (event as { model?: string }).model })
-      }
+      const next = planner ? withPlanner(roster, at, (event as { model?: string }).model) : roster
       return applyEvent(next, { ...event, at }) as Fleet
     })
   } catch {
@@ -75,18 +76,26 @@ const record = async ($: EngineInterface, event: object, planner = false) => {
 
 // Applies one tool event, but writes the roster only when the event changes it. Most tool calls
 // teach us nothing, and those then cost one read and no redraw. Failures are swallowed, like
-// in record.
-const learn = async ($: EngineInterface, event: { type: 'tool'; id: string; paths: unknown[]; act: object }) => {
+// in record. With `planner`, the Planner is put on the roster first if it isn't there yet, so a
+// main-session call that lands before the session's first step still shows up as the Planner.
+const learn = async ($: EngineInterface, event: { type: 'tool'; id: string; paths: unknown[]; act: object }, planner = false) => {
   try {
     const roster = await read($, fleet)
-    if (same(roster, applyEvent(roster, event))) return
+    const seeded = planner ? withPlanner(roster, undefined) : roster
+    if (same(roster, applyEvent(seeded, event))) return
     // Only a write needs the time: it is when a newcomer joins the roster.
     const at = await $.clock.now()
-    await update($, fleet, current => applyEvent(current, { ...event, at }) as Fleet)
+    await update($, fleet, current => applyEvent(planner ? withPlanner(current, at) : current, { ...event, at }) as Fleet)
   } catch {
     // The roster stays as it was.
   }
 }
+
+// Whether a main-session tool call touches a dish's or a worktree's folder. Only those can move
+// the main session to another dish, and this runs on every one of its calls, so it is kept to
+// a couple of substring tests and reads no state.
+const onBoard = (paths: string[]) =>
+  paths.some(path => path.includes('.brigade/dishes/') || path.includes('.brigade/worktrees/'))
 
 // The folder the board reads `.brigade/` from, without a trailing slash, and its last part, which
 // names the repo. It is the repository's root, because in a git worktree the session's own folder
@@ -1000,15 +1009,22 @@ export const register: Register = on => {
     } catch {
       // The agent keeps saying what it said before.
     }
-    if (id === undefined || act === null) return next(e)
+    if (act === null) return next(e)
     try {
-      // Every call counts toward the cap, so past it an agent's tool calls cost nothing more here.
-      const looks = toolLooks.get(id) ?? 0
-      if (looks < TOOL_LOOKS) toolLooks.set(id, looks + 1)
-      if (looks < TOOL_LOOKS) {
-        const paths = [fields.file_path, fields.command].filter(value => typeof value === 'string')
-        // A write can tell us the role; reads and mentions never do.
-        await learn($, { type: 'tool', id, paths, act })
+      // A call without an agent id is the main session's. It works ticket after ticket, so it is
+      // heard for its whole life, with no cap, but only when the call names a board folder.
+      if (id === undefined) {
+        const paths = [fields.file_path, fields.command].filter((value): value is string => typeof value === 'string')
+        if (onBoard(paths)) await learn($, { type: 'tool', id: 'main', paths, act }, true)
+      } else {
+        // Every call counts toward the cap, so past it an agent's tool calls cost nothing more here.
+        const looks = toolLooks.get(id) ?? 0
+        if (looks < TOOL_LOOKS) toolLooks.set(id, looks + 1)
+        if (looks < TOOL_LOOKS) {
+          const paths = [fields.file_path, fields.command].filter(value => typeof value === 'string')
+          // A write can tell us the role; reads and mentions never do.
+          await learn($, { type: 'tool', id, paths, act })
+        }
       }
     } catch {
       // Nothing learned from this call.

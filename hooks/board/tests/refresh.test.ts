@@ -234,6 +234,78 @@ test('a dish with a plan days old still reads its notes while an agent works it,
   await ui.unmount()
 })
 
+// Two dishes with work left, each for its own ticket, for following the main session around.
+const planFor = (dish: string, ticket: string) =>
+  ['---', 'doc: plan', `dish: ${dish}`, `ticket: ${ticket}`, `delivery_branch: feat/${dish}`, 'tier: two-star', 'kind: feature', 'items:', '  - { slug: first-step, status: todo }', '---', ''].join('\n')
+const ALPHA_DISH = '/repo/.brigade/dishes/alpha'
+const BETA_DISH = '/repo/.brigade/dishes/beta'
+
+test('the header follows the main session from one dish to the next', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  // Alpha's plan is the newer one, so it is the dish shown while nobody is known to work either.
+  world(on, {
+    [`${ALPHA_DISH}/PLAN.md`]: { text: planFor('alpha', 'acme-21'), mtimeMs: at - 10 },
+    [`${BETA_DISH}/PLAN.md`]: { text: planFor('beta', 'acme-22'), mtimeMs: at - 20 },
+  })
+  await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  const ui = await open($)
+  expect(await ui.find({ type: 'Text', text: /^acme-21 · feature/, in: 'stage' })).toBeDefined()
+
+  // The main session's calls carry no agent id. It edits a file in beta's folder.
+  await $.tool.call({ tool: 'Edit', file_path: `${BETA_DISH}/PLAN.md` } as never)
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /^acme-22 · feature/, in: 'stage' })).toBeDefined()
+
+  // Then it moves on to alpha.
+  await $.tool.call({ tool: 'Write', file_path: `${ALPHA_DISH}/packets/first-step.md` } as never)
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /^acme-21 · feature/, in: 'stage' })).toBeDefined()
+
+  // A call outside the board's folders changes nothing.
+  await $.tool.call({ tool: 'Edit', file_path: 'src/a.js' } as never)
+  await clock.advance(2000)
+  expect(await ui.find({ type: 'Text', text: /^acme-21 · feature/, in: 'stage' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('main-session calls off the board cost no roster read or write, and the main session is never capped', async ($, on) => {
+  mock.clock(on)
+  // The test's hooks stand in for the engine's state store and count what touches the roster.
+  const store = new Map<string, { value: unknown; version: number }>()
+  let fleetReads = 0
+  on('state.get', async ($$, e) => {
+    if (e.key === 'fleet') fleetReads++
+    return { value: store.get(e.key) ?? { value: undefined, version: 0 } }
+  })
+  on('state.set', async ($$, e) => {
+    const now = store.get(e.key) ?? { value: undefined, version: 0 }
+    if (e.ifVersion !== undefined && e.ifVersion !== now.version) return { value: { isSet: false, version: now.version } }
+    store.set(e.key, { value: e.value, version: now.version + 1 })
+    return { value: { isSet: true, version: now.version + 1 } }
+  })
+  on('tool.call', async () => ({ result: 'ok' }))
+  const writes = () => store.get('fleet')?.version ?? 0
+  const main = () => (store.get('fleet')?.value as { agents: Record<string, { dish: string | null; role: string }> } | undefined)?.agents.main
+
+  for (let i = 0; i < 500; i++) {
+    await $.tool.call({ tool: 'Edit', file_path: `src/a${i}.js` } as never)
+    await $.tool.call({ tool: 'Bash', command: `node --test test/${i}.test.mjs` } as never)
+  }
+  expect(fleetReads).toBe(0)
+  expect(writes()).toBe(0)
+
+  // More calls in beta's folder than an agent with an id is ever looked at, then one in alpha's:
+  // the main session is still heard, and it goes on the roster as the planner.
+  for (let i = 0; i < 450; i++) await $.tool.call({ tool: 'Read', file_path: `${BETA_DISH}/PLAN.md` } as never)
+  expect(main()?.dish).toBe('beta')
+  const settled = writes()
+  await $.tool.call({ tool: 'Edit', file_path: `${ALPHA_DISH}/PLAN.md` } as never)
+  expect(main()?.dish).toBe('alpha')
+  expect(main()?.role).toBe('planner')
+  expect(writes()).toBe(settled + 1)
+})
+
 // A session that runs inside a git worktree of the main checkout. The worktree has no .brigade/
 // of its own: that folder is untracked and lives only in the main checkout.
 const MAIN = '/path/to/repo'
