@@ -4,8 +4,10 @@
 // It only places things and clips their text to fit; drawing happens elsewhere.
 //
 // Every string it hands back has been through safeText and fits the cells it was given, because
-// ids, titles, names and messages all come from files. Ids are the one exception: they are keys
-// the painter matches back to the snapshot, never drawn, so they come back exactly as they came in.
+// ids, titles, names and messages all come from files. Ids too: a card, lane, agent or message id
+// comes back in its safe form, and agents are matched to cards on that form. So the painter looks
+// an agent up as homes[safeText(id)], and two ids that differ only by a control character or an
+// invisible mark are the same id to the board.
 
 import { SIZES, sizeOf, ROLES, FAMILIES } from './sprites.mjs'
 import { cellWidth, clip, safeText } from './canvas.mjs'
@@ -34,6 +36,8 @@ const MODAL_MIN_ROWS = 12
 // Cells between slots on a card, and between slots in the crew, which has the whole width to use.
 const CARD_SLOT_GAP = 1
 const CREW_SLOT_GAP = 2
+// Blank rows between one row of crew slots and the next, so sprites in different rows never touch.
+const CREW_ROW_GAP = 1
 const ELLIPSIS = '…'
 
 function isObject(value) {
@@ -49,6 +53,11 @@ function text(value) {
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return ''
+}
+
+// An id as the board keeps it: its text made safe, like every other string handed back.
+function idOf(value) {
+  return safeText(text(value))
 }
 
 function widthOf(columns) {
@@ -143,7 +152,7 @@ function uniqueAgents(value) {
   const out = []
   for (const agent of list(value)) {
     if (!isObject(agent) || (typeof agent.id !== 'string' && typeof agent.id !== 'number')) continue
-    const id = String(agent.id)
+    const id = idOf(agent.id)
     if (seen.has(id)) continue
     seen.add(id)
     out.push({ id, agent })
@@ -208,7 +217,7 @@ function placeCard(source, agents, x, y, w) {
   const placed = cardSlots(agents, x + 1, y + 1 + above, room)
   const inner = Math.max(2, above + placed.height)
   return {
-    id: text(source.id), x, y, w, h: inner + 2, idText, titleLines, tag, alert: source.alert === true, slots: placed.slots,
+    id: idOf(source.id), x, y, w, h: inner + 2, idText, titleLines, tag, alert: source.alert === true, slots: placed.slots,
   }
 }
 
@@ -228,7 +237,8 @@ function crewSlots(agents, top, columns) {
   })
   const slots = []
   let y = top
-  for (const row of intoRows(items, columns, CREW_SLOT_GAP)) {
+  for (const [i, row] of intoRows(items, columns, CREW_SLOT_GAP).entries()) {
+    if (i > 0) y += CREW_ROW_GAP
     const tallest = Math.max(...row.items.map((item) => item.size.h))
     for (const item of row.items) {
       const x = item.dx
@@ -286,7 +296,7 @@ function placePanels(snap, top, columns) {
   const height = side ? Math.max(mH, lH) : null
 
   const rows = shownMessages.map((m, i) => ({
-    id: text(m.id),
+    id: idOf(m.id),
     y: mY + 1 + i * 2,
     head: clip(`${text(m.from)} → ${text(m.to)}`, mW - 4),
     text: clip(text(m.text), mW - 4),
@@ -342,12 +352,12 @@ export function arrange(snapshot, columns) {
   // Which agents stand on which card: the first card on the board with the agent's card id.
   const sourceLanes = list(snap.lanes).filter(isObject)
   const onBoard = new Set()
-  for (const lane of sourceLanes) for (const c of list(lane.cards)) if (isObject(c)) onBoard.add(text(c.id))
+  for (const lane of sourceLanes) for (const c of list(lane.cards)) if (isObject(c)) onBoard.add(idOf(c.id))
   const waiting = new Map()
   const crewAgents = []
   for (const entry of uniqueAgents(snap.agents)) {
     const card = entry.agent.card
-    const key = card == null ? null : text(card)
+    const key = card == null ? null : idOf(card)
     if (key !== null && onBoard.has(key)) {
       if (!waiting.has(key)) waiting.set(key, [])
       waiting.get(key).push(entry)
@@ -374,7 +384,7 @@ export function arrange(snapshot, columns) {
       const x = j * (laneW + 1)
       let y = bandTop + 1
       const cards = list(source.cards).filter(isObject).map((c) => {
-        const placed = placeCard(c, takeAgents(text(c.id)), x, y, laneW)
+        const placed = placeCard(c, takeAgents(idOf(c.id)), x, y, laneW)
         y += placed.h
         return placed
       })
@@ -382,7 +392,7 @@ export function arrange(snapshot, columns) {
       const total = Number.isFinite(source.total) ? Math.max(Math.floor(source.total), cards.length) : cards.length
       const more = total - cards.length
       if (more > 0) y += 1
-      lanes.push({ key: text(source.key), title: clip(text(source.title), laneW), total, x, y: bandTop, w: laneW, more, cards })
+      lanes.push({ key: idOf(source.key), title: clip(text(source.title), laneW), total, x, y: bandTop, w: laneW, more, cards })
       bandBottom = Math.max(bandBottom, y)
     }
     next = bandBottom + 1

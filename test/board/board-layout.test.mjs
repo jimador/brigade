@@ -72,18 +72,31 @@ function laneBox(lane) {
   return { x: lane.x, y: lane.y, w: lane.w, h }
 }
 
-// Every string in the layout, with where it was found. Ids are left out: they are keys the painter
-// matches back to the snapshot, never drawn, so they must come back exactly as they went in.
+// Every string in the layout, with where it was found: values and object keys alike, ids and the
+// homes keys included, since ids come from files too.
 function strings(value, path = '', out = []) {
   if (typeof value === 'string') out.push([path, value])
   else if (Array.isArray(value)) value.forEach((v, i) => strings(v, `${path}[${i}]`, out))
   else if (value && typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) {
-      if (k === 'id' || k === 'agentId' || k === 'key' || path === '.homes') continue
+      out.push([`${path} key`, k])
       strings(v, `${path}.${k}`, out)
     }
   }
   return out
+}
+
+// The form an id takes on the board: its text made safe, the same way every other string is.
+function idOf(value) {
+  return ['string', 'number', 'boolean'].includes(typeof value) ? safeText(String(value)) : ''
+}
+
+// Everything one slot takes up: its sprite and its two text lines.
+function footprint(s) {
+  const boxes = [s, textBox(s.name), textBox(s.activity)]
+  const x = Math.min(...boxes.map((b) => b.x))
+  const y = Math.min(...boxes.map((b) => b.y))
+  return { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y }
 }
 
 // A small seeded generator, so a failing board can be rebuilt from its seed.
@@ -108,7 +121,9 @@ function generate(seed, columns, perLane, agentCount, withModal) {
   const r = rng(seed)
   const pick = (xs) => xs[Math.floor(r() * xs.length)]
   const text = () => (r() < 0.3 ? pick(HOSTILE) : pick(['Add a token bucket', 'Wire the limiter into the API gateway and log every refusal', 'Docs']))
-  const lanes = lanesOf(perLane, (key, j) => card(`${key}-${j + 1}`, text(), { tag: r() < 0.4 ? pick(['heavy', 'second pass', '日本語', 'a\nb']) : null, alert: r() < 0.2 }))
+  // Ids come from files too, so some carry hostile text.
+  const id = (plain) => (r() < 0.15 ? `${pick(HOSTILE)}-${plain}` : plain)
+  const lanes = lanesOf(perLane, (key, j) => card(id(`${key}-${j + 1}`), text(), { tag: r() < 0.4 ? pick(['heavy', 'second pass', '日本語', 'a\nb']) : null, alert: r() < 0.2 }))
   // Lanes arrive capped: some say there are more cards than they show.
   for (const lane of lanes) if (r() < 0.4) lane.total += Math.floor(r() * 9)
   const ids = lanes.flatMap((l) => l.cards.map((c) => c.id))
@@ -116,10 +131,10 @@ function generate(seed, columns, perLane, agentCount, withModal) {
     // The first few crowd onto one card, the rest scatter: some on cards, some with none, some on a card that is gone.
     let where = null
     if (ids.length > 0) where = i < 3 ? ids[0] : r() < 0.5 ? pick(ids) : r() < 0.5 ? null : 'gone-card'
-    return agent(`agent-${i}`, { name: pick(NAMES), role: pick(ROLE_KEYS), model: pick(MODELS), state: pick(STATES), activity: pick(ACTIVITIES), card: where })
+    return agent(id(`agent-${i}`), { name: pick(NAMES), role: pick(ROLE_KEYS), model: pick(MODELS), state: pick(STATES), activity: pick(ACTIVITIES), card: where })
   })
   const messages = Array.from({ length: Math.floor(r() * 7) }, (_, i) => ({
-    id: `m${i}`, at: i, from: pick(NAMES), to: pick(NAMES), item: 'token-bucket', text: text(), file: null,
+    id: id(`m${i}`), at: i, from: pick(NAMES), to: pick(NAMES), item: 'token-bucket', text: text(), file: null,
   }))
   const lineCount = Math.floor(r() * 8)
   const learnings = { total: lineCount + Math.floor(r() * 4), lines: Array.from({ length: lineCount }, text) }
@@ -159,7 +174,8 @@ function check(L, snap, columns) {
   assert.equal(L.lanes.length, lanesIn.length)
   L.lanes.forEach((lane, i) => {
     const src = lanesIn[i]
-    assert.deepEqual(lane.cards.map((c) => c.id), list(src.cards).filter(Boolean).map((c) => String(c.id)))
+    assert.equal(lane.key, idOf(src.key))
+    assert.deepEqual(lane.cards.map((c) => c.id), list(src.cards).filter(Boolean).map((c) => idOf(c.id)))
     assert.equal(lane.more, lane.total - lane.cards.length)
     assert.ok(lane.more >= 0)
     assert.ok(cellWidth(lane.title) <= lane.w)
@@ -198,20 +214,20 @@ function check(L, snap, columns) {
     }
   }
 
-  // Agents: each distinct agent has exactly one slot and one home; on its card when that card is on
-  // the board (the first card with that id), else with the crew.
+  // Agents: each distinct agent (told apart by the safe form of its id) has exactly one slot and one
+  // home; on its card when that card is on the board (the first card with that id), else with the crew.
   const seen = new Set()
-  const agents = list(snap?.agents).filter((a) => a && a.id != null && !seen.has(String(a.id)) && seen.add(String(a.id)))
+  const agents = list(snap?.agents).filter((a) => a && ['string', 'number'].includes(typeof a.id) && !seen.has(idOf(a.id)) && seen.add(idOf(a.id)))
   const firstCard = new Map()
   for (const c of cards) if (!firstCard.has(c.id)) firstCard.set(c.id, c)
   const slots = allSlots(L)
   assert.equal(slots.length, agents.length, `${where}: one slot per agent`)
-  assert.deepEqual(Object.keys(L.homes).sort(), agents.map((a) => String(a.id)).sort())
+  assert.deepEqual(Object.keys(L.homes).sort(), agents.map((a) => idOf(a.id)).sort())
   const crewIds = []
   for (const a of agents) {
-    const id = String(a.id)
+    const id = idOf(a.id)
     const size = SIZES[sizeOf(a.model)]
-    const host = a.card != null ? firstCard.get(String(a.card)) : undefined
+    const host = a.card != null ? firstCard.get(idOf(a.card)) : undefined
     const slot = host ? host.slots.find((s) => s.agentId === id) : L.crew?.slots.find((s) => s.agentId === id)
     assert.ok(slot, `${where}: agent ${id} has no slot ${host ? `on card ${host.id}` : 'in the crew'}`)
     if (!host) crewIds.push(id)
@@ -233,6 +249,12 @@ function check(L, snap, columns) {
         inBounds(box, `crew ${s.agentId}`)
         above = Math.max(above, box.y + box.h)
       }
+    }
+    // Crew rows never touch: two slots either share a row or have a blank row between them.
+    const feet = L.crew.slots.map(footprint)
+    for (let i = 0; i < feet.length; i++) for (let j = i + 1; j < feet.length; j++) {
+      const [a, b] = feet[i].y <= feet[j].y ? [feet[i], feet[j]] : [feet[j], feet[i]]
+      assert.ok(b.y < a.y + a.h || b.y >= a.y + a.h + 1, `${where}: crew rows touch`)
     }
   }
 
@@ -276,7 +298,7 @@ function check(L, snap, columns) {
   const msgIn = list(snap?.messages).filter((x) => x && typeof x === 'object')
   assert.equal(msgs.rows.length, Math.min(4, msgIn.length))
   msgs.rows.forEach((row, i) => {
-    assert.equal(row.id, String(msgIn[i].id))
+    assert.equal(row.id, idOf(msgIn[i].id))
     assert.ok(row.y > msgs.y && row.y + 2 <= msgs.y + msgs.h - 1, `${where}: message rows leave the box`)
     assert.ok(cellWidth(row.head) <= msgs.w - 4 && cellWidth(row.text) <= msgs.w - 4)
   })
@@ -646,6 +668,42 @@ test('hostile text never breaks a width or carries a control character', () => {
   }
   const L = arrange(snapshot({ lanes: lanesOf([1, 0, 0, 0, 0], () => card('k', 'a\nb')) }), 80)
   assert.deepEqual(L.lanes[0].cards[0].titleLines, ['a b'])
+})
+
+test('ids come back in their safe form, and agents still find their cards', () => {
+  const lanes = lanesOf([2, 0, 0, 0, 0], (key, j) => card(['x\u001b[2Jy', 'k\u200b'][j]))
+  lanes[0].key = 'to\ndo'
+  const agents = [
+    agent('a\u0007', { card: 'x\u001b[2Jy' }),
+    // A zero-width mark is dropped, so 'k' and 'k\u200b' are the same card to the board.
+    agent('b', { card: 'k' }),
+    // Two ids that differ only by a control character are one agent; the first one listed wins.
+    agent('c\td'), agent('c d', { name: 'Sage' }),
+  ]
+  const messages = [{ id: 'm\r1', at: 0, from: 'Clove', to: 'Miso', item: 'x', text: 'hi', file: null }]
+  const snap = snapshot({ lanes, agents, messages })
+  const L = arrange(snap, 80)
+  const [first, second] = L.lanes[0].cards
+  assert.equal(L.lanes[0].key, 'to do')
+  assert.deepEqual([first.id, second.id], ['x [2Jy', 'k'])
+  assert.deepEqual(first.slots.map((s) => s.agentId), ['a '])
+  assert.deepEqual(second.slots.map((s) => s.agentId), ['b'])
+  assert.deepEqual(L.crew.slots.map((s) => [s.agentId, s.name.text]), [['c d', '♨ Miso · cook']])
+  assert.deepEqual(Object.keys(L.homes).sort(), ['a ', 'b', 'c d'])
+  assert.deepEqual(L.regions.map((r) => r.id), ['x [2Jy', 'k', 'm 1'])
+  check(L, snap, 80)
+})
+
+test('crew rows of text-beside slots keep a blank row between them', () => {
+  // Each slot is 20 cells (a 7-cell sprite, a space, '♨ Rye · cook'), so at 24 columns one fits a row.
+  const agents = ['a', 'b', 'c'].map((id) => agent(id, { name: 'Rye', model: 'claude-haiku-4' }))
+  const snap = snapshot({ agents })
+  const L = arrange(snap, 24)
+  const [a, b, c] = L.crew.slots
+  assert.equal(a.name.x, a.x + a.w + 1)
+  assert.equal(b.y, a.y + a.h + 1)
+  assert.equal(c.y, b.y + b.h + 1)
+  check(L, snap, 24)
 })
 
 test('a 200-character title and a CJK id fit the card', () => {
