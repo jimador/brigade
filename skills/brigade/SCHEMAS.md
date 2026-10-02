@@ -113,6 +113,7 @@ delivery_branch: feat/<slug>       # delivery-named (repo's own convention); bec
 source: notion                     # which adapter
 tier: two-star                     # service tier the dish is cooked at — three-star|two-star|one-star (TIERS.md)
 kind: build                        # optional: build (default) | research — research dishes carry no packets; each item's board ticket is its contract, and items take a research depth (see the research type)
+writing: ste-80                    # optional: the writing preset the packets are checked against (see packet); leave it out and no writing check runs
 intake:                            # reconciliation decisions from the intake sweep
   - { ticket: <id>, decision: absorb|cross-reference|leave, note: <one line> }
 items:                             # the DAG, one entry per work item
@@ -145,6 +146,33 @@ defends against a named input-hazard class or the packet derives from a review/a
 (names the hazard/premise, forbids the wrong shortcut, requires a targeted adversarial test).
 Authority: contracts and anchors are pasted verbatim from
 scout briefs or named files — never from memory. Budget: ≤ 120 lines per packet.
+
+**Writing checks.** When the plan sets `writing: <preset>`, `brigade-validate` asks
+`brigade-config writing --json --preset <preset>` (run from the plan's repository, 5-second
+timeout) for `checks.packet` and checks every packet against it. Each miss is a warning that
+names the packet and the file line; none fails the plan or changes the exit code. If the
+config can't be resolved, the plan gets one warning, `writing checks skipped: could not
+resolve writing config`, and nothing else is checked. The checks (a limit of 0 or `false`
+turns one off):
+
+- `maxStepWords` — a sentence in `### Steps` longer than the limit:
+  `packet <slug> line <n>: step sentence has <k> words (limit <limit>)`.
+- `maxDescriptionWords` — the same test in `### Goal` and `### Preconditions & hazards`,
+  reported as a `description sentence`.
+- `oneInstructionPerStep` — a numbered step whose first sentence joins two instructions with
+  `, then `, ` and then ` or `; `: `packet <slug> line <n>: step holds more than one instruction`.
+- `vendorNeutral` — anywhere in the packet, an XML-style tag (`<word>`, `</word>`), a
+  chat-template token (`[INST]`, `<|...|>`) or a tool named as a proper noun (`the Read tool`,
+  likewise Grep, Bash, Edit, Write): `packet <slug> line <n>: vendor-specific markup "<match>"`.
+  One per line, the first match.
+- `terms` — a banned word used as a whole word (any case), once per banned word per line:
+  `packet <slug> line <n>: says "<banned>", the approved term is "<term>"`.
+
+A packet runs from its `## Packet:` line to the next `## ` line outside fenced code. Fenced code and text in
+backticks are never checked. A sentence ends at `.`, `!` or `?` followed by a space or the
+end of the line, and carries on across a wrapped line. A word is a space-separated token with
+a letter or digit in it; list markers (`- `, `1. `, `- [ ] `) and bold markers are not words,
+and a backtick span counts as one. A sentence is reported on the line where it starts.
 
 ### `brief` — scout research answer (`briefs/<n>-<topic>.md`)
 

@@ -1844,6 +1844,165 @@ P0: applied — LEARNINGS.md line 3."
     fail "no invalid-mode violation reported: $output"
 }
 
+# Writes the writing-checks fixture plan. $1 is frontmatter line 10: `writing: ste-80`
+# opts the plan in, anything else keeps every line number where the test expects it.
+# The one packet breaks each of the five checks exactly once; the text outside the
+# packet, inside the fenced block and inside backticks breaks them too, and must not count.
+write_writing_plan() {
+  cat >"$2" <<EOF
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-10-01T00:00:00Z
+ticket: TEST-1
+source: local
+$1
+items:
+  - { slug: alpha, status: todo, depends_on: [], heavy: false, files: [src/alpha.ts], attempts: [] }
+---
+
+## Dish
+Fixture for the writing checks. The dish text sits outside every packet, so this long sentence with far more than twenty-five words in it, then a task and a <b> tag, is never checked at all.
+
+## Waves
+- Wave 1: alpha
+
+## Packet: alpha
+
+### Goal
+
+Add a greeting to the acme banner so that every visitor who opens the page sees one short and friendly welcome line before anything else on the screen loads.
+
+### Preconditions & hazards
+
+- Keep the banner short. Alex reads it on a phone.
+
+### Steps
+
+1. **Explore (read-only):** read \`src/alpha.ts\` and the banner tests.
+2. **Implement** the greeting, then run the banner tests.
+3. Write the greeting as one plain line of text that each visitor reads first when the acme page opens in a browser window.
+4. Ask the Read tool for the banner file.
+
+\`\`\`bash
+the Read tool reads <tag> here, then a very long fenced line with far more than twenty words that is code and is never checked by the step rule at all; task
+\`\`\`
+
+### Acceptance criteria
+
+- [ ] Each slice of the banner shows the greeting; \`the Bash tool\` and \`<slug>\` in backticks are fine.
+
+## Notes
+After the packet: the Grep tool and a task here are not checked.
+EOF
+}
+
+test_validate_writing_checks() {
+  fixture="$TMP_ROOT/validate-writing"
+  mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  rel=".brigade/dishes/sample/PLAN.md"
+  # The team layer adds one approved term; ste-80 supplies the other four checks.
+  cat >"$fixture/brigade.config.json" <<'EOF'
+{ "writing": { "checks": { "packet": { "terms": { "work item": ["task", "slice"] } } } } }
+EOF
+  writing_validate() { CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" "$@"; }
+
+  write_writing_plan "writing: ste-80" "$plan"
+  output="$(writing_validate "$ROOT/scripts/brigade-validate" "$plan" 2>&1)" ||
+    fail "a writing check changed the validator's exit code: $output"
+  expected="warn  $rel: packet alpha line 25: description sentence has 29 words (limit 25)
+warn  $rel: packet alpha line 34: step holds more than one instruction
+warn  $rel: packet alpha line 35: step sentence has 23 words (limit 20)
+warn  $rel: packet alpha line 36: vendor-specific markup \"the Read tool\"
+warn  $rel: packet alpha line 44: says \"slice\", the approved term is \"work item\""
+  got="$(printf '%s\n' "$output" | grep '^warn ' | sort || true)"
+  [ "$got" = "$(printf '%s\n' "$expected" | sort)" ] ||
+    fail "writing checks did not give exactly the five expected warnings:
+--- expected
+$expected
+--- got
+$output"
+  printf '%s\n' "$output" | grep -q '^FAIL' && fail "a writing check produced a FAIL: $output"
+
+  # The same plan without the key validates exactly as it always did.
+  write_writing_plan "tier: two-star" "$plan"
+  output="$(writing_validate "$ROOT/scripts/brigade-validate" "$plan" 2>&1)" ||
+    fail "the plan without writing: failed validation: $output"
+  [ "$output" = "ok    $rel (plan)
+
+1 checked, 0 nonconforming" ] || fail "a plan without writing: was checked differently: $output"
+
+  # A sibling brigade-config that fails, prints the wrong thing or hangs gives one
+  # warning and nothing else. The validator finds its sibling next to itself, so a copy
+  # in a fixture folder picks up the fake.
+  bin="$fixture/bin"
+  mkdir -p "$bin"
+  cp "$ROOT/scripts/brigade-validate" "$bin/brigade-validate"
+  calls="$fixture/calls"
+  skipped="warn  $rel: writing checks skipped: could not resolve writing config"
+  write_writing_plan "writing: ste-80" "$plan"
+  for mode in exit garbage shape hang; do
+    cat >"$bin/brigade-config" <<'EOF'
+const fs = require('fs')
+fs.appendFileSync(process.env.FAKE_CALLS, process.argv.slice(2).join(' ') + '\n')
+const mode = process.env.FAKE_MODE
+if (mode === 'exit') process.exit(1)
+if (mode === 'garbage') console.log('not json at all')
+if (mode === 'shape') console.log(JSON.stringify({ preset: 'ste-80', checks: {} }))
+if (mode === 'hang') setTimeout(() => {}, 60000)
+EOF
+    rm -f "$calls"
+    output="$(FAKE_MODE="$mode" FAKE_CALLS="$calls" writing_validate node "$bin/brigade-validate" "$plan" 2>&1)" ||
+      fail "a broken brigade-config ($mode) changed the validator's exit code: $output"
+    [ "$(printf '%s\n' "$output" | grep '^warn ' || true)" = "$skipped" ] ||
+      fail "a broken brigade-config ($mode) did not give exactly the skipped warning: $output"
+    [ "$(cat "$calls")" = "writing --json --preset ste-80" ] ||
+      fail "the validator did not call brigade-config once with the plan's preset ($mode): $(cat "$calls")"
+  done
+  rm -f "$calls"
+  write_writing_plan "tier: two-star" "$plan"
+  FAKE_MODE=exit FAKE_CALLS="$calls" writing_validate node "$bin/brigade-validate" "$plan" >/dev/null 2>&1 ||
+    fail "the plan without writing: failed next to a broken brigade-config"
+  [ ! -e "$calls" ] || fail "the validator called brigade-config for a plan without writing:"
+}
+
+test_validate_writing_cost() {
+  # A model-written plan can be huge and hostile. 5,000 lines, with one 100,000-character
+  # step made of ", then " joins and one made of "<", must validate in under 2 seconds.
+  fixture="$TMP_ROOT/validate-writing-cost"
+  mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  node - "$plan" <<'JS'
+const fs = require('fs')
+const head = ['---', 'doc: plan', 'schema: 1', 'dish: sample', 'role: planner', 'model: haiku',
+  'created: 2026-10-01T00:00:00Z', 'ticket: TEST-1', 'source: local', 'writing: ste-80', 'items:',
+  '  - { slug: alpha, status: todo, depends_on: [], heavy: false, files: [src/alpha.ts], attempts: [] }',
+  '---', '', '## Dish', 'Cost fixture.', '', '## Packet: alpha', '', '### Goal', '', 'Stay fast.', '',
+  '### Steps', '', '1. ' + 'a, then '.repeat(12500), '', '<'.repeat(100000), '']
+const lines = head.slice()
+for (let i = 0; lines.length < 4999; i++) lines.push(`- Keep the banner short, line ${i}.`)
+lines.push('### Out of scope')
+fs.writeFileSync(process.argv[2], lines.join('\n') + '\n')
+JS
+  [ "$(wc -l <"$plan" | tr -d ' ')" -ge 5000 ] || fail "the cost fixture plan is shorter than 5,000 lines"
+  CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" node - "$ROOT/scripts/brigade-validate" "$plan" <<'JS' ||
+const { spawnSync } = require('child_process')
+const started = Date.now()
+const run = spawnSync(process.execPath, [process.argv[2], process.argv[3]], { encoding: 'utf8', timeout: 20000 })
+const elapsed = Date.now() - started
+console.log(`hostile plan validated in ${elapsed} ms (status ${run.status})`)
+if (run.error) throw run.error
+if (run.status !== 0) throw new Error(`validator exited ${run.status}: ${run.stdout}${run.stderr}`)
+if (!/line 26: step holds more than one instruction/.test(run.stdout)) throw new Error(`no instruction warning: ${run.stdout}`)
+if (elapsed >= 2000) throw new Error(`hostile plan took ${elapsed} ms (limit 2000 ms)`)
+JS
+    fail "the hostile writing plan was not validated quickly"
+}
+
 test_guard_arithmetic() {
   # $(( )) arithmetic is inert data, not a command substitution or a heredoc.
   assert_guard_allows 'git commit -m "$((1+1))"'
@@ -4029,6 +4188,8 @@ test_validate_ledger_artifacts
 test_validate_design_ledger
 test_validate_retro_readiness
 test_validate_analyst_modes
+test_validate_writing_checks
+test_validate_writing_cost
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_execute_verdict_scribe
