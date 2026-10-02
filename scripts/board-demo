@@ -1,0 +1,373 @@
+#!/usr/bin/env node
+// board-demo — draws docs/assets/svg/board-demo.svg, the animated board in the README.
+//
+// It plays a short made-up session through the board's own code: every frame is whatever
+// paint() returns for that moment, and the sprites walk with the same advance() step and the
+// same quarter-second tick the live pane uses. This script only turns those painted rows into
+// SVG, so the demo always looks like what /brigade-board draws. Run it again after changing
+// anything under hooks/board/lib/.
+//
+// The SVG is self-contained and animated by CSS alone, because GitHub shows README images
+// through <img>, where scripts never run and nothing outside the file loads.
+//
+// Usage:
+//   board-demo            # write docs/assets/svg/board-demo.svg
+//   board-demo --check    # write nothing; exit 1 if the committed file is out of date
+//   board-demo --text     # print every frame as plain text, to eyeball the story
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { paint } from '../hooks/board/lib/paint.mjs'
+import { layout } from '../hooks/board/lib/layout.mjs'
+import { advance, settled } from '../hooks/board/lib/stage.mjs'
+import { toLanes, laneOf } from '../hooks/board/lib/board.mjs'
+import { forecast } from '../hooks/board/lib/weather.mjs'
+import { PALETTE } from '../hooks/board/lib/sprites.mjs'
+import { cellWidth } from '../hooks/board/lib/canvas.mjs'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.join(__dirname, '..')
+const OUT = path.join(ROOT, 'docs', 'assets', 'svg', 'board-demo.svg')
+
+// The live pane ticks every 250 ms: each tick every sprite takes one step and flips frame.
+const TICK_MS = 250
+const COLUMNS = 64
+const CELL_W = 9
+const CELL_H = 18
+const PAD = 16
+const FONT = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
+// A made-up wall clock, so the hover card's timer has something to count from.
+const START = 1_000_000_000
+
+// --- the story ------------------------------------------------------------------------------
+
+const TICKETS = [
+  ['dark-mode', 'backlog', 'feature'],
+  ['sso-login', 'backlog', 'feature'],
+  ['rate-limit', 'todo', 'feature'],
+  ['csv-export', 'todo', 'feature'],
+  ['flaky-test', 'todo', 'bug'],
+  ['docs-refresh', 'todo', 'docs'],
+  ['retry-queue', 'todo', 'chore'],
+  ['tz-bug', 'todo', 'bug'],
+  ['audit-trail', 'todo', 'feature'],
+  ['cache-warm', 'todo', 'chore'],
+  ['webhook-sign', 'in_review', 'feature'],
+  ['auth-fix', 'done', 'bug'],
+  ['ci-cache', 'done', 'chore'],
+  ['cors-fix', 'done', 'bug'],
+  ['img-lazy', 'done', 'feature'],
+  ['lint-rules', 'done', 'chore'],
+  ['log-trim', 'done', 'chore'],
+  ['nav-a11y', 'done', 'feature'],
+  ['pg-pool', 'done', 'feature'],
+  ['seo-meta', 'done', 'docs'],
+].map(([id, status, kind]) => ({ id, title: id, status, kind }))
+
+// Where the two tickets that move are, beat by beat (beats count from 1).
+function statusOf(id, beat) {
+  if (id === 'rate-limit') {
+    if (beat >= 6) return 'done'
+    if (beat >= 5) return 'in_review'
+    if (beat >= 3) return 'in_progress'
+  }
+  if (id === 'csv-export') {
+    if (beat >= 6) return 'in_review'
+    if (beat >= 3) return 'in_progress'
+  }
+  return null
+}
+
+// The cast, in roster order. `arrives` is the beat they show up in, `doneIn` the beat they
+// finish in, `rate` how many tokens a second they burn while working.
+const CAST = [
+  { id: 'basil', name: 'Basil', role: 'planner', model: 'claude-fable-5-1', ticket: null, arrives: 1, tokens: 18_000, rate: 300, ran: 420 },
+  { id: 'sage', name: 'Sage', role: 'scout', model: 'claude-haiku-4-5', ticket: null, arrives: 2, tokens: 4_000, rate: 900, ran: 5 },
+  { id: 'miso', name: 'Miso', role: 'cook', model: 'claude-opus-5-5', ticket: 'rate-limit', arrives: 3, doneIn: 5, tokens: 41_000, rate: 1_800, ran: 160 },
+  { id: 'nori', name: 'Nori', role: 'cook', model: 'claude-sonnet-5-5', ticket: 'csv-export', arrives: 3, tokens: 27_000, rate: 1_400, ran: 150 },
+  { id: 'clove', name: 'Clove', role: 'inspector', model: 'claude-sonnet-5-5', ticket: 'rate-limit', arrives: 5, doneIn: 6, tokens: 9_000, rate: 1_100, ran: 3 },
+]
+
+// Each beat: the context fill for the weather, who the pointer rests on, and how many ticks
+// to hold once every sprite is home.
+const BEATS = [
+  { percent: 12, hold: 4 },
+  { percent: 21, hold: 3 },
+  { percent: 38, hold: 3 },
+  { percent: 41, hold: 8, hover: 'miso' },
+  { percent: 61, hold: 3 },
+  { percent: 79, hold: 3 },
+  { percent: 79, hold: 6 },
+]
+
+// The board snapshot at time `now` during `beat`. `starts[n]` is when beat n began, so finish
+// times and token counts line up with what has actually happened on screen.
+function snapshotAt(beat, now, starts) {
+  const tickets = TICKETS.map((t) => ({ ...t, status: statusOf(t.id, beat) ?? t.status }))
+  const status = new Map(tickets.map((t) => [t.id, t.status]))
+  const agents = CAST.filter((c) => c.arrives <= beat).map((c) => {
+    const startedAt = starts[c.arrives] - c.ran * 1000
+    const endedAt = c.doneIn != null && c.doneIn <= beat ? starts[c.doneIn] : null
+    const until = endedAt ?? now
+    return {
+      id: c.id,
+      name: c.name,
+      role: c.role,
+      model: c.model,
+      state: endedAt == null ? 'working' : 'done',
+      // The same rule the live board uses: an agent stands in its ticket's lane, or on the bench.
+      lane: c.ticket == null ? 'bench' : laneOf(status.get(c.ticket)),
+      ticket: c.ticket,
+      item: c.ticket,
+      tokens: c.tokens + Math.round((c.rate * (until - starts[c.arrives])) / 1000),
+      startedAt,
+      endedAt,
+    }
+  })
+  const pinned = agents.map((a) => a.ticket).filter((t) => t != null)
+  return {
+    lanes: toLanes(tickets, 6, pinned),
+    agents,
+    weather: forecast({ percent: BEATS[beat - 1].percent }),
+    selected: null,
+    now,
+  }
+}
+
+// Plays the beats tick by tick. Each tick sprites step toward their homes, then the board is
+// painted; a beat ends once everyone is home and the hold has run out.
+function play() {
+  const frames = []
+  const starts = {}
+  let positions = null
+  let tick = 0
+  BEATS.forEach((beat, i) => {
+    const n = i + 1
+    starts[n] = START + tick * TICK_MS
+    let held = 0
+    while (held < beat.hold) {
+      const now = START + tick * TICK_MS
+      const snapshot = snapshotAt(n, now, starts)
+      const homes = layout(snapshot, COLUMNS).homes
+      // The first beat opens with everyone already standing at home.
+      positions = positions === null
+        ? Object.fromEntries(Object.entries(homes).map(([id, h]) => [id, { x: h.x, y: h.y }]))
+        : advance(positions, homes)
+      const view = { positions, frame: tick % 2, hovered: beat.hover ?? null }
+      frames.push({ beat: n, tick, painted: paint(snapshot, view, COLUMNS) })
+      if (settled(positions, homes)) held++
+      tick++
+      if (tick > 400) throw new Error('sprites never settled')
+    }
+  })
+  return frames
+}
+
+// --- painted rows to SVG -------------------------------------------------------------------
+
+// Numbers print as whole numbers or with one decimal, so output never depends on float noise.
+function num(n) {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1)
+}
+
+function esc(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// Block characters as rectangles inside a cell: [x, y, w, h] in cell units.
+const BLOCKS = {
+  '█': [0, 0, CELL_W, CELL_H],
+  '▀': [0, 0, CELL_W, CELL_H / 2],
+  '▄': [0, CELL_H / 2, CELL_W, CELL_H / 2],
+  '▌': [0, 0, CELL_W / 2, CELL_H],
+  '▐': [CELL_W / 2, 0, CELL_W / 2, CELL_H],
+}
+const GAUGE = new Set(['▰', '▱'])
+
+// Spreads a row of runs back out into one entry per cell. A wide character takes its cell and
+// leaves '' in the next one, the same as the canvas does.
+function cellsOf(runs) {
+  const cells = []
+  for (const run of runs) {
+    for (const ch of run.text) {
+      cells.push({ ch, color: run.color, bg: run.backgroundColor, bold: run.bold })
+      for (let k = 1; k < cellWidth(ch); k++) cells.push({ ch: '', color: run.color, bg: run.backgroundColor, bold: run.bold })
+    }
+  }
+  return cells
+}
+
+function rect(x, y, w, h, fill) {
+  return `<rect x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" fill="${fill}"/>`
+}
+
+// One painted row as SVG, drawn at y = 0: backgrounds first, then blocks, then text. Returns ''
+// for a row with nothing on it but field.
+function rowSvg(runs) {
+  const cells = cellsOf(runs)
+  const out = []
+
+  // Backgrounds that aren't the field colour, merged across neighbouring cells.
+  for (let x = 0; x < cells.length; x++) {
+    const bg = cells[x].bg
+    if (bg === PALETTE.field) continue
+    let end = x
+    while (end + 1 < cells.length && cells[end + 1].bg === bg) end++
+    out.push(rect(x * CELL_W, 0, (end - x + 1) * CELL_W, CELL_H, bg))
+    x = end
+  }
+
+  // Blocks, with a rectangle that touches the last one of the same colour and height merged in.
+  const blocks = []
+  cells.forEach((c, x) => {
+    const shape = BLOCKS[c.ch]
+    if (shape) {
+      const [dx, dy, w, h] = shape
+      const left = x * CELL_W + dx
+      const last = blocks.findLast((b) => b.fill === c.color && b.y === dy && b.h === h)
+      if (last && last.x + last.w === left) last.w += w
+      else blocks.push({ x: left, y: dy, w, h, fill: c.color })
+    } else if (c.ch === '▰') {
+      blocks.push({ x: x * CELL_W + 1, y: 1, w: CELL_W - 2, h: CELL_H - 2, fill: c.color, gauge: true })
+    } else if (c.ch === '▱') {
+      blocks.push({ x: x * CELL_W + 1, y: 1, w: CELL_W - 2, h: CELL_H - 2, stroke: c.color, gauge: true })
+    }
+  })
+  for (const b of blocks) {
+    if (b.stroke) {
+      // An outline stays inside its box: the stroke is centred on the edge, so pull in by half.
+      out.push(`<rect x="${num(b.x + 0.5)}" y="${num(b.y + 0.5)}" width="${num(b.w - 1)}" height="${num(b.h - 1)}" fill="none" stroke="${b.stroke}"/>`)
+    } else {
+      out.push(rect(b.x, b.y, b.w, b.h, b.fill))
+    }
+  }
+
+  // Text: each stretch of same-style characters between spaces is one <text>, and every
+  // character gets its own x so it sits in its cell whatever font the reader has.
+  for (let x = 0; x < cells.length; x++) {
+    const c = cells[x]
+    if (!isText(c.ch)) continue
+    const xs = []
+    let text = ''
+    let end = x
+    while (end < cells.length) {
+      const d = cells[end]
+      if (d.ch === '') { end++; continue }
+      if (!isText(d.ch) || d.color !== c.color || d.bold !== c.bold) break
+      xs.push(num(end * CELL_W))
+      text += d.ch
+      end++
+    }
+    out.push(`<text x="${xs.join(' ')}" y="13" fill="${c.color}"${c.bold ? ' class="b"' : ''}>${esc(text)}</text>`)
+    x = end - 1
+  }
+  return out.join('')
+}
+
+function isText(ch) {
+  return ch !== '' && ch !== ' ' && !BLOCKS[ch] && !GAUGE.has(ch)
+}
+
+// The caption above the board, pinned to the cell grid the same way as board text.
+function captionSvg(text) {
+  const xs = Array.from(text, (_, i) => num(PAD + i * CELL_W))
+  return `<text x="${xs.join(' ')}" y="${PAD + 13}" fill="${PALETTE.dim}">${esc(text)}</text>`
+}
+
+// Builds the whole file. Every distinct row is defined once and frames point at rows; a frame
+// that looks the same as the one before it just stays up longer.
+function render(frames) {
+  const rowIds = new Map()
+  const defs = []
+  const groups = []
+  let tallest = 0
+  let reduced = null
+  for (const f of frames) {
+    tallest = Math.max(tallest, f.painted.height)
+    const uses = []
+    f.painted.rows.forEach((runs, y) => {
+      const body = rowSvg(runs)
+      if (body === '') return
+      if (!rowIds.has(body)) {
+        rowIds.set(body, `r${rowIds.size}`)
+        defs.push(`<g id="${rowIds.get(body)}">${body}</g>`)
+      }
+      uses.push(`<use href="#${rowIds.get(body)}" y="${y * CELL_H}"/>`)
+    })
+    const key = uses.join('')
+    const last = groups.at(-1)
+    if (last && last.key === key) last.ms += TICK_MS
+    else groups.push({ key, ms: TICK_MS, beat: f.beat })
+    // Reduced motion shows one still: the first frame with the hover card up.
+    if (reduced === null && BEATS[f.beat - 1].hover) reduced = groups.length - 1
+  }
+
+  const total = groups.reduce((sum, g) => sum + g.ms, 0)
+  const width = COLUMNS * CELL_W + PAD * 2
+  const height = PAD + CELL_H + tallest * CELL_H + PAD
+  const pct = (ms) => (ms === 0 ? '0' : ((ms / total) * 100).toFixed(3))
+
+  // Each frame has its own keyframes: visible from its start to its end, hidden otherwise.
+  // step-end keeps a value until the next keyframe, so frames switch cleanly with no fading.
+  const css = [
+    `text{font:15px ${FONT};white-space:pre}`,
+    '.b{font-weight:700}',
+    `.f{visibility:hidden;animation:${total}ms step-end infinite}`,
+  ]
+  let at = 0
+  groups.forEach((g, i) => {
+    const end = at + g.ms
+    const off = end === total ? '' : `${pct(end)}%{visibility:hidden}`
+    css.push(`#f${i}{animation-name:k${i}}@keyframes k${i}{${pct(at)}%{visibility:visible}${off}}`)
+    at = end
+  })
+  css.push(`@media (prefers-reduced-motion:reduce){.f{animation:none!important}#f${reduced}{visibility:visible}}`)
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title">`,
+    '<title id="title">The Brigade board: agents walk to the tickets they work as tickets move from TODO through COOKING and IN REVIEW to DONE, while the weather gauge fills from clear to storm</title>',
+    `<style>${css.join('\n')}</style>`,
+    `<defs shape-rendering="crispEdges">`,
+    ...defs,
+    '</defs>',
+    `<rect width="${width}" height="${height}" rx="12" fill="${PALETTE.field}"/>`,
+    captionSvg('/brigade-board'),
+    `<g transform="translate(${PAD} ${PAD + CELL_H})" shape-rendering="crispEdges">`,
+    ...groups.map((g, i) => `<g class="f" id="f${i}">${g.key}</g>`),
+    '</g>',
+    '</svg>',
+  ].join('\n') + '\n'
+}
+
+// --- the command ----------------------------------------------------------------------------
+
+function printText(frames) {
+  for (const f of frames) {
+    console.log(`--- tick ${f.tick} (beat ${f.beat}, ${f.tick * TICK_MS} ms)`)
+    for (const runs of f.painted.rows) console.log(runs.map((r) => r.text).join('').trimEnd())
+  }
+}
+
+function main() {
+  const frames = play()
+  if (process.argv.includes('--text')) {
+    printText(frames)
+    process.exit(0)
+  }
+  const svg = render(frames)
+  const rel = path.relative(ROOT, OUT)
+  if (process.argv.includes('--check')) {
+    const actual = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : null
+    if (actual !== svg) {
+      console.log(`STALE: ${rel} differs from what scripts/board-demo draws; run scripts/board-demo`)
+      process.exit(1)
+    }
+    console.log('DEMO OK')
+    process.exit(0)
+  }
+  fs.mkdirSync(path.dirname(OUT), { recursive: true })
+  fs.writeFileSync(OUT, svg)
+  console.log(`wrote ${rel}: ${frames.length} ticks, ${Buffer.byteLength(svg)} bytes`)
+}
+
+main()

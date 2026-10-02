@@ -150,6 +150,10 @@ and [docs/overrides.md](docs/overrides.md).
 
 ## The board
 
+<p align="center">
+  <img src="docs/assets/svg/board-demo.svg" width="720" alt="The board at work: agents walk in to stand under the tickets they pick up, the hover card shows a cook's model and tokens, and tickets move through review to done as the weather turns from clear to storm">
+</p>
+
 Run `/brigade-board` to open a pane with the ticket board in six lanes: BACKLOG, TODO,
 COOKING, IN REVIEW, BLOCKED and DONE. BACKLOG holds `backlog`, `scoping` and `design` tickets,
 plus any status the other lanes don't name. Each lane shows its first tickets as chips and a
@@ -163,6 +167,9 @@ An agent stands under its ticket once something it reads or writes names the dis
 dish's `PLAN.md` names the ticket; until then it waits on the bench. The board lists and reads
 whatever folder `.brigade/config.md` names as the board, and writes no files. It needs a Claude
 Code build with mods (function hooks).
+
+The demo above is drawn by the board's own drawing code, played through a made-up session by
+`scripts/board-demo`.
 
 ## What ships
 
@@ -185,6 +192,7 @@ Code build with mods (function hooks).
 | `scripts/brigade-validate` | zero-token schema conformance checker for dish artifacts |
 | `scripts/brigade-evidence` | zero-token verification-scope classifier — stops a targeted pass being read as repo green |
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
+| `scripts/board-demo` | regenerates the board demo in this README from the board's own drawing code; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
 | `hooks/board/` | the live board pane (`/brigade-board`): the ticket board with agents as pixel sprites sized by model, a context weather gauge, and a notes panel |
