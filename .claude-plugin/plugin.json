@@ -8,6 +8,9 @@
   "author": {
     "name": "jimador"
   },
+  "license": "MIT",
+  "homepage": "https://github.com/jimador/brigade",
+  "repository": "https://github.com/jimador/brigade",
   "workflows": [
     "./workflows/brigade-research.js",
     "./workflows/brigade-execute.js",

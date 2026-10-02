@@ -6,9 +6,11 @@ No service, no token, no config file to write by hand.
 ## 1. Install the plugin
 
 ```bash
-claude plugin marketplace add /path/to/brigade
+claude plugin marketplace add jimador/brigade
 claude plugin install brigade@brigade
 ```
+
+Working from a local clone, pass the clone's path to `marketplace add` instead.
 
 Or try it without installing: `claude --plugin-dir /path/to/brigade`.
 

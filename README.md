@@ -14,9 +14,11 @@ PR to review.
 You have exactly two jobs: approve the decomposition, and review the PR.
 
 ```bash
-claude plugin marketplace add /path/to/brigade
+claude plugin marketplace add jimador/brigade
 claude plugin install brigade@brigade
 ```
+
+Working from a local clone, pass the clone's path to `marketplace add` instead.
 
 Then, in a repo: `set up brigade`, and once that is done, `work my board`.
 
@@ -217,3 +219,7 @@ is handoff.
 
 Branches are named for what they deliver, never for the process that made them — no
 "brigade" in any branch name.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

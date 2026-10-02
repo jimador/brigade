@@ -40,7 +40,8 @@ that got past the gate gets a regression test in `test/regression.sh` in the sam
 - Terse, imperative prose: what the thing does and what breaks if you get it wrong.
 - No real data anywhere — no real names, handles, repos, orgs, emails, absolute home paths, or
   tokens in prompts, docs, examples, or fixtures. Use `alex`, `acme`, `/path/to/repo`,
-  `<your-handle>`.
+  `<your-handle>`. One exception: the plugin's own public repository, `jimador/brigade`, may
+  be named in install instructions, the manifest and the licence; nowhere else.
 - Never use "mise" / "mise en place" vocabulary — the `mise` dev-tool manager owns it.
 
 ## Brigade configuration (brigade cooking itself)
