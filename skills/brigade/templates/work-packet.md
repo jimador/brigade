@@ -23,7 +23,7 @@ those steps, lifted out of the packet.
 - **branch:** wip/<delivery-slug>/<item-slug>
 - **worktree:** .brigade/worktrees/<delivery-slug>--<item-slug>   (absolute path at dispatch)
 - **depends_on:** [<item-slug>, ...] | none
-- **heavy:** false            # true → dispatches to the sonnet Cook from the start
+- **heavy:** false            # true → dispatches to the heavy Cook from the start
 - **files:** the ONLY files you may touch
   - path/to/file.ts (edit)
   - path/to/new-file.test.ts (create)
@@ -133,10 +133,13 @@ Only when they apply — omit the section if neither does:
 - **Self-referential tooling.** A packet that tests or edits the session's own guards,
   hooks, or command classifiers must build hazard tokens (heredoc markers, staging flags,
   banned patterns) by string concatenation inside a script — never as literal text in the
-  cook's own Bash commands — because the installed tooling scans every agent's command
+  cook's own shell commands — because the installed tooling scans every agent's command
   text and will refuse the fleet's own work mid-dish.
 
 ### Steps
+
+If the plan declares `writing: <preset>`, write the steps and hazards to the S rules in
+`writing/<preset>.md`.
 
 1. **Explore (read-only, ≤ N files):** read the files listed above — nothing else. If
    reality contradicts this packet (missing file, different signature), STOP and report

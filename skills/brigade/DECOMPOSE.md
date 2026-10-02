@@ -6,6 +6,7 @@ check cites a rule id.
 ## Contents
 
 - Write the plan
+- Writing the packet text
 - P — Verify every premise before it goes in a packet
 - D — Shape the DAG
 - The haiku bar
@@ -26,6 +27,24 @@ depends_on, heavy, files); the body carries a `templates/work-packet.md` packet 
 groomed ticket's `## Proposed breakdown` is a **hint, not a contract**: check each piece
 against the scout briefs and the rules below, keep what holds, split or merge what doesn't,
 and note material deviations in `PLAN.md` so the ticket author can see why the shape changed.
+
+## Writing the packet text
+
+Resolve the writing settings once, at decomposition: run `brigade-config writing --json`,
+which prints `{ preset, presetFile, rules, checks }`.
+
+- **A preset is on** (`preset` is not `none`): read `presetFile` once, write
+  `writing: <preset>` in the PLAN.md frontmatter, and write every packet to it — S rules for
+  steps and hazards, C rules for contracts and acceptance criteria. `brigade-validate` then
+  warns on each miss.
+- **Team rules:** when `rules.packet` or `rules.plan` is not empty, apply those sentences to
+  every packet or to the plan body.
+- **The M rules bind every packet, preset or not:** plain Markdown, no XML-style tags, no
+  tool named as a proper noun, no slash command, agent name or model name, and everything
+  the cook needs inside the packet. The full list is the M section of `writing/ste-80.md`.
+
+A packet that reads two ways gets built two ways: the cook builds one reading, the inspector
+checks another, and the gap comes back as a FAIL.
 
 ## P — Verify every premise before it goes in a packet
 
