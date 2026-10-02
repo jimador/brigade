@@ -3,6 +3,8 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Agent, Detail, Fleet, Learnings, Message, Note, Project, Snapshot, Weather, WorkLane } from '../../types'
 import { boardDirFrom, laneOf, parseTicket } from './lib/board.mjs'
+import { draw } from './lib/board-paint.mjs'
+import { pictureOf } from './lib/board-svg.mjs'
 import { safeText } from './lib/canvas.mjs'
 import { agentDetail, cardDetail, messageDetail, projectOf, ticketDetail } from './lib/detail.mjs'
 import { envelope, findingsOf, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
@@ -686,6 +688,81 @@ function contextLine(reading: Weather | null) {
   return typeof percent === 'number' && Number.isFinite(percent) ? `Context ${percent}%` : 'Context --'
 }
 
+// The desktop app can't load the board's drawing region, so there the board is a picture with a
+// row of buttons under it that open the detail box. The app refuses a picture wider or taller
+// than this many pixels, and it checks that after the hook has returned, so we check first.
+const PICTURE_MAX_PX = 4096
+// How many buttons of each kind go under the picture, and the longest label a button gets.
+const BUTTON_CARDS = 12
+const BUTTON_AGENTS = 12
+const BUTTON_MESSAGES = 4
+const LABEL_MAX = 24
+
+type Picture = { source: string; width: number; height: number }
+type DetailButton = { key: string; label: string; open: Target }
+
+// A string, or the fallback when it is missing or empty.
+function or(value: unknown, fallback: string) {
+  return typeof value === 'string' && value !== '' ? value : fallback
+}
+
+// A button label from file text. Control characters become spaces and invisible marks go, as on
+// every board line; half of a surrogate pair and the engine's own placeholder character go too,
+// because the app refuses a button whose label holds one. Cut to LABEL_MAX characters, and a
+// label with nothing left to read says what kind of thing the button opens.
+function labelOf(text: string, kind: string) {
+  const kept = Array.from(safeText(text)).filter(ch => !/^[\ud800-\udfff]$/.test(ch) && ch !== '\u{10eeee}')
+  const label = kept.slice(0, LABEL_MAX).join('')
+  return label.trim() === '' ? kind : label
+}
+
+// An agent's tooltip, on one line: 'Basil · cook · claude-haiku-4-5 · editing bucket.ts'.
+function tooltipOf(agent: Agent) {
+  return plain([or(agent.name, agent.id), roleLabel(agent.role), or(agent.model, 'unknown model'), or(agent.activity, agent.state)].join(' · '))
+}
+
+// The board as one SVG picture: every sprite at its home, stepping between its two frames, with a
+// tooltip over each one. Throws when the board is too big for a picture the app will draw.
+function pictureFor(snapshot: Snapshot): Picture {
+  const still = { positions: {}, hovered: null, over: null }
+  const zero = draw(snapshot, { ...still, frame: 0 }, PANE_COLUMNS)
+  const one = draw(snapshot, { ...still, frame: 1 }, PANE_COLUMNS)
+  // The painter names each sprite by the safe form of its agent's id.
+  const byId = new Map(snapshot.agents.map(agent => [safeText(agent.id), agent]))
+  const titles = (zero.regions as { kind: string; id: string; x: number; y: number; w: number; h: number }[]).flatMap(region => {
+    const agent = region.kind === 'agent' ? byId.get(region.id) : undefined
+    return agent ? [{ x: region.x, y: region.y, w: region.w, h: region.h, text: tooltipOf(agent) }] : []
+  })
+  const picture = pictureOf({ rows: zero.rows, altRows: one.rows, columns: PANE_COLUMNS, titles }) as Picture
+  const fits = (px: number) => Number.isFinite(px) && px > 0 && px <= PICTURE_MAX_PX
+  if (!fits(picture.width) || !fits(picture.height)) throw new Error('the board is too big for a picture')
+  return picture
+}
+
+// The buttons that open the detail box on desktop, in the board's own order: the cards lane by
+// lane, the agents as they arrived, then the messages the Messages panel shows. Each key says only
+// the kind and the place in the row, so no file text ever becomes an address.
+function detailButtons(snapshot: Snapshot): DetailButton[] {
+  const cards = snapshot.lanes.flatMap(lane => lane.cards).slice(0, BUTTON_CARDS)
+  const agents = snapshot.agents.slice(0, BUTTON_AGENTS)
+  const shown = snapshot.messages.slice(0, BUTTON_MESSAGES)
+  return [
+    ...cards.map((card, i) => ({ key: `card-${i}`, label: labelOf(card.id, 'card'), open: { kind: 'card' as const, id: card.id } })),
+    ...agents.map((agent, i) => ({ key: `agent-${i}`, label: labelOf(agent.name, 'agent'), open: { kind: 'agent' as const, id: agent.id } })),
+    ...shown.map((message, i) => ({ key: `message-${i}`, label: labelOf(`${message.from} → ${message.to}`, 'message'), open: { kind: 'message' as const, id: message.id } })),
+  ]
+}
+
+// What a button under the picture does when pressed: the same open or close a click on the board
+// posts. A press comes after the drawing, so it may write. A failure leaves the box as it was.
+async function pressed($: EngineInterface, data: unknown) {
+  try {
+    await detailFrom($, data)
+  } catch {
+    // The detail box stays as it was until the next press.
+  }
+}
+
 export const register: Register = on => {
   // Every hook below follows one rule: the board's own work is wrapped so its failure is
   // swallowed, and the hook hands back exactly what next(e) gave it, or lets what next(e) threw
@@ -806,9 +883,40 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const snapshot = await snapshotOf($)
-    const { Box, Client, Text } = $.ui.resolve(e)
-    if (e.surface === 'terminal' || e.surface === 'desktop') {
+    const { Box, Button, Client, Svg, Text } = $.ui.resolve(e)
+    if (e.surface === 'terminal') {
       return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
+    }
+    if (e.surface === 'desktop') {
+      // The detail box, when it is up, is already in the picture; its close button leads the row.
+      try {
+        const picture = pictureFor(snapshot)
+        const closing = snapshot.detail !== null ? [{ key: 'close-details', label: 'Close details' }] : []
+        const opening = detailButtons(snapshot)
+        // An empty board has nothing to open, so it gets no row at all.
+        const row =
+          closing.length + opening.length === 0
+            ? []
+            : [
+                <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+                  <Text>Details:</Text>
+                  {closing.map(button => (
+                    <Button key={button.key} label={button.label} role="dismiss" onPress={() => pressed($, { close: true })} />
+                  ))}
+                  {opening.map(button => (
+                    <Button key={button.key} label={button.label} onPress={() => pressed($, { open: button.open })} />
+                  ))}
+                </Box>,
+              ]
+        return (
+          <Box flexDirection="column">
+            <Svg source={picture.source} alt="Brigade board" width={picture.width} height={picture.height} isInteractive={true} />
+            {row}
+          </Box>
+        )
+      } catch {
+        // No picture this time; the plain lines below still show the board.
+      }
     }
     // Surfaces without a region get the same board as plain lines. Text from files only ever
     // goes through Text, so nothing in it can turn into a link or markup, and every line goes
