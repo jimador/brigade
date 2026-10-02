@@ -1,0 +1,714 @@
+#!/usr/bin/env node
+// board-demo — draws docs/assets/svg/board-demo.svg, the animated board in the README.
+//
+// It plays one made-up run of a dish through the board's own code. The run is written the way
+// the live board sees one: model steps and tool calls for each agent, a PLAN.md the Planner keeps
+// editing, and the briefs, reports and verdicts agents leave in the dish folder. Every moment goes
+// through the same library calls the hooks module makes, so agents get their names, roles and
+// activities by the roster's rules, work items land in lanes by the phase rules, and the header,
+// messages, learnings and detail box say what the live board would say. Every frame is whatever
+// draw() returns, and the sprites walk with the pane's own advance() step. This script only turns
+// the drawn rows into SVG, so the demo always looks like what /brigade-board draws. Run it again
+// after changing anything under hooks/board/lib/.
+//
+// The SVG is self-contained and animated by CSS alone, because GitHub shows README images
+// through <img>, where scripts never run and nothing outside the file loads.
+//
+// Usage:
+//   board-demo            # write docs/assets/svg/board-demo.svg
+//   board-demo --check    # write nothing; exit 1 if the committed file is out of date
+//   board-demo --text     # print every frame as plain text, to eyeball the story
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { draw } from '../hooks/board/lib/board-paint.mjs'
+import { arrange } from '../hooks/board/lib/board-layout.mjs'
+import { advance, settled } from '../hooks/board/lib/stage.mjs'
+import { PHASES, pickDish, planItems, toWorkLanes, workCards } from '../hooks/board/lib/work.mjs'
+import { cardDetail, projectOf } from '../hooks/board/lib/detail.mjs'
+import { activityOf, applyEvent, emptyFleet, prune } from '../hooks/board/lib/fleet.mjs'
+import { findingsOf, learningsFrom, messagesFrom, noteFrom } from '../hooks/board/lib/dish.mjs'
+import { parseTicket } from '../hooks/board/lib/board.mjs'
+import { forecast } from '../hooks/board/lib/weather.mjs'
+import { PALETTE, ROLES } from '../hooks/board/lib/sprites.mjs'
+import { cellWidth } from '../hooks/board/lib/canvas.mjs'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.join(__dirname, '..')
+const OUT = path.join(ROOT, 'docs', 'assets', 'svg', 'board-demo.svg')
+
+// The live pane steps its sprites every 250 ms, and the board's clock moves on by that much per
+// step here too. Each frame of the demo is STRIDE steps and stays up FRAME_MS, so a whole run
+// fits in one short loop.
+const TICK_MS = 250
+const STRIDE = 2
+const FRAME_MS = 160
+// The width the board asks its dock for, so all five lanes sit side by side.
+const COLUMNS = 124
+const CELL_W = 9
+const CELL_H = 18
+const PAD = 16
+const FONT = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
+// A made-up wall clock for the run to start at.
+const START = 1_000_000_000
+// How long the live board keeps a finished agent before it leaves. The whole run takes less board
+// time than this, so nobody leaves and every agent keeps its name.
+const KEEP_MS = 120_000
+
+// --- the run's files ------------------------------------------------------------------------
+
+const REPO = 'storefront'
+const HOME = `/path/to/${REPO}`
+const DISH = 'rate-limit'
+const DISH_DIR = `${HOME}/.brigade/dishes/${DISH}`
+const worktree = (item) => `${HOME}/.brigade/worktrees/${DISH}--${item}`
+
+// The six work items: slug, goal, what it depends on, the files it may touch.
+const ITEMS = [
+  ['limits-research', 'See how the gateway counts calls.', [], ['docs/limits.md']],
+  ['limit-schema', 'Store a call limit for every customer.', ['limits-research'], ['src/limits/schema.ts']],
+  ['token-bucket', 'Throttle each customer with a token bucket.', ['limits-research'], ['src/limits/bucket.ts', 'src/limits/bucket.test.ts']],
+  ['limit-headers', 'Tell callers how many calls they have left.', ['limits-research'], ['src/http/headers.ts']],
+  ['burst-window', 'Let customers burst past the limit.', ['token-bucket'], ['src/limits/burst.ts']],
+  ['usage-docs', 'Document the limits for customers.', ['limit-headers', 'burst-window'], ['docs/limits.md']],
+]
+
+const TICKET = parseTicket([
+  '---',
+  'id: rate-limit',
+  'title: Throttle API calls per customer',
+  'status: in_progress',
+  'kind: feature',
+  '---',
+].join('\n'), 'rate-limit.md')
+
+const LEARNINGS = [
+  '# Learnings',
+  '',
+  '## Count calls where the gateway retries them',
+  '',
+  '## Keep limit numbers in config, not code',
+  '',
+].join('\n')
+
+// The Planner's PLAN.md as it stands: the items' statuses and attempts, then a packet per item.
+function planText(world) {
+  const lines = ['---', 'doc: plan', 'schema: 1', `dish: ${DISH}`, `ticket: ${TICKET.id}`,
+    'delivery_branch: feat/rate-limit', 'tier: three-star', 'items:']
+  for (const [slug, , deps, files] of ITEMS) {
+    const attempts = world.attempts[slug].map((a) => `{ model: ${a.model}, trigger: ${a.trigger}, result: ${a.result} }`)
+    lines.push(`  - { slug: ${slug}, status: ${world.status[slug]}, depends_on: [${deps.join(', ')}], heavy: false, ` +
+      `files: [${files.join(', ')}], attempts: [${attempts.join(', ')}] }`)
+  }
+  lines.push('---', '', '## Dish', '', TICKET.title, '')
+  for (const [slug, goal] of ITEMS) lines.push(`## Packet: ${slug}`, '', '### Goal', '', goal, '')
+  return lines.join('\n')
+}
+
+function frontmatter(fields, extra = []) {
+  return ['---', ...Object.entries(fields).map(([k, v]) => `${k}: ${v}`), ...extra, '---', ''].join('\n')
+}
+
+const BRIEF = frontmatter({ doc: 'brief', schema: 1, dish: DISH, item: 'limits-research', role: 'scout',
+  question: 'How does the gateway count calls?', confidence: 'high' })
+
+function report(item, model, attempt) {
+  return frontmatter({ doc: 'report', schema: 1, dish: DISH, item, role: 'cook', model, status: 'done', attempt })
+}
+
+function verdict(item, gist, attempt, findings = []) {
+  const list = findings.length === 0 ? ['findings: []'] : ['findings:', ...findings.map((f) => `  - { ${f} }`)]
+  return frontmatter({ doc: 'verdict', schema: 1, dish: DISH, item, role: 'inspector', verdict: gist, attempt_reviewed: attempt }, list)
+}
+
+// --- the run --------------------------------------------------------------------------------
+
+// The Planner is the session's main loop, so it has no agent id of its own; the rest are the
+// subagents a workflow starts, which the board first meets through their model steps and tool calls.
+const PLANNER = 'main'
+const SAGE = 'a1f3'
+const MISO = 'b27c'
+const NORI = 'c4d9'
+const CLOVE = 'd81e'
+const FENNEL = 'e5a0'
+const JUNIPER = 'f6b2'
+const OLIVE = 'a9c7'
+
+// Everything the board reads, as it stands at the moment being played.
+const world = {
+  now: START,
+  fleet: emptyFleet(),
+  // What each agent was last seen doing, waiting for the next refresh, as the hooks module keeps it.
+  doing: new Map(),
+  status: Object.fromEntries(ITEMS.map(([slug]) => [slug, 'todo'])),
+  attempts: Object.fromEntries(ITEMS.map(([slug]) => [slug, []])),
+  planAt: START,
+  // Files in the dish folder, by their place in it: { text, at }.
+  files: new Map(),
+  percent: 0,
+  // What the open detail box is about, or null.
+  target: null,
+}
+
+// A model step, as turn.step reports it. The Planner's steps put it on the roster first.
+function step(id, model, tokens) {
+  let next = world.fleet
+  if (id === PLANNER && !Object.hasOwn(next.agents, PLANNER)) {
+    next = applyEvent(next, { type: 'spawn', id: PLANNER, at: world.now, description: 'planner', subagentType: 'planner', model })
+  }
+  world.fleet = applyEvent(next, { type: 'step', id, model, tokens, at: world.now })
+}
+
+// A tool call, as tool.call sees it: it says what its agent is doing, and a subagent's paths can
+// tell the board its dish, its item and, for a write, its role.
+function call(id, tool, file, command) {
+  const act = { tool, filePath: file, command }
+  const doing = activityOf(act)
+  if (typeof doing === 'string') world.doing.set(id, doing)
+  if (id === PLANNER) return
+  const paths = [file, command].filter((value) => typeof value === 'string')
+  world.fleet = applyEvent(world.fleet, { type: 'tool', id, paths, act, at: world.now })
+}
+
+// An agent writes a note into the dish folder.
+function write(id, place, text) {
+  call(id, 'Write', `${DISH_DIR}/${place}`)
+  world.files.set(place, { text, at: world.now })
+}
+
+function finish(id) {
+  world.fleet = applyEvent(world.fleet, { type: 'complete', id, reason: 'end_turn', at: world.now })
+}
+
+// The Planner edits PLAN.md: new statuses, and an attempt for each cook that came back.
+function plan(changes, attempts = {}) {
+  call(PLANNER, 'Edit', `${DISH_DIR}/PLAN.md`)
+  Object.assign(world.status, changes)
+  for (const [slug, attempt] of Object.entries(attempts)) world.attempts[slug].push(attempt)
+  world.planAt = world.now
+}
+
+// The story, one moment at a time. Each moment changes the world, then the board steps its
+// sprites for `hold` ms; with `home`, it first waits for every sprite to reach its spot.
+// `hover`, `over` and `open` are where the pointer is: on an agent, on a card, or clicking a card.
+const STORY = [
+  // 1. Every item waits in To do; the Planner reads its plan.
+  { beat: 1, percent: 14, hold: 1000, run() {
+    step(PLANNER, 'claude-fable-5-1', 14_000)
+    call(PLANNER, 'Read', `${DISH_DIR}/PLAN.md`)
+  } },
+  // 2. A scout is sent to the research item. The board meets it as a plain agent reading its
+  //    packet, and only knows it is a scout once it writes its brief.
+  { beat: 2, percent: 18, home: true, hold: 200, run() {
+    plan({ 'limits-research': 'dispatched' })
+    call(PLANNER, 'Workflow')
+    step(SAGE, 'claude-haiku-4-5', 2_000)
+    call(SAGE, 'Read', `${DISH_DIR}/packets/limits-research.md`)
+  } },
+  { beat: 2, percent: 21, hold: 1000, run() {
+    step(SAGE, 'claude-haiku-4-5', 6_000)
+    write(SAGE, 'briefs/limits-research.md', BRIEF)
+    call(SAGE, 'Read', `${HOME}/src/gateway.ts`)
+  } },
+  // 3. The scout is done and the research item lands. Two cooks start; the board learns they
+  //    are cooks from their first edits in their worktrees.
+  { beat: 3, percent: 30, hold: 600, run() {
+    finish(SAGE)
+    plan({ 'limits-research': 'done', 'token-bucket': 'dispatched', 'limit-headers': 'dispatched' })
+    step(PLANNER, 'claude-fable-5-1', 9_000)
+    call(PLANNER, 'Workflow')
+    step(MISO, 'claude-opus-5-5', 4_000)
+    call(MISO, 'Read', `${DISH_DIR}/packets/token-bucket.md`)
+    step(NORI, 'claude-sonnet-5-5', 3_000)
+    call(NORI, 'Read', `${DISH_DIR}/packets/limit-headers.md`)
+  } },
+  { beat: 3, percent: 37, home: true, hold: 600, run() {
+    step(MISO, 'claude-opus-5-5', 15_000)
+    call(MISO, 'Edit', `${worktree('token-bucket')}/src/limits/bucket.ts`)
+    step(NORI, 'claude-sonnet-5-5', 9_000)
+    call(NORI, 'Edit', `${worktree('limit-headers')}/src/http/headers.ts`)
+    call(NORI, 'Bash', undefined, 'npm test')
+  } },
+  // 4. The pointer rests on Miso and its hover card comes up.
+  { beat: 4, percent: 41, hover: MISO, hold: 2000, still: true, run() {
+    step(MISO, 'claude-opus-5-5', 12_000)
+    step(NORI, 'claude-sonnet-5-5', 8_000)
+  } },
+  // 5. Miso files its report and finishes; the item waits for review. An inspector starts, and
+  //    reads the cook's report and code before it has written anything.
+  { beat: 5, percent: 48, hold: 800, run() {
+    write(MISO, 'reports/token-bucket-cook.md', report('token-bucket', 'opus', 1))
+    finish(MISO)
+    plan({ 'token-bucket': 'in_review' }, { 'token-bucket': { model: 'opus', trigger: 'initial', result: 'done' } })
+    step(CLOVE, 'claude-sonnet-5-5', 3_000)
+    call(CLOVE, 'Read', `${DISH_DIR}/reports/token-bucket-cook.md`)
+    step(NORI, 'claude-sonnet-5-5', 6_000)
+  } },
+  { beat: 5, percent: 55, home: true, hold: 500, run() {
+    step(CLOVE, 'claude-sonnet-5-5', 7_000)
+    call(CLOVE, 'Read', `${worktree('token-bucket')}/src/limits/bucket.ts`)
+  } },
+  // 6. Clove's verdict is FAIL. Writing it is what shows Clove is an inspector; once it finishes,
+  //    the item goes to Rework with the finding count.
+  { beat: 6, percent: 58, hold: 800, run() {
+    write(CLOVE, 'reports/token-bucket-verdict.md', verdict('token-bucket', 'FAIL', 1, [
+      'id: F1, severity: blocking, summary: window resets on every request',
+      'id: F2, severity: high, summary: refill rounds down below one token',
+    ]))
+    call(CLOVE, 'Read', `${worktree('token-bucket')}/src/limits/bucket.ts`)
+  } },
+  { beat: 6, percent: 61, home: true, hold: 700, run() {
+    finish(CLOVE)
+    plan({ 'token-bucket': 'rework' })
+  } },
+  // 7. A click on the token-bucket card opens its detail box, then it closes.
+  { beat: 7, over: 'token-bucket', hold: 400, run() {} },
+  { beat: 7, open: 'token-bucket', hold: 2500, run() {} },
+  // 8. A second pass. A finished agent never comes back to work, so the rework is a fresh cook,
+  //    named Fennel by the roster. Nori files its report at the same time and a fresh inspector,
+  //    Juniper, passes it. Fennel finishes, a fresh inspector, Olive, passes the bucket, and both
+  //    items are done.
+  { beat: 8, percent: 64, hold: 1300, run() {
+    world.target = null
+    plan({ 'token-bucket': 'dispatched' })
+    call(PLANNER, 'Workflow')
+    step(FENNEL, 'claude-opus-5-5', 5_000)
+    call(FENNEL, 'Read', `${DISH_DIR}/packets/token-bucket.md`)
+    write(NORI, 'reports/limit-headers-cook.md', report('limit-headers', 'sonnet', 1))
+    finish(NORI)
+    plan({ 'limit-headers': 'in_review' }, { 'limit-headers': { model: 'sonnet', trigger: 'initial', result: 'done' } })
+    step(JUNIPER, 'claude-haiku-4-5', 2_000)
+    call(JUNIPER, 'Read', `${DISH_DIR}/reports/limit-headers-cook.md`)
+  } },
+  { beat: 8, percent: 67, hold: 1100, run() {
+    step(FENNEL, 'claude-opus-5-5', 11_000)
+    call(FENNEL, 'Edit', `${worktree('token-bucket')}/src/limits/bucket.ts`)
+    step(JUNIPER, 'claude-haiku-4-5', 4_000)
+    write(JUNIPER, 'reports/limit-headers-verdict.md', verdict('limit-headers', 'PASS', 1))
+    finish(JUNIPER)
+    plan({ 'limit-headers': 'done' })
+  } },
+  { beat: 8, percent: 70, home: true, hold: 400, run() {
+    step(FENNEL, 'claude-opus-5-5', 6_000)
+    call(FENNEL, 'Bash', undefined, 'npm test')
+  } },
+  { beat: 8, percent: 73, hold: 1000, run() {
+    write(FENNEL, 'reports/token-bucket-cook-2.md', report('token-bucket', 'opus', 2))
+    finish(FENNEL)
+    plan({ 'token-bucket': 'in_review' }, { 'token-bucket': { model: 'opus', trigger: 'fail-retry', result: 'done' } })
+    step(OLIVE, 'claude-sonnet-5-5', 3_000)
+    call(OLIVE, 'Read', `${DISH_DIR}/reports/token-bucket-cook-2.md`)
+  } },
+  { beat: 8, percent: 76, home: true, hold: 300, run() {
+    step(OLIVE, 'claude-sonnet-5-5', 6_000)
+    write(OLIVE, 'reports/token-bucket-verdict-2.md', verdict('token-bucket', 'PASS', 2))
+    finish(OLIVE)
+    plan({ 'token-bucket': 'done' })
+  } },
+  // 9. Everything holds for a moment, then the run starts over.
+  { beat: 9, home: true, hold: 1500, run() {} },
+]
+
+// --- the board, as the hooks module builds it -------------------------------------------------
+
+function roleLabel(role) {
+  return Object.hasOwn(ROLES, role) ? ROLES[role].label : role
+}
+
+function notesNow() {
+  return [...world.files].map(([place, f]) => noteFrom(f.text, f.at, place)).filter(Boolean)
+}
+
+// The newest note of one kind, as the detail box picks it.
+function newest(notes, kind) {
+  let best = null
+  for (const note of notes) if (note.kind === kind && (best === null || note.at > best.at)) best = note
+  return best
+}
+
+// A card's detail box, built from the same pieces the hooks module reads for one.
+function cardBox(slug, items, notes, crew) {
+  const item = items.find((entry) => entry.slug === slug)
+  const [card] = workCards([item], notes, crew)
+  const phaseTitle = PHASES.find((phase) => phase.key === card?.phase)?.title ?? ''
+  const mine = notes.filter((note) => note.item === slug)
+  const lastVerdict = newest(mine, 'verdict')
+  const findings = lastVerdict ? findingsOf(world.files.get(lastVerdict.file).text) : []
+  const agents = crew
+    .filter((agent) => agent.item === slug)
+    .map((agent) => ({ name: agent.name, role: roleLabel(agent.role), activity: agent.activity, state: agent.state }))
+  return cardDetail({ item, phaseTitle, report: newest(mine, 'report'), verdict: lastVerdict, findings, agents })
+}
+
+// One refresh of the live board: the roster folds in what each agent was last seen doing, then
+// the dish on show, its lanes, header, messages, learnings and detail box are worked out again.
+function refresh() {
+  world.fleet = prune(world.fleet, world.now, KEEP_MS)
+  for (const [id, text] of world.doing) world.fleet = applyEvent(world.fleet, { type: 'activity', id, text })
+  world.doing.clear()
+
+  const plan = planItems(planText(world))
+  const items = plan.items
+  const roster = world.fleet.order.map((id) => world.fleet.agents[id]).filter((agent) => agent != null)
+  const shown = pickDish([{ dish: DISH, mtimeMs: world.planAt, items }], roster, world.now)
+  if (shown !== DISH) throw new Error('the board would not show the dish')
+  const notes = notesNow()
+  const crew = roster.filter((agent) => agent.dish === DISH)
+  const pinned = crew.flatMap((agent) => (agent.state === 'working' && agent.item != null ? [agent.item] : []))
+  const cards = workCards(items, notes, crew)
+  const lanes = toWorkLanes(cards, pinned)
+  const done = cards.filter((card) => card.phase === 'done').length
+  const project = projectOf({ mode: 'dish', repo: REPO, plan, ticket: TICKET, done, total: cards.length })
+  return {
+    project,
+    lanes,
+    roster,
+    weather: forecast({ percent: world.percent }),
+    messages: messagesFrom(notes, crew, 8),
+    learnings: learningsFrom(LEARNINGS, 5),
+    detail: world.target === null ? null : cardBox(world.target, items, notes, crew),
+  }
+}
+
+// What the pane is handed on each draw: the last refresh, with each agent's card worked out
+// fresh, and the clock as it is now.
+function snapshotOf(board) {
+  const onBoard = new Set(board.lanes.flatMap((lane) => lane.cards.map((card) => card.id)))
+  const agents = board.roster.map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    model: agent.model ?? null,
+    state: agent.state,
+    dish: agent.dish ?? null,
+    item: agent.item ?? null,
+    ticket: agent.dish === DISH ? TICKET.id : null,
+    card: agent.dish === DISH && agent.item != null && onBoard.has(agent.item) ? agent.item : null,
+    activity: agent.activity ?? null,
+    tokens: agent.tokens,
+    startedAt: agent.startedAt ?? null,
+    endedAt: agent.endedAt ?? null,
+  }))
+  const { roster, ...rest } = board
+  return { ...rest, agents, now: world.now }
+}
+
+// Plays the story. Each moment changes the world and refreshes the board; then the sprites step
+// toward their homes and the board is drawn, until the moment's hold has run out. Each frame of
+// the demo is STRIDE of the pane's steps, so sprites follow exactly the path advance() gives them,
+// shown every second step, and their legs flip on every frame as they do on every step in the pane.
+function play() {
+  const frames = []
+  let positions = null
+  let tick = 0
+  for (const moment of STORY) {
+    world.now = START + tick * TICK_MS
+    if (moment.percent !== undefined) world.percent = moment.percent
+    if (moment.open !== undefined) world.target = moment.open
+    moment.run()
+    const board = refresh()
+    const hold = Math.round(moment.hold / FRAME_MS)
+    let waiting = moment.home === true
+    let held = 0
+    // The board as it is this moment with every sprite off the canvas and no hover card: what
+    // each frame's sprites and hover card are drawn on top of.
+    const offstage = Object.fromEntries(world.fleet.order.map((id) => [id, { x: -COLUMNS, y: -COLUMNS }]))
+    const under = draw(snapshotOf(board), { positions: offstage, frame: 0, hovered: null, over: moment.over ?? null }, COLUMNS)
+    while (waiting || held < hold) {
+      let snapshot = snapshotOf(board)
+      let plan = arrange(snapshot, COLUMNS)
+      if (positions === null) {
+        // The run opens with everyone already standing at home.
+        positions = Object.fromEntries(Object.entries(plan.homes).map(([id, h]) => [id, { x: h.x, y: h.y }]))
+      } else {
+        for (let s = 0; s < STRIDE; s++) {
+          tick++
+          world.now = START + tick * TICK_MS
+          positions = advance(positions, plan.homes, plan.obstacles)
+        }
+        snapshot = snapshotOf(board)
+        plan = arrange(snapshot, COLUMNS)
+      }
+      const view = { positions, frame: frames.length % 2, hovered: moment.hover ?? null, over: moment.over ?? null }
+      frames.push({ beat: moment.beat, tick, still: moment.still === true, drawn: draw(snapshot, view, COLUMNS), under })
+      if (waiting && settled(positions, plan.homes)) waiting = false
+      else if (!waiting) held++
+      if (frames.length > 1000) throw new Error('sprites never settled')
+    }
+  }
+  return frames
+}
+
+// --- drawn rows to SVG ----------------------------------------------------------------------
+
+// Numbers print as whole numbers or with one decimal, so output never depends on float noise.
+function num(n) {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1)
+}
+
+function esc(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// Block characters as rectangles inside a cell: [x, y, w, h] in cell units.
+const BLOCKS = {
+  '█': [0, 0, CELL_W, CELL_H],
+  '▀': [0, 0, CELL_W, CELL_H / 2],
+  '▄': [0, CELL_H / 2, CELL_W, CELL_H / 2],
+  '▌': [0, 0, CELL_W / 2, CELL_H],
+  '▐': [CELL_W / 2, 0, CELL_W / 2, CELL_H],
+}
+const GAUGE = new Set(['▰', '▱'])
+
+// Spreads a row of runs back out into one entry per cell. A wide character takes its cell and
+// leaves '' in the next one, the same as the canvas does.
+function cellsOf(runs) {
+  const cells = []
+  for (const run of runs) {
+    for (const ch of run.text) {
+      cells.push({ ch, color: run.color, bg: run.backgroundColor, bold: run.bold })
+      for (let k = 1; k < cellWidth(ch); k++) cells.push({ ch: '', color: run.color, bg: run.backgroundColor, bold: run.bold })
+    }
+  }
+  return cells
+}
+
+function rect(x, y, w, h, fill) {
+  return `<rect x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" fill="${fill}"/>`
+}
+
+// Cells to draw as SVG, the first at x = 0. A null entry is a cell left alone. With `opaque`,
+// every cell paints its background, so whatever lies under it is covered; otherwise the field
+// colour is left to the board's own background. Backgrounds go first, then blocks, then text.
+function cellsSvg(cells, opaque) {
+  const out = []
+
+  // Backgrounds, merged across neighbouring cells of the same colour.
+  for (let x = 0; x < cells.length; x++) {
+    const c = cells[x]
+    if (c === null || (!opaque && c.bg === PALETTE.field)) continue
+    let end = x
+    while (end + 1 < cells.length && cells[end + 1] !== null && cells[end + 1].bg === c.bg) end++
+    out.push(rect(x * CELL_W, 0, (end - x + 1) * CELL_W, CELL_H, c.bg))
+    x = end
+  }
+
+  // Blocks, with a rectangle that touches the last one of the same colour and height merged in.
+  const blocks = []
+  cells.forEach((c, x) => {
+    if (c === null) return
+    const shape = BLOCKS[c.ch]
+    if (shape) {
+      const [dx, dy, w, h] = shape
+      const left = x * CELL_W + dx
+      const last = blocks.findLast((b) => b.fill === c.color && b.y === dy && b.h === h)
+      if (last && last.x + last.w === left) last.w += w
+      else blocks.push({ x: left, y: dy, w, h, fill: c.color })
+    } else if (c.ch === '▰') {
+      blocks.push({ x: x * CELL_W + 1, y: 1, w: CELL_W - 2, h: CELL_H - 2, fill: c.color })
+    } else if (c.ch === '▱') {
+      blocks.push({ x: x * CELL_W + 1, y: 1, w: CELL_W - 2, h: CELL_H - 2, stroke: c.color })
+    }
+  })
+  for (const b of blocks) {
+    if (b.stroke) {
+      // An outline stays inside its box: the stroke is centred on the edge, so pull in by half.
+      out.push(`<rect x="${num(b.x + 0.5)}" y="${num(b.y + 0.5)}" width="${num(b.w - 1)}" height="${num(b.h - 1)}" fill="none" stroke="${b.stroke}"/>`)
+    } else {
+      out.push(rect(b.x, b.y, b.w, b.h, b.fill))
+    }
+  }
+
+  // Text: each stretch of same-style characters is one <text>, and every character gets its own
+  // x so it sits in its cell whatever font the reader has. A single space between two words of
+  // the same style stays inside the stretch, so a phrase like "In review" reads as one. A wider
+  // gap ends it, because some renderers squeeze runs of spaces into one and would then hand the
+  // x positions to the wrong characters.
+  const textAt = (x) => x < cells.length && cells[x] !== null && isText(cells[x].ch)
+  for (let x = 0; x < cells.length; x++) {
+    if (!textAt(x)) continue
+    const c = cells[x]
+    const xs = []
+    let text = ''
+    let end = x
+    while (end < cells.length && cells[end] !== null) {
+      const d = cells[end]
+      if (d.ch === '') { end++; continue }
+      if (d.ch === ' ') {
+        const next = end + 1
+        if (!textAt(next) || cells[next].color !== c.color || cells[next].bold !== c.bold) break
+        xs.push(num(end * CELL_W))
+        text += ' '
+        end = next
+        continue
+      }
+      if (!isText(d.ch) || d.color !== c.color || d.bold !== c.bold) break
+      xs.push(num(end * CELL_W))
+      text += d.ch
+      end++
+    }
+    out.push(`<text x="${xs.join(' ')}" y="13" fill="${c.color}"${c.bold ? ' class="b"' : ''}>${esc(text)}</text>`)
+    x = end - 1
+  }
+  return out.join('')
+}
+
+// Changed cells this close together are drawn as one piece.
+const PIECE_GAP = 3
+// How many rows go into one band; see render().
+const BAND = 6
+
+function sameCell(a, b) {
+  return a.ch === b.ch && a.color === b.color && a.bg === b.bg && a.bold === b.bold
+}
+
+// One row of a frame, as the board under it plus what is drawn on top. The backdrop is the row
+// as the board draws it with no sprites and no hover card; the pieces are the runs of cells where
+// the frame differs from it (the sprites and the hover card), each drawn opaque from its own left
+// edge so the same piece of sprite is reused wherever it stands. Together they are exactly the
+// row draw() returned.
+function rowParts(runs, underRuns) {
+  const cells = cellsOf(runs)
+  const under = cellsOf(underRuns)
+  const changed = cells.map((c, x) => !sameCell(c, under[x]))
+  const pieces = []
+  for (let x = 0; x < cells.length; x++) {
+    if (!changed[x]) continue
+    let end = x
+    for (let k = x + 1; k < cells.length && k <= end + PIECE_GAP + 1; k++) if (changed[k]) end = k
+    const part = cells.slice(x, end + 1).map((c, i) => (changed[x + i] ? c : null))
+    pieces.push({ x: x * CELL_W, body: cellsSvg(part, true) })
+    x = end
+  }
+  return { backdrop: cellsSvg(under, false), pieces }
+}
+
+function isText(ch) {
+  return ch !== '' && ch !== ' ' && !BLOCKS[ch] && !GAUGE.has(ch)
+}
+
+// The caption above the board, pinned to the cell grid the same way as board text.
+function captionSvg(text) {
+  const xs = Array.from(text, (_, i) => num(PAD + i * CELL_W))
+  return `<text x="${xs.join(' ')}" y="${PAD + 13}" fill="${PALETTE.dim}">${esc(text)}</text>`
+}
+
+// Builds the whole file. Every distinct backdrop, piece and row is defined once and frames point
+// at rows; a frame that looks the same as the one before it just stays up longer.
+function render(frames) {
+  const ids = new Map()
+  const defs = []
+  // The id of a definition with this body, defining it the first time it is seen.
+  const define = (prefix, body) => {
+    const key = prefix + body
+    if (!ids.has(key)) {
+      ids.set(key, prefix + ids.size.toString(36))
+      defs.push(`<g id="${ids.get(key)}">${body}</g>`)
+    }
+    return ids.get(key)
+  }
+  const groups = []
+  let tallest = 0
+  let reduced = null
+  // Rows in bands of BAND rows, so a frame points at a handful of bands, and a band that nothing
+  // moved through is the same definition as in the frame before.
+  const banded = (rows) => rows
+    .map((body, i) => (body ? `<use href="#${define('n', body)}" y="${i * BAND * CELL_H}"/>` : ''))
+    .join('')
+  for (const f of frames) {
+    tallest = Math.max(tallest, f.drawn.height)
+    // Every backdrop goes down before any piece, so nothing a backdrop draws past its own row can
+    // end up over a sprite or the hover card.
+    const backdrops = []
+    const overlays = []
+    f.drawn.rows.forEach((runs, y) => {
+      const { backdrop, pieces } = rowParts(runs, f.under.rows[y])
+      const band = Math.floor(y / BAND)
+      const at = `y="${(y % BAND) * CELL_H}"`
+      if (backdrop !== '') backdrops[band] = (backdrops[band] ?? '') + `<use href="#${define('b', backdrop)}" ${at}/>`
+      if (pieces.length > 0) {
+        const row = define('r', pieces.map((p) => `<use href="#${define('p', p.body)}" x="${num(p.x)}"/>`).join(''))
+        overlays[band] = (overlays[band] ?? '') + `<use href="#${row}" ${at}/>`
+      }
+    })
+    const key = `<use href="#${define('k', banded(backdrops))}"/>${banded(overlays)}`
+    const last = groups.at(-1)
+    if (last && last.key === key) last.ms += FRAME_MS
+    else groups.push({ key, ms: FRAME_MS })
+    // Reduced motion shows one still: the first frame with the hover card up.
+    if (reduced === null && f.still) reduced = groups.length - 1
+  }
+
+  const total = groups.reduce((sum, g) => sum + g.ms, 0)
+  const width = COLUMNS * CELL_W + PAD * 2
+  const height = PAD + CELL_H + tallest * CELL_H + PAD
+  const pct = (ms) => (ms === 0 ? '0' : ((ms / total) * 100).toFixed(3))
+
+  // Each frame has its own keyframes: visible from its start to its end, hidden otherwise.
+  // step-end keeps a value until the next keyframe, so frames switch cleanly with no fading.
+  const css = [
+    `text{font:15px ${FONT};white-space:pre}`,
+    '.b{font-weight:700}',
+    `.f{visibility:hidden;animation:${total}ms step-end infinite}`,
+  ]
+  let at = 0
+  groups.forEach((g, i) => {
+    const end = at + g.ms
+    const off = end === total ? '' : `${pct(end)}%{visibility:hidden}`
+    css.push(`#f${i}{animation-name:k${i}}@keyframes k${i}{${pct(at)}%{visibility:visible}${off}}`)
+    at = end
+  })
+  css.push(`@media (prefers-reduced-motion:reduce){.f{animation:none!important}#f${reduced}{visibility:visible}}`)
+
+  return {
+    frames: groups.length,
+    ms: total,
+    svg: [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title">`,
+      '<title id="title">The Brigade task board playing one run: a scout researches, two cooks start, an inspector sends the token bucket back with two findings, a fresh cook makes a second pass, and both items reach Done while the context meter fills</title>',
+      `<style>${css.join('\n')}</style>`,
+      `<defs shape-rendering="crispEdges">`,
+      ...defs,
+      '</defs>',
+      `<rect width="${width}" height="${height}" rx="12" fill="${PALETTE.field}"/>`,
+      captionSvg('/brigade-board'),
+      `<g transform="translate(${PAD} ${PAD + CELL_H})" shape-rendering="crispEdges">`,
+      ...groups.map((g, i) => `<g class="f" id="f${i}">${g.key}</g>`),
+      '</g>',
+      '</svg>',
+    ].join('\n') + '\n',
+  }
+}
+
+// --- the command ----------------------------------------------------------------------------
+
+function printText(frames) {
+  frames.forEach((f, i) => {
+    console.log(`--- frame ${i} (beat ${f.beat}, step ${f.tick}, ${i * FRAME_MS} ms)`)
+    for (const runs of f.drawn.rows) console.log(runs.map((r) => r.text).join('').trimEnd())
+  })
+}
+
+function main() {
+  const frames = play()
+  if (process.argv.includes('--text')) {
+    printText(frames)
+    process.exit(0)
+  }
+  const { svg, frames: shown, ms } = render(frames)
+  const rel = path.relative(ROOT, OUT)
+  if (process.argv.includes('--check')) {
+    const actual = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : null
+    if (actual !== svg) {
+      console.log(`STALE: ${rel} differs from what scripts/board-demo draws; run scripts/board-demo`)
+      process.exit(1)
+    }
+    console.log('DEMO OK')
+    process.exit(0)
+  }
+  fs.mkdirSync(path.dirname(OUT), { recursive: true })
+  fs.writeFileSync(OUT, svg)
+  console.log(`wrote ${rel}: ${frames.length} frames drawn, ${shown} after merging, ${ms} ms loop, ${Buffer.byteLength(svg)} bytes, ${COLUMNS} columns`)
+}
+
+main()
