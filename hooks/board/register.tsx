@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Detail, Fleet, Learnings, Message, Note, Project, Snapshot, Weather, WorkLane } from '../../types'
+import type { Agent, Detail, Fleet, Learnings, Message, Note, Project, Snapshot, Stage, Weather, WorkLane } from '../../types'
 import { boardDirFrom, laneOf, parseTicket } from './lib/board.mjs'
+import { arrange } from './lib/board-layout.mjs'
 import { draw } from './lib/board-paint.mjs'
 import { pictureOf } from './lib/board-svg.mjs'
 import { safeText } from './lib/canvas.mjs'
@@ -10,6 +11,7 @@ import { agentDetail, cardDetail, messageDetail, projectOf, ticketDetail } from 
 import { envelope, findingsOf, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
 import { activityOf, applyEvent, prune } from './lib/fleet.mjs'
 import { ROLES } from './lib/sprites.mjs'
+import { advance } from './lib/stage.mjs'
 import { forecast } from './lib/weather.mjs'
 import { PHASES, pickDish, planItems, ticketCards, toWorkLanes, workCards } from './lib/work.mjs'
 
@@ -29,6 +31,10 @@ const work = atom({ plugin: 'brigade', key: 'work' } as const, toWorkLanes([]) a
 const messages = atom({ plugin: 'brigade', key: 'messages' } as const, [] as Message[])
 const learnings = atom({ plugin: 'brigade', key: 'learnings' } as const, { total: 0, lines: [] } as Learnings)
 const detail = atom({ plugin: 'brigade', key: 'detail' } as const, null as Detail | null)
+// Where the sprites stand when the hooks module draws the board itself, whether the pane is open,
+// and whether the terminal's region reported in or the pane fell back to rows drawn here.
+const STAGE_START: Stage = { positions: {}, open: false, openedAt: null, ready: false, plain: false }
+const stage = atom({ plugin: 'brigade', key: 'stage' } as const, STAGE_START)
 
 // How long a finished agent stays on the board before it leaves.
 const KEEP_MS = 120000
@@ -721,10 +727,11 @@ function tooltipOf(agent: Agent) {
   return plain([or(agent.name, agent.id), roleLabel(agent.role), or(agent.model, 'unknown model'), or(agent.activity, agent.state)].join(' · '))
 }
 
-// The board as one SVG picture: every sprite at its home, stepping between its two frames, with a
-// tooltip over each one. Throws when the board is too big for a picture the app will draw.
-function pictureFor(snapshot: Snapshot): Picture {
-  const still = { positions: {}, hovered: null, over: null }
+// The board as one SVG picture: every sprite where the walk has got it to, or at its home when it
+// hasn't started, stepping between its two frames, with a tooltip over each one. Throws when the
+// board is too big for a picture the app will draw.
+function pictureFor(snapshot: Snapshot, positions: Stage['positions']): Picture {
+  const still = { positions, hovered: null, over: null }
   const zero = draw(snapshot, { ...still, frame: 0 }, PANE_COLUMNS)
   const one = draw(snapshot, { ...still, frame: 1 }, PANE_COLUMNS)
   // The painter names each sprite by the safe form of its agent's id.
@@ -763,6 +770,139 @@ async function pressed($: EngineInterface, data: unknown) {
   }
 }
 
+type Elements = ReturnType<EngineInterface['ui']['resolve']>
+type Run = { text: string; color: string; backgroundColor: string; bold: boolean }
+
+// The row of buttons under a board the hooks module draws itself: `Details:`, then Close details
+// while a box is up, then one button per card, agent and message. An empty board gets no row.
+function detailRow($: EngineInterface, { Box, Button, Text }: Elements, snapshot: Snapshot) {
+  const closing = snapshot.detail !== null ? [{ key: 'close-details', label: 'Close details' }] : []
+  const opening = detailButtons(snapshot)
+  if (closing.length + opening.length === 0) return []
+  return [
+    <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+      <Text>Details:</Text>
+      {closing.map(button => (
+        <Button key={button.key} label={button.label} role="dismiss" onPress={() => pressed($, { close: true })} />
+      ))}
+      {opening.map(button => (
+        <Button key={button.key} label={button.label} onPress={() => pressed($, { open: button.open })} />
+      ))}
+    </Box>,
+  ]
+}
+
+// The app refuses a drawing holding more than 100000 characters of text, and checks that after the
+// hook has returned, so the rows are measured first. The margin leaves room for the buttons.
+const ROWS_MAX_CHARS = 99000
+
+// The painted board as rows of coloured text runs, the way the terminal's region draws it, with
+// every sprite where the walk has got it to. The terminal is monospaced, so the rows line up.
+// Throws when the board is too big for the app to draw as text.
+function boardRows(snapshot: Snapshot, positions: Stage['positions']) {
+  const rows = draw(snapshot, { positions, frame: 0, hovered: null, over: null }, PANE_COLUMNS).rows as Run[][]
+  const chars = rows.reduce((sum, runs) => sum + runs.reduce((inRow, run) => inRow + String(run.text).length, 0), 0)
+  if (chars > ROWS_MAX_CHARS) throw new Error('the board is too big to draw as rows')
+  return rows
+}
+
+// How often the walk takes a step while the pane is open, and how long a terminal waits for its
+// region to report in before drawing the board itself.
+const STEP_MS = 500
+const FALLBACK_MS = 3000
+
+// How the pane was last drawn: by the terminal's region, as a picture, as rows drawn here, or as
+// plain lines. A render may not write state, so it notes this here and the walk's step reads it.
+let drawnAs: 'region' | 'picture' | 'rows' | 'lines' | null = null
+// The walk's clock while the pane is open. There is never more than one.
+let walker: { cancel(): void } | null = null
+// A region has reported in. Kept here as well as in state so that a step in a healthy terminal
+// returns without reading anything.
+let regionReady = false
+// A step is still running, so a slow one can't overlap the next.
+let stepping = false
+
+// Notes that the pane is open and starts the walk. Running the command on a pane that is already
+// open changes nothing, so a second clock never starts. Whether the region reported in, and the
+// fallback, carry over from earlier opens: a terminal whose region drew once keeps it, and one
+// whose region never drew goes straight to its rows.
+async function openStage($: EngineInterface) {
+  if (walker !== null) return
+  const at = await $.clock.now()
+  await update($, stage, current => ({ ...current, open: true, openedAt: at }))
+  // Another open may have started the clock while this one was writing.
+  if (walker !== null) return
+  walker = $.clock.every(STEP_MS, () => {
+    void step($)
+  })
+}
+
+// Stops the walk when the pane closes. The clock goes first, so a failed write can't leave it
+// running. The sprites keep their places for the next open.
+async function closeStage($: EngineInterface) {
+  const running = walker
+  walker = null
+  running?.cancel()
+  if ((await read($, stage)).open) await update($, stage, current => ({ ...current, open: false }))
+}
+
+// One tick of the walk's clock. In a terminal whose region reported in there is nothing to do. In a
+// terminal still waiting on its region, the step checks whether it has waited too long. Where the
+// board is drawn here, as a picture or as rows, the sprites take a step. Runs on a timer, so it
+// never throws.
+async function step($: EngineInterface) {
+  const how = drawnAs
+  if (stepping || (how === 'region' && regionReady)) return
+  if (how !== 'region' && how !== 'picture' && how !== 'rows') return
+  stepping = true
+  try {
+    const now = await read($, stage)
+    if (!now.open) return
+    if (how === 'region') await fallBack($, now)
+    else await walk($, now)
+  } catch {
+    // This step is skipped; the next one tries again.
+  } finally {
+    stepping = false
+  }
+}
+
+// A terminal region that hasn't reported in by FALLBACK_MS after the pane opened is taken for one
+// that failed to load, and the pane switches to rows drawn here. Ready is checked again inside the
+// write, so a region that reports in at the last moment still wins.
+async function fallBack($: EngineInterface, now: Stage) {
+  if (now.ready) {
+    regionReady = true
+    return
+  }
+  if (now.plain || now.openedAt === null) return
+  if ((await $.clock.now()) - now.openedAt < FALLBACK_MS) return
+  await update($, stage, current => (current.ready ? current : { ...current, plain: true }))
+}
+
+// Moves every sprite one step toward its home on the board as it stands now. Nothing moving means
+// nothing written, so a settled board never redraws.
+async function walk($: EngineInterface, now: Stage) {
+  const plan = arrange(await snapshotOf($), PANE_COLUMNS) as { homes: Record<string, unknown>; obstacles: unknown[] }
+  const next = advance(now.positions, plan.homes, plan.obstacles) as Stage['positions']
+  if (same(now.positions, next)) return
+  await update($, stage, current => ({ ...current, positions: next }))
+}
+
+// Whether a post is exactly the region's `{ ready: true }`, with nothing else in it.
+function isReady(data: unknown) {
+  return isPlain(data) && Object.keys(data).length === 1 && Object.hasOwn(data, 'ready') && data.ready === true
+}
+
+// The terminal's region drew. From now on the step leaves the terminal alone, and a pane that had
+// fallen back to rows gets its region again.
+async function reportIn($: EngineInterface) {
+  regionReady = true
+  const now = await read($, stage)
+  if (now.ready && !now.plain) return
+  await update($, stage, current => ({ ...current, ready: true, plain: false }))
+}
+
 export const register: Register = on => {
   // Every hook below follows one rule: the board's own work is wrapped so its failure is
   // swallowed, and the hook hands back exactly what next(e) gave it, or lets what next(e) threw
@@ -791,7 +931,22 @@ export const register: Register = on => {
   on('command.run', { command: 'brigade-board' }, async $ => {
     await refresh($)
     await $.ui.open({ id: PANE, title: 'Brigade board', columns: PANE_COLUMNS })
+    try {
+      await openStage($)
+    } catch {
+      // The board shows without walking until the next open.
+    }
     return { text: 'Board opened.' }
+  })
+
+  on('ui.close', async ($, e, next) => {
+    const ran = await next(e)
+    try {
+      if (e.id === PANE) await closeStage($)
+    } catch {
+      // The clock has already stopped; only the stage's open flag may be stale.
+    }
+    return ran
   })
 
   // Every agent of the session goes on the board as it starts, works and finishes. These hooks
@@ -873,9 +1028,10 @@ export const register: Register = on => {
   on('ui.message', async ($, e, next) => {
     if (e.requestId === PANE) {
       try {
-        await detailFrom($, e.data)
+        if (isReady(e.data)) await reportIn($)
+        else await detailFrom($, e.data)
       } catch {
-        // The detail box stays as it was until the next click.
+        // The detail box, or the region's ready flag, stays as it was until the next post.
       }
     }
     return next(e)
@@ -883,41 +1039,50 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const snapshot = await snapshotOf($)
-    const { Box, Button, Client, Svg, Text } = $.ui.resolve(e)
-    if (e.surface === 'terminal') {
+    const shown = await read($, stage)
+    const elements = $.ui.resolve(e)
+    const { Box, Client, Svg, Text } = elements
+    if (e.surface === 'terminal' && !shown.plain) {
+      drawnAs = 'region'
       return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
     }
-    if (e.surface === 'desktop') {
-      // The detail box, when it is up, is already in the picture; its close button leads the row.
-      try {
-        const picture = pictureFor(snapshot)
-        const closing = snapshot.detail !== null ? [{ key: 'close-details', label: 'Close details' }] : []
-        const opening = detailButtons(snapshot)
-        // An empty board has nothing to open, so it gets no row at all.
-        const row =
-          closing.length + opening.length === 0
-            ? []
-            : [
-                <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-                  <Text>Details:</Text>
-                  {closing.map(button => (
-                    <Button key={button.key} label={button.label} role="dismiss" onPress={() => pressed($, { close: true })} />
-                  ))}
-                  {opening.map(button => (
-                    <Button key={button.key} label={button.label} onPress={() => pressed($, { open: button.open })} />
-                  ))}
-                </Box>,
-              ]
-        return (
+    // The terminal whose region never reported in gets the painted board as rows; desktop can't
+    // load a region at all and gets it as a picture. Either way the detail box, when it is up, is
+    // already drawn in, and the buttons that open it sit underneath.
+    try {
+      if (e.surface === 'terminal') {
+        const rows = (
           <Box flexDirection="column">
-            <Svg source={picture.source} alt="Brigade board" width={picture.width} height={picture.height} isInteractive={true} />
-            {row}
+            {boardRows(snapshot, shown.positions).map(runs => (
+              <Text>
+                {runs.map(run => (
+                  <Text color={run.color} backgroundColor={run.backgroundColor} bold={run.bold}>
+                    {run.text}
+                  </Text>
+                ))}
+              </Text>
+            ))}
+            {detailRow($, elements, snapshot)}
           </Box>
         )
-      } catch {
-        // No picture this time; the plain lines below still show the board.
+        drawnAs = 'rows'
+        return rows
       }
+      if (e.surface === 'desktop') {
+        const picture = pictureFor(snapshot, shown.positions)
+        const drawn = (
+          <Box flexDirection="column">
+            <Svg source={picture.source} alt="Brigade board" width={picture.width} height={picture.height} isInteractive={true} />
+            {detailRow($, elements, snapshot)}
+          </Box>
+        )
+        drawnAs = 'picture'
+        return drawn
+      }
+    } catch {
+      // Not drawn this time; the plain lines below still show the board.
     }
+    drawnAs = 'lines'
     // Surfaces without a region get the same board as plain lines. Text from files only ever
     // goes through Text, so nothing in it can turn into a link or markup, and every line goes
     // through plain first. A crowd of agents is listed up to a dozen, then counted.
