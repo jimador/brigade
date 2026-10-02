@@ -184,10 +184,11 @@ test('a work item moves To do, Cooking, In review, Rework as events and files ar
   await clock.advance(2000)
   expect(await laneOfCard(ui, 'token-bucket')).toBe('Cooking')
   expect(await laneOfCard(ui, 'usage-docs')).toBe('To do')
-  // The haiku sprite takes the card's first 5 cells; its lines start one cell right of it, with
-  // 22 - 5 - 1 = 16 cells to fill, so 'editing bucket.ts' loses its last letter and fills the row.
-  expect(await ui.find({ type: 'Text', text: /│.{5} ♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /│.{5} editing bucket\.t│/, in: 'stage' })).toBeDefined()
+  // The haiku sprite takes the card's first 3 cells and its name shares that row, one cell to the
+  // right; the activity goes on the next row, with 22 - 3 - 1 = 18 cells, so 'editing bucket.ts'
+  // fits whole with a cell to spare.
+  expect(await ui.find({ type: 'Text', text: /│.{3} ♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│.{3} editing bucket\.ts +│/, in: 'stage' })).toBeDefined()
 
   // The cook finishes and its report lands: the item waits for review.
   await $.turn.complete({ agentId: 'c1', answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)

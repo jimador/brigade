@@ -1,7 +1,7 @@
 // Checks the sprite sheet's shape and the small rules that pick a sprite's size, name and colour.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SPRITES, SIZES, ROLES, NAMES, PALETTE, FAMILIES, CLOUD, sizeOf, rosterName, freeName, colorOf, familyOf } from '../../hooks/board/lib/sprites.mjs'
+import { SPRITES, SIZES, ART, ROLES, NAMES, PALETTE, FAMILIES, CLOUD, sizeOf, rosterName, freeName, colorOf, familyOf } from '../../hooks/board/lib/sprites.mjs'
 
 const ORDER = ['s', 'm', 'l', 'xl']
 
@@ -30,31 +30,69 @@ for (const size of ORDER) {
   })
 }
 
-test('the four sizes are small enough for a crowded board: 5x2, 7x3, 9x3 and 11x4 cells', () => {
-  assert.deepEqual(SIZES, { s: { w: 5, h: 2 }, m: { w: 7, h: 3 }, l: { w: 9, h: 3 }, xl: { w: 11, h: 4 } })
+test('every sprite is one text row tall and 3 cells wide, so thirty agents fit on one board', () => {
+  assert.deepEqual(SIZES, { s: { w: 3, h: 1 }, m: { w: 3, h: 1 }, l: { w: 3, h: 1 }, xl: { w: 3, h: 1 } })
+})
+
+test('every terminal sprite frame is 3 pixels wide and 2 pixel rows tall', () => {
+  for (const size of ORDER) {
+    for (const frame of SPRITES[size]) {
+      assert.equal(frame.length, 2, size)
+      for (const row of frame) assert.equal(row.length, 3, size)
+    }
+  }
 })
 
 test('the sprites are the approved bitmaps', () => {
-  assert.deepEqual(SPRITES.s, [
-    ['.#.#.', '#####', '#.#.#', '#...#'],
-    ['.#.#.', '#####', '#.#.#', '.#.#.'],
+  assert.deepEqual(SPRITES.s, [['.#.', '###'], ['.#.', '#.#']])
+  assert.deepEqual(SPRITES.m, [['###', '#.#'], ['###', '.#.']])
+  assert.deepEqual(SPRITES.l, [['#.#', '###'], ['###', '#.#']])
+  assert.deepEqual(SPRITES.xl, [['###', '###'], ['###', '#.#']])
+})
+
+// The detailed sprites for a surface that draws real pixels: width by pixel rows for each size.
+const ART_SHAPES = { s: [7, 6], m: [9, 8], l: [11, 10], xl: [13, 12] }
+
+test('ART keeps the four detailed sprites: 7x6, 9x8, 11x10 and 13x12 pixels, two frames each', () => {
+  assert.deepEqual(Object.keys(ART).sort(), [...ORDER].sort())
+  for (const size of ORDER) {
+    const [w, h] = ART_SHAPES[size]
+    assert.equal(ART[size].length, 2, `${size} frames`)
+    ART[size].forEach((frame, f) => {
+      assert.equal(frame.length, h, `${size} frame ${f} rows`)
+      for (const row of frame) {
+        assert.equal(row.length, w, `${size} frame ${f} width`)
+        assert.match(row, /^[#.]+$/)
+      }
+    })
+    assert.notDeepEqual(ART[size][0], ART[size][1])
+  }
+})
+
+test('ART holds the detailed bitmaps exactly as they were drawn', () => {
+  assert.deepEqual(ART.s, [
+    ['..#.#..', '.#####.', '##.#.##', '#######', '.#.#.#.', '#.....#'],
+    ['..#.#..', '.#####.', '##.#.##', '#######', '.#...#.', '..#.#..'],
   ])
-  assert.deepEqual(SPRITES.m, [
-    ['.#...#.', '..###..', '.#####.', '##.#.##', '#######', '#.#.#.#'],
-    ['.#...#.', '#.###.#', '#######', '##.#.##', '.#####.', '.#...#.'],
+  assert.deepEqual(ART.m, [
+    ['..#...#..', '...#.#...', '..#####..', '.##.#.##.', '#########', '#.#####.#', '#.#...#.#', '...#.#...'],
+    ['..#...#..', '#..#.#..#', '#.#####.#', '###.#.###', '#########', '.#######.', '.#.....#.', '#.......#'],
   ])
-  assert.deepEqual(SPRITES.l, [
-    ['..#...#..', '...#.#...', '.#######.', '##.###.##', '#########', '#.#...#.#'],
-    ['..#...#..', '#..#.#..#', '#########', '##.###.##', '.#######.', '.#.....#.'],
+  assert.deepEqual(ART.l, [
+    ['...#...#...', '....#.#....', '..#######..', '.#########.', '###..#..###', '###########', '###########', '..##...##..', '.##.###.##.', '##.......##'],
+    ['...#...#...', '#...#.#...#', '#.#######.#', '###########', '###..#..###', '###########', '.#########.', '..##...##..', '.#..###..#.', '..#.....#..'],
   ])
-  assert.deepEqual(SPRITES.xl, [
-    ['...#...#...', '....#.#....', '..#######..', '.##.###.##.', '###########', '###########', '..##...##..', '.##.....##.'],
-    ['...#...#...', '#...#.#...#', '#.#######.#', '###.###.###', '###########', '.#########.', '..##...##..', '...##.##...'],
+  assert.deepEqual(ART.xl, [
+    ['....#...#....', '.....#.#.....', '...#######...', '..#########..', '.###.###.###.', '#############', '#############', '###.#####.###', '..###...###..', '.##..###..##.', '##.........##', '.#.........#.'],
+    ['....#...#....', '#....#.#....#', '#..#######..#', '#.#########.#', '####.###.####', '#############', '.###########.', '..#.#####.#..', '..###...###..', '..#..###..#..', '.#.........#.', '#...........#'],
   ])
 })
 
-test('sizes grow strictly from s to xl', () => {
-  assert.ok(SIZES.s.w < SIZES.m.w && SIZES.m.w < SIZES.l.w && SIZES.l.w < SIZES.xl.w)
+// In the terminal every size is the same 3 cells, and colour tells the models apart; the detailed
+// sprites still grow with the model.
+test('the detailed sprites grow strictly from s to xl', () => {
+  const width = (size) => ART[size][0][0].length
+  assert.ok(width('s') < width('m') && width('m') < width('l') && width('l') < width('xl'))
 })
 
 test('sizeOf picks the size from the model id', () => {

@@ -30,7 +30,7 @@ async function step($: Parameters<Parameters<typeof test>[1]>[0], agentId: strin
 }
 
 // Lets the sprites walk in and stand still, then moves the pointer onto the sprite whose name
-// tag matches. The tag sits beside the sprite, one cell to its right, level with its lower rows,
+// tag matches. The tag sits beside the sprite, one cell to its right, on the sprite's own row,
 // unless the name is too long for that and goes on the row under the sprite, from its left edge.
 async function hover(ui: Ui, tag: RegExp) {
   await ui.advance(250 * 60)
@@ -242,15 +242,16 @@ test('what an agent is doing shows on its card within a tick, for its whole life
   await $.tool.call({ agentId: 'c1', tool: 'Read', file_path: `${DISH}/packets/token-bucket.md` } as never)
   await $.tool.call({ agentId: 'c1', tool: 'Edit', file_path: '/repo/.brigade/worktrees/limits--token-bucket/src/bucket.ts' } as never)
   await clock.advance(2000)
-  // The haiku sprite takes the card's first 5 cells; its lines start one cell right of it, with
-  // 22 - 5 - 1 = 16 cells to fill, so 'editing bucket.ts' loses its last letter and fills the row.
-  expect(await ui.find({ type: 'Text', text: /│.{5} ♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /│.{5} editing bucket\.t│/, in: 'stage' })).toBeDefined()
+  // The haiku sprite takes the card's first 3 cells and its name shares that row, one cell to the
+  // right; the activity goes on the next row, with 22 - 3 - 1 = 18 cells, so 'editing bucket.ts'
+  // fits whole with a cell to spare.
+  expect(await ui.find({ type: 'Text', text: /│.{3} ♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│.{3} editing bucket\.ts +│/, in: 'stage' })).toBeDefined()
   // Long past the calls that work out who an agent is, what it is doing still reaches its card.
   for (let i = 0; i < 400; i++) await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'ls' } as never)
   await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'node --test test/bucket.test.mjs' } as never)
   await clock.advance(2000)
-  expect(await ui.find({ type: 'Text', text: /│.{5} running tests +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│.{3} running tests +│/, in: 'stage' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /editing bucket\.t/, in: 'stage' })).toBeUndefined()
   await ui.unmount()
   // Surfaces without a region say the same in a line per agent.

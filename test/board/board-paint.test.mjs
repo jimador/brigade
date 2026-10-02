@@ -293,8 +293,8 @@ test('each slot shows its name in ink and its activity in dim; a hovered agent\'
   assert.deepEqual(find(g, slot.name.text), { x: slot.name.x, y: slot.name.y })
   assert.deepEqual([g[slot.name.y][slot.name.x].color, g[slot.name.y][slot.name.x].bold], [PALETTE.ink, false])
   assert.equal(g[slot.name.y][slot.name.x].bg, PALETTE.card)
-  // Beside the 7-cell sprite on a 24-cell card the text has 22 - 7 - 1 = 14 cells.
-  assert.equal(slot.activity.text, 'editing src/li')
+  // Beside the 3-cell sprite on a 24-cell card the text has 22 - 3 - 1 = 18 cells.
+  assert.equal(slot.activity.text, 'editing src/limit.')
   assert.deepEqual(find(g, slot.activity.text), { x: slot.activity.x, y: slot.activity.y })
   assert.equal(g[slot.activity.y][slot.activity.x].color, PALETTE.dim)
   const hovered = grid(frame(snapshot(), { hovered: 'cook-1' }))
@@ -327,7 +327,8 @@ test('sprites are coloured by model family, failed in alert and done in dim', ()
   const out = frame(snapshot())
   for (const [id, key] of [['cook-1', 'sonnet'], ['heavy-1', 'opus'], ['insp-1', 'haiku'], ['plan-1', 'fable']]) {
     const lit = spriteCells(g, region(out, 'agent', id))
-    assert.ok(lit.length > 5, `${id} drawn`)
+    // Every one-row sprite lights all three of its cells.
+    assert.equal(lit.length, 3, `${id} drawn`)
     for (const [, , c] of lit) assert.equal(c.color, colour(key), id)
   }
   const snap = snapshot()
@@ -360,7 +361,7 @@ test('a sprite mid-walk is drawn on top of the card under it, keeping the card b
   const r = region(out, 'agent', 'cook-1')
   assert.deepEqual({ x: r.x, y: r.y }, at)
   const lit = spriteCells(g, r)
-  assert.ok(lit.length > 5)
+  assert.equal(lit.length, 3)
   const onCard = lit.filter(([x, y]) => y > docs.y && y < docs.y + docs.h - 1 && x > docs.x && x < docs.x + docs.w - 1)
   assert.ok(onCard.length > 0)
   for (const [, , c] of onCard) assert.deepEqual([c.color, c.bg], [FAMILIES[1].color, PALETTE.card])

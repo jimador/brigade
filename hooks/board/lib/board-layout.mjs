@@ -189,16 +189,16 @@ function cardSlots(agents, left, top, room) {
     const fullName = nameLine(agent)
     const beside = size.w + 1 + cellWidth(fullName) <= room
     const textRoom = beside ? room - size.w - 1 : room
-    // Beside, the two lines sit level with the sprite's last two rows; under it, they follow it.
-    const h = beside ? Math.max(size.h, 2) : size.h + 2
+    // Beside, the name shares the sprite's row and the activity goes on the next; under it, the
+    // two lines follow the sprite.
     const textX = beside ? left + size.w + 1 : left
-    const textY = beside ? y + h - 2 : y + size.h
+    const textY = beside ? y : y + size.h
     slots.push({
-      agentId: id, x: left, y: beside ? y + h - size.h : y, w: size.w, h: size.h,
+      agentId: id, x: left, y, w: size.w, h: size.h,
       name: { x: textX, y: textY, text: clip(fullName, textRoom) },
       activity: { x: textX, y: textY + 1, text: clip(activityLine(agent), textRoom) },
     })
-    y += h
+    y += beside ? Math.max(size.h, 2) : size.h + 2
   }
   return { slots, height: y - top }
 }
@@ -236,19 +236,22 @@ function crewSlots(agents, top, columns) {
   let y = top
   for (const [i, row] of intoRows(items, columns, CREW_SLOT_GAP).entries()) {
     if (i > 0) y += CREW_ROW_GAP
-    const tallest = Math.max(...row.items.map((item) => item.size.h))
+    // Every slot in a row starts on the row's top line, and the row is as tall as its tallest slot.
+    let rowH = 0
     for (const item of row.items) {
       const x = item.dx
-      // Beside the sprite the two lines sit level with its bottom two rows; under it they follow it.
+      // Beside the sprite the name shares its row and the activity goes on the next; under it,
+      // the two lines follow the sprite.
       const textX = item.beside ? x + item.size.w + 1 : x
-      const textY = item.beside ? y + tallest - 2 : y + tallest
+      const textY = item.beside ? y : y + item.size.h
       slots.push({
-        agentId: item.id, x, y: y + tallest - item.size.h, w: item.size.w, h: item.size.h,
+        agentId: item.id, x, y, w: item.size.w, h: item.size.h,
         name: { x: textX, y: textY, text: item.name },
         activity: { x: textX, y: textY + 1, text: item.activity },
       })
+      rowH = Math.max(rowH, item.beside ? Math.max(item.size.h, 2) : item.size.h + 2)
     }
-    y += tallest + (row.items.some((item) => !item.beside) ? 2 : 0)
+    y += rowH
   }
   return { slots, height: y - top }
 }

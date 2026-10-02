@@ -122,13 +122,14 @@ test('only a well-formed open or close changes the detail', async ($, on) => {
   await ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: 'stage' })
   expect(shown()).toBeNull()
   await ui.unmount()
-  // A click on the agent's sprite opens its box. It stands with the crew, left edge, under the label.
+  // A click on the agent's sprite opens its box. It stands with the crew, at the left edge, on the
+  // row right under the label: one row tall, three cells wide, so x 1 is its middle.
   ui = await mount()
   await ui.advance(250 * 60)
   const rows = (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object'))
   const crew = rows.findIndex(row => /^Crew/.test(row.text))
   expect(crew).toBeGreaterThan(0)
-  await ui.pointer({ type: 'down', x: 1, y: crew + 2, button: 'left', in: 'stage' })
+  await ui.pointer({ type: 'down', x: 1, y: crew + 1, button: 'left', in: 'stage' })
   expect(shown()).toMatchObject({ kind: 'agent', id: 'a1' })
   await ui.post({ close: true }, { in: 'stage' })
   expect(shown()).toBeNull()
