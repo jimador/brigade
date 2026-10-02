@@ -288,7 +288,10 @@ vendor-specific markup, and any word the `checks.packet.terms` map bans. Misses 
 only; none fails a plan. Details in `skills/brigade/CONFIG.md`.
 
 Whether the preset helps is experiment E-004 in `docs/experiments.md`, run by an operator
-with the kit in `evals/experiments/writing-rules/`. It is pending: no result yet.
+with the kit in `evals/experiments/writing-rules/`. Its first run measured `ste-80` at
+16/18 first-attempt passes against 15/18 for plain packets on claude-haiku, and 18/18
+against 18/18 on gpt-5.5, which passed every run in both styles, so the decision is keep
+watching and the preset stays off by default.
 
 ## Requirements
 

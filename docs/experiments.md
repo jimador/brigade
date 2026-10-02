@@ -69,7 +69,7 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
 
 ### E-004 The ste-80 writing preset for work packets
 
-- date: 2026-10-03
+- date: 2026-10-02
 - hypothesis: an agent given a packet whose steps follow the `ste-80` preset
   (`skills/brigade/writing/ste-80.md`) passes the packet's Verify step on the first attempt
   more often than an agent given the same packet written as packets are today.
@@ -82,7 +82,8 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   through `verify.sh`. The grid repeats on a second model family when one is available.
   Held constant: fixture, facts, Verify command, judge and model.
 - metric: first-attempt pass rate per style (passes / runs, with the run count), per model.
-- result: pending
-- decision: keep watching
-- evidence: `.brigade/evals/writing-rules/` (local run records, never committed); the kit's
-  `README.md` says how a run goes.
+- result: three runs a cell, six items, two models. claude-haiku (run as an in-session haiku subagent, packet handed as a file, one line naming the fixture folder): plain 15/18, ste-80 16/18. gpt-5.5 (run with codex exec, reasoning effort low, packet as the prompt, fixture folder as the working directory): plain 18/18, ste-80 18/18. Totals: plain 33/36, ste-80 34/36. gpt-5.5 passed every run in both styles, so these six items cannot show a difference between the styles on it: they do not measure the preset on that model. On claude-haiku the styles differed on two items, in opposite directions: `2-compound-duration` plain 3/3, ste-80 2/3; `6-limiter-retry` plain 0/3, ste-80 2/3. Three runs a cell is too few to call either difference real; each is a direction, not a finding. The one-run gap on claude-haiku (1/18 of pass rate, under 6 points) is far short of the 15 points adoption needs.
+- decision: keep watching — `ste-80` did not beat plain by 15 points on any model and was not lower on every model; the preset stays off by default. A rerun needs items hard enough that neither model passes every run.
+- evidence: `.brigade/evals/writing-rules/results.json` (cells, totals, per-model rates and
+  how each model was run), with per-run records beside it; local, never committed. The
+  kit's `README.md` says how a run goes.
