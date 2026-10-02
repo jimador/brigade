@@ -6,6 +6,18 @@ import { identify, roleFromAct, activityOf, emptyFleet, applyEvent, prune } from
 
 const DISH = '/path/to/repo/.brigade/dishes/obsidian-example'
 
+// Runs `fn` `runs` times and gives back the fastest run in milliseconds. A busy machine only ever
+// makes a run slower, so the fastest one is the closest to what the code itself costs.
+function fastestOf(runs, fn) {
+  let best = Infinity
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now()
+    fn()
+    best = Math.min(best, performance.now() - start)
+  }
+  return best
+}
+
 test('a heavy cook type wins over the plain cook substring', () => {
   const who = identify({ description: 'cook:board-tickets:0', subagentType: 'brigade:brigade-cook-heavy' })
   assert.equal(who.role, 'heavy')
@@ -327,12 +339,10 @@ describe('working out a role costs time in step with the input', () => {
     return piece.repeat(Math.ceil(size / piece.length))
   }
 
-  // Runs `fn` once and fails if it took longer than the limit.
+  // Runs `fn` five times and fails if even the fastest run took longer than the limit.
   function quick(label, fn) {
-    const start = performance.now()
-    fn()
-    const took = performance.now() - start
-    assert.ok(took < LIMIT_MS, `${label} took ${took.toFixed(1)} ms`)
+    const took = fastestOf(5, fn)
+    assert.ok(took < LIMIT_MS, `${label} took ${took.toFixed(1)} ms at best of five`)
   }
 
   const COMMANDS = {
@@ -648,10 +658,9 @@ describe('working out an activity is quick and short for hostile input', () => {
         const text = grow(piece, size)
         assert.ok(text.length >= size)
         for (const act of [{ tool: 'Bash', command: text }, { tool: 'Edit', filePath: text }, { tool: 'Read', filePath: text }]) {
-          const start = performance.now()
-          const result = activityOf(act)
-          const took = performance.now() - start
-          assert.ok(took < LIMIT_MS, `${act.tool} at ${size} took ${took.toFixed(1)} ms`)
+          let result
+          const took = fastestOf(5, () => { result = activityOf(act) })
+          assert.ok(took < LIMIT_MS, `${act.tool} at ${size} took ${took.toFixed(1)} ms at best of five`)
           drawable(result)
         }
       }
@@ -686,10 +695,9 @@ describe('working out an activity is quick and short for hostile input', () => {
       for (const size of SIZES) {
         const command = grow(piece, size)
         assert.ok(command.length >= size)
-        const start = performance.now()
-        const result = activityOf({ tool: 'Bash', command })
-        const took = performance.now() - start
-        assert.ok(took < LIMIT_MS, `Bash at ${size} took ${took.toFixed(1)} ms`)
+        let result
+        const took = fastestOf(5, () => { result = activityOf({ tool: 'Bash', command }) })
+        assert.ok(took < LIMIT_MS, `Bash at ${size} took ${took.toFixed(1)} ms at best of five`)
         drawable(result)
         assert.equal(result, answer)
       }

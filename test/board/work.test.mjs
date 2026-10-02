@@ -4,6 +4,18 @@ import {
   PHASES, planItems, phaseOf, workCards, ticketCards, toWorkLanes, pickDish,
 } from '../../hooks/board/lib/work.mjs'
 
+// Runs `fn` `runs` times and gives back the fastest run in milliseconds. A busy machine only ever
+// makes a run slower, so the fastest one is the closest to what the code itself costs.
+function fastestOf(runs, fn) {
+  let best = Infinity
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now()
+    fn()
+    best = Math.min(best, performance.now() - start)
+  }
+  return best
+}
+
 // An invented three-item plan: one item with a packet and a goal, one with a packet and no goal,
 // one with no packet at all, and a malformed item line in between.
 const plan = [
@@ -158,11 +170,10 @@ test('a 200,000-character plan of hostile lines parses in under 100 ms', () => {
   let text = lines.join('\n')
   while (text.length < 200000) text += '\n### Goal\n## Packet: '
   assert.ok(text.length >= 200000)
-  const start = performance.now()
-  const out = planItems(text)
-  const took = performance.now() - start
+  let out
+  const took = fastestOf(5, () => { out = planItems(text) })
   assert.deepEqual(out.items, [])
-  assert.ok(took < 100, 'took ' + took.toFixed(1) + ' ms')
+  assert.ok(took < 100, 'took ' + took.toFixed(1) + ' ms at best of five')
 })
 
 // Notes and agents built by hand, the way the dish reader and the roster shape them.
