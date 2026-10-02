@@ -8,8 +8,9 @@
 // activities by the roster's rules, work items land in lanes by the phase rules, and the header,
 // messages, learnings and detail box say what the live board would say. Every frame is whatever
 // draw() returns, and the sprites walk with the pane's own advance() step. This script only turns
-// the drawn rows into SVG, so the demo always looks like what /brigade-board draws. Run it again
-// after changing anything under hooks/board/lib/.
+// the drawn rows into SVG, and draws each sprite in real pixels the way the desktop picture does,
+// so the demo always looks like what /brigade-board draws. Run it again after changing anything
+// under hooks/board/lib/.
 //
 // The SVG is self-contained and animated by CSS alone, because GitHub shows README images
 // through <img>, where scripts never run and nothing outside the file loads.
@@ -30,8 +31,9 @@ import { activityOf, applyEvent, emptyFleet, prune } from '../hooks/board/lib/fl
 import { findingsOf, learningsFrom, messagesFrom, noteFrom } from '../hooks/board/lib/dish.mjs'
 import { parseTicket } from '../hooks/board/lib/board.mjs'
 import { forecast } from '../hooks/board/lib/weather.mjs'
-import { PALETTE, ROLES } from '../hooks/board/lib/sprites.mjs'
-import { cellWidth } from '../hooks/board/lib/canvas.mjs'
+import { PALETTE, ROLES, colorOf, sizeOf } from '../hooks/board/lib/sprites.mjs'
+import { cellWidth, safeText } from '../hooks/board/lib/canvas.mjs'
+import { spriteMarkup } from '../hooks/board/lib/board-svg.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..')
@@ -430,7 +432,7 @@ function play() {
         plan = arrange(snapshot, COLUMNS)
       }
       const view = { positions, frame: frames.length % 2, hovered: moment.hover ?? null, over: moment.over ?? null }
-      frames.push({ beat: moment.beat, tick, still: moment.still === true, drawn: draw(snapshot, view, COLUMNS), under })
+      frames.push({ beat: moment.beat, tick, still: moment.still === true, drawn: draw(snapshot, view, COLUMNS), under, agents: snapshot.agents })
       if (waiting && settled(positions, plan.homes)) waiting = false
       else if (!waiting) held++
       if (frames.length > 1000) throw new Error('sprites never settled')
@@ -564,13 +566,13 @@ function sameCell(a, b) {
 
 // One row of a frame, as the board under it plus what is drawn on top. The backdrop is the row
 // as the board draws it with no sprites and no hover card; the pieces are the runs of cells where
-// the frame differs from it (the sprites and the hover card), each drawn opaque from its own left
-// edge so the same piece of sprite is reused wherever it stands. Together they are exactly the
-// row draw() returned.
-function rowParts(runs, underRuns) {
+// the frame differs from it (the hover card, mostly), each drawn opaque from its own left edge so
+// the same piece is reused wherever it stands. The sprites are drawn in real pixels instead of the
+// terminal's blocks, so a block character in one of the `covered` columns is left to the backdrop.
+function rowParts(runs, underRuns, covered) {
   const cells = cellsOf(runs)
   const under = cellsOf(underRuns)
-  const changed = cells.map((c, x) => !sameCell(c, under[x]))
+  const changed = cells.map((c, x) => !sameCell(c, under[x]) && !(covered.has(x) && Object.hasOwn(BLOCKS, c.ch)))
   const pieces = []
   for (let x = 0; x < cells.length; x++) {
     if (!changed[x]) continue
@@ -593,8 +595,35 @@ function captionSvg(text) {
   return `<text x="${xs.join(' ')}" y="${PAD + 13}" fill="${PALETTE.dim}">${esc(text)}</text>`
 }
 
-// Builds the whole file. Every distinct backdrop, piece and row is defined once and frames point
-// at rows; a frame that looks the same as the one before it just stays up longer.
+// A frame's sprites, the way the desktop picture draws them: each agent region gets its agent's
+// detailed art in real pixels, in the size and colour the desktop pane gives it. The painter names
+// a region by the safe form of its agent's id, and when two agents share one, the first wins.
+// `covered` gets the columns each drawn sprite takes in each row it stands on; a sprite whose art
+// can't be drawn covers nothing, so its terminal blocks stay.
+function spritesOf(frame, covered) {
+  const byId = new Map()
+  for (const agent of frame.agents) {
+    const id = safeText(agent.id)
+    if (!byId.has(id)) byId.set(id, agent)
+  }
+  const placed = []
+  for (const region of frame.drawn.regions) {
+    const agent = region.kind === 'agent' ? byId.get(region.id) : undefined
+    if (!agent) continue
+    const art = spriteMarkup({ x: 0, y: 0, w: region.w, h: region.h, frame: region.frame,
+      size: sizeOf(agent.model), color: colorOf(agent.role, agent.state, agent.model) })
+    if (art === '') continue
+    for (let y = region.y; y < region.y + region.h; y++) {
+      if (!covered.has(y)) covered.set(y, new Set())
+      for (let x = region.x; x < region.x + region.w; x++) covered.get(y).add(x)
+    }
+    placed.push({ x: region.x * CELL_W, y: region.y * CELL_H, art })
+  }
+  return placed
+}
+
+// Builds the whole file. Every distinct backdrop, piece, row and sprite art is defined once and
+// frames point at them; a frame that looks the same as the one before it just stays up longer.
 function render(frames) {
   const ids = new Map()
   const defs = []
@@ -617,12 +646,16 @@ function render(frames) {
     .join('')
   for (const f of frames) {
     tallest = Math.max(tallest, f.drawn.height)
-    // Every backdrop goes down before any piece, so nothing a backdrop draws past its own row can
-    // end up over a sprite or the hover card.
+    // Every backdrop goes down first, then the sprites, then the pieces, so nothing a backdrop
+    // draws past its own row can end up over a sprite, and the hover card stays on top.
+    const covered = new Map()
+    const sprites = spritesOf(f, covered)
+      .map((s) => `<use href="#${define('s', s.art)}" x="${num(s.x)}" y="${num(s.y)}"/>`)
+      .join('')
     const backdrops = []
     const overlays = []
     f.drawn.rows.forEach((runs, y) => {
-      const { backdrop, pieces } = rowParts(runs, f.under.rows[y])
+      const { backdrop, pieces } = rowParts(runs, f.under.rows[y], covered.get(y) ?? new Set())
       const band = Math.floor(y / BAND)
       const at = `y="${(y % BAND) * CELL_H}"`
       if (backdrop !== '') backdrops[band] = (backdrops[band] ?? '') + `<use href="#${define('b', backdrop)}" ${at}/>`
@@ -631,7 +664,7 @@ function render(frames) {
         overlays[band] = (overlays[band] ?? '') + `<use href="#${row}" ${at}/>`
       }
     })
-    const key = `<use href="#${define('k', banded(backdrops))}"/>${banded(overlays)}`
+    const key = `<use href="#${define('k', banded(backdrops))}"/>${sprites}${banded(overlays)}`
     const last = groups.at(-1)
     if (last && last.key === key) last.ms += FRAME_MS
     else groups.push({ key, ms: FRAME_MS })
