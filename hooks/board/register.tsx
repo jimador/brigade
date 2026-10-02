@@ -23,10 +23,11 @@ const memory = atom({ plugin: 'brigade', key: 'memory' } as const, null as Memor
 
 // How long a finished agent stays on the board before it leaves.
 const KEEP_MS = 120000
-// The most tool calls we look at per agent while working out who it is. An agent that never
-// gives itself away stops costing anything after this many. Counted per agent id, for the
-// life of the session.
-const TOOL_LOOKS = 12
+// The most tool calls we look at per agent while working out who it is. It is generous because
+// a cook explores for a good while before its first write, and an inspector writes its verdict
+// last. An agent that never gives itself away still stops costing anything after this many.
+// Counted per agent id, for the life of the session.
+const TOOL_LOOKS = 400
 const toolLooks = new Map<string, number>()
 
 // Applies one roster event to the fleet. This runs on the session's hot path, so a failure
@@ -47,13 +48,19 @@ const record = async ($: EngineInterface, event: object, planner = false) => {
   }
 }
 
-// Whether a tool call can still tell us something about this agent: it isn't on the roster
-// yet, or its role, dish or item is still unknown.
-async function stillUnknown($: EngineInterface, id: string) {
-  const roster = await read($, fleet)
-  if (!Object.hasOwn(roster.agents, id)) return true
-  const agent = roster.agents[id]
-  return agent.role === 'agent' || agent.dish == null || agent.item == null
+// Applies one tool event, but writes the roster only when the event changes it. Most tool calls
+// teach us nothing, and those then cost one read and no redraw. Failures are swallowed, like
+// in record.
+const learn = async ($: EngineInterface, event: { type: 'tool'; id: string; paths: unknown[]; act: object }) => {
+  try {
+    const roster = await read($, fleet)
+    if (same(roster, applyEvent(roster, event))) return
+    // Only a write needs the time: it is when a newcomer joins the roster.
+    const at = await $.clock.now()
+    await update($, fleet, current => applyEvent(current, { ...event, at }) as Fleet)
+  } catch {
+    // The roster stays as it was.
+  }
 }
 
 // The ticket id and status of every ticket in the cache, so an agent's lane can be looked up.
@@ -358,10 +365,12 @@ export const register: Register = on => {
       // Every call counts toward the cap, so past it an agent's tool calls cost nothing at all.
       const looks = toolLooks.get(id) ?? 0
       if (looks < TOOL_LOOKS) toolLooks.set(id, looks + 1)
-      if (looks < TOOL_LOOKS && (await stillUnknown($, id))) {
+      if (looks < TOOL_LOOKS) {
         const fields = e as unknown as Record<string, unknown>
         const paths = [fields.file_path, fields.command].filter(value => typeof value === 'string')
-        await record($, { type: 'tool', id, paths })
+        // What the call does, so a write can tell us the role; reads and mentions never do.
+        const act = { tool: fields.tool, filePath: fields.file_path, command: fields.command }
+        await learn($, { type: 'tool', id, paths, act })
       }
     } catch {
       // Nothing learned from this call.

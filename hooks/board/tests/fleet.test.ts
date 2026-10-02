@@ -92,7 +92,7 @@ test('a tool call from the main loop adds no agent and passes its result through
   await ui.unmount()
 })
 
-test('an agent never spawned is named by the paths it touches', async ($, on) => {
+test('an agent never spawned is named by the files it writes', async ($, on) => {
   mock.clock(on)
   engine(on)
   await step($, 'a2')
@@ -107,6 +107,40 @@ test('an agent never spawned is named by the paths it touches', async ($, on) =>
   await ui.unmount()
 })
 
+// Opens the board on the terminal, ready to hover.
+async function board($: Parameters<Parameters<typeof test>[1]>[0]) {
+  await $.command.run(OPEN)
+  const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+  await ui.resize({ columns: 80, rows: 30, in: 'stage' })
+  return ui
+}
+
+test('reading cook files makes nobody a cook; writing a verdict makes an inspector, however late', async ($, on) => {
+  mock.clock(on)
+  engine(on)
+  await step($, 'a2')
+  await $.tool.call({ agentId: 'a2', tool: 'Read', file_path: '/repo/.brigade/dishes/obsidian-example/packets/dish-notes.md' } as never)
+  await $.tool.call({ agentId: 'a2', tool: 'Bash', command: 'cat /repo/.brigade/dishes/obsidian-example/state/dish-notes.md' } as never)
+  for (let i = 0; i < 15; i++) await $.tool.call({ agentId: 'a2', tool: 'Bash', command: 'ls' } as never)
+  let ui = await board($)
+  await hover(ui, /• Basil/)
+  expect(await ui.find({ type: 'Text', text: /Basil · agent/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /item dish-notes/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /· cook/, in: 'stage' })).toBeUndefined()
+  await ui.unmount()
+
+  await $.tool.call({ agentId: 'a2', tool: 'Write', file_path: '/repo/.brigade/dishes/obsidian-example/reports/dish-notes-verdict.md' } as never)
+  await step($, 'a3')
+  await $.tool.call({ agentId: 'a3', tool: 'Edit', file_path: '/repo/.brigade/worktrees/board-pane--dish-notes/hooks/a.mjs' } as never)
+  ui = await board($)
+  await hover(ui, /✓ Basil/)
+  expect(await ui.find({ type: 'Text', text: /Basil · inspector/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /reviewing/, in: 'stage' })).toBeDefined()
+  await hover(ui, /♨ Sage/)
+  expect(await ui.find({ type: 'Text', text: /Sage · cook/, in: 'stage' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the main loop shows as the Planner', async ($, on) => {
   mock.clock(on)
   engine(on)
@@ -118,4 +152,27 @@ test('the main loop shows as the Planner', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /Basil · planner/, in: 'stage' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /working · 15 tokens/, in: 'stage' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a tool call that teaches nothing writes no state', async ($, on) => {
+  mock.clock(on)
+  engine(on)
+  // The test's hooks stand in for the engine's state store and count every roster write.
+  const store = new Map<string, { value: unknown; version: number }>()
+  let writes = 0
+  on('state.get', async ($$, e) => ({ value: store.get(e.key) ?? { value: undefined, version: 0 } }))
+  on('state.set', async ($$, e) => {
+    const now = store.get(e.key) ?? { value: undefined, version: 0 }
+    if (e.ifVersion !== undefined && e.ifVersion !== now.version) return { value: { isSet: false, version: now.version } }
+    if (e.key === 'fleet') writes++
+    store.set(e.key, { value: e.value, version: now.version + 1 })
+    return { value: { isSet: true, version: now.version + 1 } }
+  })
+  await step($, 'a2')
+  await $.tool.call({ agentId: 'a2', tool: 'Read', file_path: '/repo/.brigade/dishes/obsidian-example/packets/dish-notes.md' } as never)
+  const before = writes
+  for (let i = 0; i < 5; i++) {
+    expect(await $.tool.call({ agentId: 'a2', tool: 'Bash', command: 'ls' } as never)).toEqual({ result: 'ok' })
+  }
+  expect(writes).toBe(before)
 })

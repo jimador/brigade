@@ -2,7 +2,7 @@ export type LaneKey = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocke
 export type Ticket = { id: string; title: string; status: string; kind: string; assignee: string; worker: string }
 export type Lane = { key: LaneKey; title: string; total: number; tickets: Ticket[] }
 export type Weather = { level: number; label: string; glyph: string; percent: number | null }
-export type Role = 'planner' | 'scout' | 'cook' | 'heavy' | 'inspector' | 'analyst' | 'agent'
+export type Role = 'planner' | 'scout' | 'cook' | 'heavy' | 'inspector' | 'analyst' | 'steward' | 'agent'
 export type AgentState = 'working' | 'done' | 'failed'
 export type Agent = {
   id: string

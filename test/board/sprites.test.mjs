@@ -1,7 +1,7 @@
 // Checks the sprite sheet's shape and the small rules that pick a sprite's size, name and colour.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SPRITES, SIZES, sizeOf, rosterName, colorOf } from '../../hooks/board/lib/sprites.mjs'
+import { SPRITES, SIZES, ROLES, NAMES, sizeOf, rosterName, freeName, colorOf } from '../../hooks/board/lib/sprites.mjs'
 
 const ORDER = ['s', 'm', 'l', 'xl']
 
@@ -47,6 +47,19 @@ test('rosterName wraps the names with a round number', () => {
   assert.equal(rosterName(0), 'Basil')
   assert.equal(rosterName(12), 'Basil 2')
   assert.equal(rosterName(25), 'Sage 3')
+})
+
+test('freeName gives the first name nobody on the roster has', () => {
+  assert.equal(freeName([]), 'Basil')
+  assert.equal(freeName(['Basil']), 'Sage')
+  assert.equal(freeName(['Sage']), 'Basil')
+  assert.equal(freeName([...NAMES]), 'Basil 2')
+  assert.equal(freeName([...NAMES, 'Basil 2']), 'Sage 2')
+})
+
+test('the steward has its own mark', () => {
+  assert.equal(ROLES.steward.mark, '⚑')
+  assert.equal(ROLES.steward.label, 'steward')
 })
 
 test('colorOf follows state first, then role', () => {

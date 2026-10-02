@@ -45,6 +45,7 @@ export const ROLES = {
   heavy: { mark: '♨', label: 'heavy cook', color: '#ffd166' },
   inspector: { mark: '✓', label: 'inspector', color: '#b388ff' },
   analyst: { mark: '∴', label: 'analyst', color: '#ff9f1c' },
+  steward: { mark: '⚑', label: 'steward', color: '#8be9fd' },
   agent: { mark: '•', label: 'agent', color: '#e8e6d9' },
 }
 export const NAMES = ['Basil', 'Sage', 'Miso', 'Nori', 'Clove', 'Fennel', 'Juniper', 'Olive', 'Pepper', 'Rye', 'Saffron', 'Tamarind']
@@ -53,6 +54,16 @@ export function rosterName(n) {
   const name = NAMES[n % NAMES.length]
   const round = Math.floor(n / NAMES.length) + 1
   return round === 1 ? name : `${name} ${round}`
+}
+// The first name nobody in `taken` already has. Goes through all twelve names, then 'Basil 2',
+// 'Sage 2' and so on, so a name freed by an agent that left gets used again before a new round.
+export function freeName(taken) {
+  const used = new Set(Array.isArray(taken) ? taken : [])
+  // Each round adds twelve fresh names, so this always ends once the rounds outnumber `used`.
+  for (let n = 0; ; n++) {
+    const name = rosterName(n)
+    if (!used.has(name)) return name
+  }
 }
 // The colour a sprite draws in: PALETTE.alert when state is 'failed', PALETTE.dim when 'done',
 // else the role's colour (an unknown role uses ROLES.agent).
