@@ -38,12 +38,20 @@ const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 // An item's ledger. A shell command that writes one is a cook keeping its memory.
 const ITEM_STATE = /\/state\/[a-z0-9-]+\.md$/
 
-// Shell commands only the steward runs: making or removing a worktree, and landing a branch.
-// Each stays inside one command of a pipeline or list, so 'git log; echo worktree add' is no match.
-const STEWARD_COMMANDS = [
-  /\bgit\b[^;&|\n]*\bworktree\s+(?:add|remove)\b/,
-  /\bgit\b[^;&|\n]*\bmerge\b[^;&|\n]*--ff-only\b/,
-]
+// How much of a shell command we look at. This runs on every shell call of every agent, and a
+// command can be any length, so anything past this point never decides a role.
+const COMMAND_LIMIT = 4_000
+
+// Splits a command into the single commands of its pipelines and lists.
+const COMMAND_BREAK = /[;&|\n]/
+
+// The words that make a command the steward's: making or removing a worktree, and landing a
+// branch. Each is found with one forward scan from a given point, so a long command full of
+// near misses still costs time in step with its length.
+const GIT = /\bgit\b/g
+const WORKTREE = /\bworktree\s+(?:add|remove)\b/g
+const MERGE = /\bmerge\b/g
+const FF_ONLY = /--ff-only\b/g
 
 // A shell word, quoted or bare. Quotes are dropped from what it captures.
 const WORD = String.raw`(?:"([^"]*)"|'([^']*)'|([^\s;&|<>()]+))`
@@ -117,8 +125,26 @@ function shellTargets(command) {
   return targets.filter(Boolean)
 }
 
-function roleFromCommand(command) {
-  if (STEWARD_COMMANDS.some((pattern) => pattern.test(command))) return 'steward'
+// Where `pattern` next matches in `text` at or after `from`, or -1.
+function findFrom(pattern, text, from) {
+  pattern.lastIndex = from
+  const match = pattern.exec(text)
+  return match ? match.index + match[0].length : -1
+}
+
+// True when one command (no ';', '&', '|' or newline in it) is 'git … worktree add|remove' or
+// 'git … merge … --ff-only', with the words in that order.
+function isStewardCommand(piece) {
+  const git = findFrom(GIT, piece, 0)
+  if (git === -1) return false
+  if (findFrom(WORKTREE, piece, git) !== -1) return true
+  const merge = findFrom(MERGE, piece, git)
+  return merge !== -1 && findFrom(FF_ONLY, piece, merge) !== -1
+}
+
+function roleFromCommand(fullCommand) {
+  const command = fullCommand.slice(0, COMMAND_LIMIT)
+  if (command.split(COMMAND_BREAK).some(isStewardCommand)) return 'steward'
   for (const target of shellTargets(command)) {
     const role = roleFromWrittenPath(target)
     if (role) return role

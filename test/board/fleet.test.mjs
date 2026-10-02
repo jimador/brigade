@@ -1,5 +1,6 @@
 // Checks how the roster works out who an agent is and follows it from first sighting to finish.
-import { test } from 'node:test'
+import { describe, test } from 'node:test'
+import { performance } from 'node:perf_hooks'
 import assert from 'node:assert/strict'
 import { identify, roleFromAct, emptyFleet, applyEvent, prune } from '../../hooks/board/lib/fleet.mjs'
 
@@ -238,4 +239,82 @@ test('prune drops long-finished agents and keeps working ones', () => {
   assert.deepEqual(kept.order, ['busy'])
   assert.deepEqual(Object.keys(kept.agents), ['busy'])
   assert.equal(kept.agents.busy.state, 'working')
+})
+
+// A shell command or path can be any length an agent likes, and the role checks run on every tool
+// call, so each one has to take time in step with the length of its input.
+describe('working out a role costs time in step with the input', () => {
+  const LIMIT_MS = 50
+  const SIZES = [8_000, 100_000]
+
+  // Repeats a piece until the text is at least `size` characters long.
+  function grow(piece, size) {
+    return piece.repeat(Math.ceil(size / piece.length))
+  }
+
+  // Runs `fn` once and fails if it took longer than the limit.
+  function quick(label, fn) {
+    const start = performance.now()
+    fn()
+    const took = performance.now() - start
+    assert.ok(took < LIMIT_MS, `${label} took ${took.toFixed(1)} ms`)
+  }
+
+  const COMMANDS = {
+    'git merge, over and over': (n) => grow('git merge ', n),
+    'git worktree, over and over': (n) => grow('git worktree ', n),
+    'one git and many merges': (n) => 'git ' + grow('merge ', n),
+    'many bare redirects': (n) => grow('> ', n),
+    'one long run of >': (n) => grow('>', n),
+    'tee, over and over': (n) => grow('tee ', n),
+    'double quotes only': (n) => grow('"', n),
+    'single quotes only': (n) => grow("'", n),
+    'a redirect into a quote that never closes': (n) => 'a > "' + grow('b', n),
+  }
+
+  const PATHS = {
+    'state folders, over and over': (n) => grow('/state/', n),
+    'worktree folders, over and over': (n) => grow('.brigade/worktrees/', n),
+    'dish folders, over and over': (n) => grow('.brigade/dishes/', n),
+  }
+
+  for (const [name, build] of Object.entries(COMMANDS)) {
+    test(`a shell command made of ${name}`, () => {
+      for (const size of SIZES) {
+        const command = build(size)
+        quick(`roleFromAct at ${size}`, () => roleFromAct({ tool: 'Bash', command }))
+        quick(`identify at ${size}`, () => identify({ prompt: command, paths: [command], act: { tool: 'Bash', command } }))
+        quick(`a written path at ${size}`, () => roleFromAct({ tool: 'Write', filePath: command }))
+        quick(`a tool event at ${size}`, () => applyEvent(emptyFleet(), { type: 'tool', id: 'a', at: 1, paths: [command], act: { tool: 'Bash', command } }))
+      }
+    })
+  }
+
+  for (const [name, build] of Object.entries(PATHS)) {
+    test(`a path and a prompt made of ${name}`, () => {
+      for (const size of SIZES) {
+        const text = build(size)
+        quick(`identify by path at ${size}`, () => identify({ paths: [text] }))
+        quick(`identify by prompt at ${size}`, () => identify({ prompt: text }))
+        quick(`a written path at ${size}`, () => roleFromAct({ tool: 'Write', filePath: text }))
+        quick(`a shell command at ${size}`, () => roleFromAct({ tool: 'Bash', command: text }))
+        quick(`a tool event at ${size}`, () => applyEvent(emptyFleet(), { type: 'tool', id: 'a', at: 1, paths: [text], act: { tool: 'Write', filePath: text } }))
+      }
+    })
+  }
+})
+
+test('a steward command is judged one command of a list at a time', () => {
+  assert.equal(roleFromAct({ tool: 'Bash', command: 'git -C /path/to/repo merge --ff-only wip/x' }), 'steward')
+  assert.equal(roleFromAct({ tool: 'Bash', command: 'git log; echo merge --ff-only' }), null)
+  assert.equal(roleFromAct({ tool: 'Bash', command: 'git merge wip/x' }), null)
+  assert.equal(roleFromAct({ tool: 'Bash', command: 'git log && git worktree add /path/to/repo/.brigade/worktrees/a--b' }), 'steward')
+  assert.equal(roleFromAct({ tool: 'Bash', command: 'git log | echo worktree add' }), null)
+  assert.equal(roleFromAct({ tool: 'Bash', command: 'echo merge --ff-only git' }), null)
+})
+
+test('only the first 4,000 characters of a shell command are looked at', () => {
+  const padding = 'x'.repeat(5_000)
+  assert.equal(roleFromAct({ tool: 'Bash', command: `echo ${padding}; git merge --ff-only wip/x` }), null)
+  assert.equal(roleFromAct({ tool: 'Bash', command: `echo ${padding}; git worktree add /path/to/repo/x` }), null)
 })
