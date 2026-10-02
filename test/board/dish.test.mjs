@@ -310,6 +310,14 @@ test('a PASS verdict tells the planner, counting any notes', () => {
   assert.equal(only(note({ kind: 'verdict', gist: 'PASS', findings: 2 })).text, 'token-bucket passed review, 2 notes')
 })
 
+// The message wording is shared with the panels that draw it, so one finding reads `1 notes` too.
+test('a PASS verdict with one finding says `, 1 notes`, the same form as any other count', () => {
+  assert.equal(only(note({ kind: 'verdict', gist: 'PASS', findings: 1 })).text, 'token-bucket passed review, 1 notes')
+  const onePass = passVerdict.replace('findings: []',
+    'findings:\n  - { id: F1, severity: low, location: "src/foo.ts:7", summary: rename the helper }')
+  assert.equal(messagesFrom([noteFrom(onePass, 1)], [])[0].text, 'token-bucket passed review, 1 notes')
+})
+
 test('a brief goes from the scout to the planner', () => {
   const m = only(note({ kind: 'brief', item: '', summary: 'Which clock does the limiter read?' }))
   assert.equal(m.from, 'scout')

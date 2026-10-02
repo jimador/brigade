@@ -299,7 +299,8 @@ function messageFor(note, agents) {
   } else if (kind === 'verdict' && gist === 'PASS') {
     from = nameFor(agents, INSPECTOR_ROLES, item, 'inspector')
     to = 'planner'
-    const notes = count !== null && count > 0 ? `, ${count} ${count === 1 ? 'note' : 'notes'}` : ''
+    // Always `notes`, even for one: other parts of the board match on this exact wording.
+    const notes = count !== null && count > 0 ? `, ${count} notes` : ''
     said = `${label} passed review${notes}`
   } else if (kind === 'brief') {
     from = 'scout'
