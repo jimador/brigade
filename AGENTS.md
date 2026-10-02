@@ -20,8 +20,8 @@ wording with the care you would give production code.
   outside that folder, covered by `node --test test/board/*.test.mjs`: `fleet.mjs` keeps the
   roster, `work.mjs` puts work items and tickets in lanes, `dish.mjs` reads a dish's notes into
   messages and `LEARNINGS.md` into learnings, `detail.mjs` words the header and the detail box,
-  `board-layout.mjs` places everything in cells, `board-paint.mjs` draws it, `stage.mjs` walks
-  the sprites, and `sprites.mjs`, `canvas.mjs`, `board.mjs` and `weather.mjs` hold the sprites
+  `board-layout.mjs` places everything in cells, `board-paint.mjs` draws it, `board-svg.mjs`
+  turns a drawn board into the desktop app's picture, `stage.mjs` walks the sprites, and `sprites.mjs`, `canvas.mjs`, `board.mjs` and `weather.mjs` hold the sprites
   and palette, the cell grid, the ticket folder and the context reading. `register.tsx` holds
   the hooks, the board's state, the folder reads and the detail box requests; `screen.tsx` draws
   the animated region and takes the pointer. Both are covered by `claude plugin test .`. Change
