@@ -18,8 +18,25 @@ const MAX_WIDTH = 160
 // At these widths every agent gets hovered; at every other width one of up to three chosen agents
 // does, taking turns, so each chosen one is hovered across the whole range and the gate stays fast.
 const FULL_HOVER_WIDTHS = new Set([24, 40, 60, 100, 124, 160])
-// A blow-up should fail the run, not hang it.
-const BUDGET_MS = 30000
+// A blow-up should fail the run, not hang it. The sweep takes about 10 seconds at best, and this
+// is four times that, rounded up.
+const BUDGET_MS = 40000
+// The sweep is drawn up to this many times, so a busy machine gets more than one chance.
+const RUNS = 5
+
+// Runs `fn` up to `runs` times and gives back the fastest run in milliseconds. A busy machine only
+// ever makes a run slower, so the fastest one is the closest to what the code itself costs. A run
+// quicker than `enough` ms ends it early: the fastest can only be quicker still, so the verdict
+// against that limit is already known, and the sweep is too slow to draw five times for nothing.
+function fastestOf(runs, fn, enough = 0) {
+  let best = Infinity
+  for (let i = 0; i < runs && best >= enough; i++) {
+    const start = performance.now()
+    fn()
+    best = Math.min(best, performance.now() - start)
+  }
+  return best
+}
 
 function seedFromEnv(raw) {
   if (raw == null || raw === '') return DEFAULT_SEED
@@ -254,9 +271,8 @@ function frameOf(snapshot, hovered, width, plain = null) {
 
 let sweep = null
 
-// Draws every frame once; the property tests share the result.
-before(() => {
-  const started = performance.now()
+// Draws every frame of every case at every width.
+function drawSweep() {
   const rand = mulberry32(SEED)
   const cases = []
   let drawn = 0
@@ -276,10 +292,19 @@ before(() => {
     }
     cases.push({ index, snapshot, some, widths })
   }
-  const ms = performance.now() - started
-  sweep = { cases, drawn, ms }
-  assert.ok(ms < BUDGET_MS, `drawing the sweep took ${Math.round(ms)} ms, over the ${BUDGET_MS} ms budget`)
-}, { timeout: BUDGET_MS })
+  return { cases, drawn }
+}
+
+// Draws the sweep, timed, and the property tests share the result. Every run draws the same
+// frames from the same seed, so whichever run is kept, the tests check the same thing. The hook
+// gets one budget more than the runs need, so five slow runs end in the message saying how slow
+// rather than a timeout; a sweep that never finishes still hits the timeout.
+before(() => {
+  let drawn = null
+  const ms = fastestOf(RUNS, () => { drawn = drawSweep() }, BUDGET_MS)
+  sweep = { ...drawn, ms }
+  assert.ok(ms < BUDGET_MS, `drawing the sweep took ${Math.round(ms)} ms at best of ${RUNS}, over the ${BUDGET_MS} ms budget`)
+}, { timeout: (RUNS + 1) * BUDGET_MS })
 
 function* allFrames() {
   for (const c of sweep.cases) {

@@ -1,13 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Detail, Fleet, Learnings, Message, Note, Project, Snapshot, Weather, WorkLane } from '../../types'
+import type { Agent, Detail, Fleet, Learnings, Message, Note, Project, Snapshot, Stage, Weather, WorkLane } from '../../types'
 import { boardDirFrom, laneOf, parseTicket } from './lib/board.mjs'
+import { arrange } from './lib/board-layout.mjs'
+import { draw } from './lib/board-paint.mjs'
+import { pictureOf } from './lib/board-svg.mjs'
 import { safeText } from './lib/canvas.mjs'
 import { agentDetail, cardDetail, messageDetail, projectOf, ticketDetail } from './lib/detail.mjs'
 import { envelope, findingsOf, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
 import { activityOf, applyEvent, prune } from './lib/fleet.mjs'
-import { ROLES } from './lib/sprites.mjs'
+import { colorOf, ROLES, sizeOf } from './lib/sprites.mjs'
+import { advance } from './lib/stage.mjs'
 import { forecast } from './lib/weather.mjs'
 import { PHASES, pickDish, planItems, ticketCards, toWorkLanes, workCards } from './lib/work.mjs'
 
@@ -27,6 +31,11 @@ const work = atom({ plugin: 'brigade', key: 'work' } as const, toWorkLanes([]) a
 const messages = atom({ plugin: 'brigade', key: 'messages' } as const, [] as Message[])
 const learnings = atom({ plugin: 'brigade', key: 'learnings' } as const, { total: 0, lines: [] } as Learnings)
 const detail = atom({ plugin: 'brigade', key: 'detail' } as const, null as Detail | null)
+// Where the sprites stand when the hooks module draws the board itself, which frame a walking one
+// shows, whether the pane is open, and whether the terminal's region reported in or the pane fell
+// back to rows drawn here.
+const STAGE_START: Stage = { positions: {}, frame: 0, open: false, openedAt: null, ready: false, plain: false }
+const stage = atom({ plugin: 'brigade', key: 'stage' } as const, STAGE_START)
 
 // How long a finished agent stays on the board before it leaves.
 const KEEP_MS = 120000
@@ -47,6 +56,10 @@ const SLUG = /^[a-z0-9-]+$/
 // Note file names that are safe to put in a path.
 const NOTE_FILE = /^[A-Za-z0-9._-]+\.md$/
 
+// The roster with the Planner on it, under 'main', added now if it isn't there yet.
+const withPlanner = (roster: Fleet, at: number | undefined, model?: string) =>
+  Object.hasOwn(roster.agents, 'main') ? roster : (applyEvent(roster, { type: 'spawn', id: 'main', at, description: 'planner', subagentType: 'planner', model }) as Fleet)
+
 // Applies one roster event to the fleet. This runs on the session's hot path, so a failure
 // here is swallowed: the board missing an event is far better than a tool call failing.
 // With `planner`, the Planner is put on the roster first if it isn't there yet.
@@ -54,10 +67,7 @@ const record = async ($: EngineInterface, event: object, planner = false) => {
   try {
     const at = await $.clock.now()
     await update($, fleet, roster => {
-      let next = roster
-      if (planner && !Object.hasOwn(roster.agents, 'main')) {
-        next = applyEvent(next, { type: 'spawn', id: 'main', at, description: 'planner', subagentType: 'planner', model: (event as { model?: string }).model })
-      }
+      const next = planner ? withPlanner(roster, at, (event as { model?: string }).model) : roster
       return applyEvent(next, { ...event, at }) as Fleet
     })
   } catch {
@@ -67,18 +77,26 @@ const record = async ($: EngineInterface, event: object, planner = false) => {
 
 // Applies one tool event, but writes the roster only when the event changes it. Most tool calls
 // teach us nothing, and those then cost one read and no redraw. Failures are swallowed, like
-// in record.
-const learn = async ($: EngineInterface, event: { type: 'tool'; id: string; paths: unknown[]; act: object }) => {
+// in record. With `planner`, the Planner is put on the roster first if it isn't there yet, so a
+// main-session call that lands before the session's first step still shows up as the Planner.
+const learn = async ($: EngineInterface, event: { type: 'tool'; id: string; paths: unknown[]; act: object }, planner = false) => {
   try {
     const roster = await read($, fleet)
-    if (same(roster, applyEvent(roster, event))) return
+    const seeded = planner ? withPlanner(roster, undefined) : roster
+    if (same(roster, applyEvent(seeded, event))) return
     // Only a write needs the time: it is when a newcomer joins the roster.
     const at = await $.clock.now()
-    await update($, fleet, current => applyEvent(current, { ...event, at }) as Fleet)
+    await update($, fleet, current => applyEvent(planner ? withPlanner(current, at) : current, { ...event, at }) as Fleet)
   } catch {
     // The roster stays as it was.
   }
 }
+
+// Whether a main-session tool call touches a dish's or a worktree's folder. Only those can move
+// the main session to another dish, and this runs on every one of its calls, so it is kept to
+// a couple of substring tests and reads no state.
+const onBoard = (paths: string[]) =>
+  paths.some(path => path.includes('.brigade/dishes/') || path.includes('.brigade/worktrees/'))
 
 // The folder the board reads `.brigade/` from, without a trailing slash, and its last part, which
 // names the repo. It is the repository's root, because in a git worktree the session's own folder
@@ -686,6 +704,267 @@ function contextLine(reading: Weather | null) {
   return typeof percent === 'number' && Number.isFinite(percent) ? `Context ${percent}%` : 'Context --'
 }
 
+// The desktop app can't load the board's drawing region, so there the board is a picture with a
+// row of buttons under it that open the detail box. The app refuses a picture wider or taller
+// than this many pixels, and it checks that after the hook has returned, so we check first.
+const PICTURE_MAX_PX = 4096
+// The picture is drawn as many board columns as the pane is wide in the app's own cells, times
+// 1.4: a pane the app calls 108 columns is about 1260 pixels across, and gets 151 columns. The app
+// scales a picture wider than the pane down to fill it but never grows a narrower one, so the
+// picture comes out a little wider than the pane and fills it. A very narrow pane still gets a
+// readable 96 columns, and a very wide one stops at 200 so the board doesn't turn into a thin strip.
+const PICTURE_SCALE = 1.4
+const PICTURE_MIN_COLUMNS = 96
+const PICTURE_MAX_COLUMNS = 200
+// How many buttons of each kind go under the picture, and the longest label a button gets.
+const BUTTON_CARDS = 12
+const BUTTON_AGENTS = 12
+const BUTTON_MESSAGES = 4
+const LABEL_MAX = 24
+
+type Picture = { source: string; width: number; height: number }
+type DetailButton = { key: string; label: string; open: Target }
+type Region = { kind: string; id: string; x: number; y: number; w: number; h: number; frame: 0 | 1 }
+
+// How many columns to draw the desktop picture at, from the pane's width in the app's cells.
+// Without a usable width it is the dock's own 124.
+function pictureColumns(paneColumns: unknown) {
+  if (typeof paneColumns !== 'number' || !Number.isFinite(paneColumns)) return PANE_COLUMNS
+  return Math.min(PICTURE_MAX_COLUMNS, Math.max(PICTURE_MIN_COLUMNS, Math.round(paneColumns * PICTURE_SCALE)))
+}
+
+// A button label from file text. Control characters become spaces and invisible marks go, as on
+// every board line; half of a surrogate pair and the engine's own placeholder character go too,
+// because the app refuses a button whose label holds one. Cut to LABEL_MAX characters, and a
+// label with nothing left to read says what kind of thing the button opens.
+function labelOf(text: string, kind: string) {
+  const kept = Array.from(safeText(text)).filter(ch => !/^[\ud800-\udfff]$/.test(ch) && ch !== '\u{10eeee}')
+  const label = kept.slice(0, LABEL_MAX).join('')
+  return label.trim() === '' ? kind : label
+}
+
+// The board as one still SVG picture, `columns` wide: every sprite drawn in real pixels where the
+// walk has got it to, or at its home when the walk hasn't placed it. A sprite at home stands on
+// frame 0 and a walking one shows the stage's frame, which the walk flips as it moves them, so the
+// picture only changes when something on the board does. It holds no tooltips: the app shows it as
+// a plain image, which has none. Throws when the board is too big for a picture the app will draw.
+function pictureFor(snapshot: Snapshot, shown: Stage, columns: number): Picture {
+  const drawn = draw(snapshot, { positions: shown.positions, frame: shown.frame === 1 ? 1 : 0, hovered: null, over: null }, columns)
+  // The painter names each sprite by the safe form of its agent's id, and when two agents share
+  // one, the first of them is the one it draws.
+  const byId = new Map<string, Agent>()
+  for (const agent of snapshot.agents) {
+    const id = safeText(agent.id)
+    if (!byId.has(id)) byId.set(id, agent)
+  }
+  const sprites = (drawn.regions as Region[]).flatMap(region => {
+    const agent = region.kind === 'agent' ? byId.get(region.id) : undefined
+    if (!agent) return []
+    const { x, y, w, h, frame } = region
+    return [{ x, y, w, h, frame, size: sizeOf(agent.model), color: colorOf(agent.role, agent.state, agent.model) }]
+  })
+  const picture = pictureOf({ rows: drawn.rows, columns, sprites }) as Picture
+  const fits = (px: number) => Number.isFinite(px) && px > 0 && px <= PICTURE_MAX_PX
+  if (!fits(picture.width) || !fits(picture.height)) throw new Error('the board is too big for a picture')
+  return picture
+}
+
+// The buttons that open the detail box on desktop, in the board's own order: the cards lane by
+// lane, the agents as they arrived, then the messages the Messages panel shows. Each key says only
+// the kind and the place in the row, so no file text ever becomes an address.
+function detailButtons(snapshot: Snapshot): DetailButton[] {
+  const cards = snapshot.lanes.flatMap(lane => lane.cards).slice(0, BUTTON_CARDS)
+  const agents = snapshot.agents.slice(0, BUTTON_AGENTS)
+  const shown = snapshot.messages.slice(0, BUTTON_MESSAGES)
+  return [
+    ...cards.map((card, i) => ({ key: `card-${i}`, label: labelOf(card.id, 'card'), open: { kind: 'card' as const, id: card.id } })),
+    ...agents.map((agent, i) => ({ key: `agent-${i}`, label: labelOf(agent.name, 'agent'), open: { kind: 'agent' as const, id: agent.id } })),
+    ...shown.map((message, i) => ({ key: `message-${i}`, label: labelOf(`${message.from} → ${message.to}`, 'message'), open: { kind: 'message' as const, id: message.id } })),
+  ]
+}
+
+// What a button under the picture does when pressed: the same open or close a click on the board
+// posts. A press comes after the drawing, so it may write. A failure leaves the box as it was.
+async function pressed($: EngineInterface, data: unknown) {
+  try {
+    await detailFrom($, data)
+  } catch {
+    // The detail box stays as it was until the next press.
+  }
+}
+
+type Elements = ReturnType<EngineInterface['ui']['resolve']>
+type Run = { text: string; color: string; backgroundColor: string; bold: boolean }
+
+// The row of buttons under a board the hooks module draws itself: `Details:`, then Close details
+// while a box is up, then one button per card, agent and message. An empty board gets no row.
+function detailRow($: EngineInterface, { Box, Button, Text }: Elements, snapshot: Snapshot) {
+  const closing = snapshot.detail !== null ? [{ key: 'close-details', label: 'Close details' }] : []
+  const opening = detailButtons(snapshot)
+  if (closing.length + opening.length === 0) return []
+  return [
+    <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+      <Text>Details:</Text>
+      {closing.map(button => (
+        <Button key={button.key} label={button.label} role="dismiss" onPress={() => pressed($, { close: true })} />
+      ))}
+      {opening.map(button => (
+        <Button key={button.key} label={button.label} onPress={() => pressed($, { open: button.open })} />
+      ))}
+    </Box>,
+  ]
+}
+
+// The app refuses a drawing holding more than 100000 characters of text, and checks that after the
+// hook has returned, so the rows are measured first. The margin leaves room for the buttons.
+const ROWS_MAX_CHARS = 99000
+
+// The painted board as rows of coloured text runs, the way the terminal's region draws it, with
+// every sprite where the walk has got it to. The terminal is monospaced, so the rows line up.
+// Throws when the board is too big for the app to draw as text.
+function boardRows(snapshot: Snapshot, positions: Stage['positions']) {
+  const rows = draw(snapshot, { positions, frame: 0, hovered: null, over: null }, PANE_COLUMNS).rows as Run[][]
+  const chars = rows.reduce((sum, runs) => sum + runs.reduce((inRow, run) => inRow + String(run.text).length, 0), 0)
+  if (chars > ROWS_MAX_CHARS) throw new Error('the board is too big to draw as rows')
+  return rows
+}
+
+// How often the walk's clock ticks while the pane is open, and how long a terminal waits for its
+// region to report in before drawing the board itself.
+const STEP_MS = 500
+const FALLBACK_MS = 3000
+
+// How the pane was last drawn: by the terminal's region, as a picture, as rows drawn here, or as
+// plain lines. A render may not write state, so it notes this here and the walk's step reads it.
+let drawnAs: 'region' | 'picture' | 'rows' | 'lines' | null = null
+// How many columns the last picture was drawn at, so the walk lays the board out the same way.
+let pictureDrawnAt = PANE_COLUMNS
+// The walk's clock while the pane is open. There is never more than one.
+let walker: { cancel(): void } | null = null
+// How many times the pane has closed. An open notes it before writing the stage and checks it
+// after, so it sees a close that came in at any point meanwhile, whatever order the state calls
+// ran in.
+let closes = 0
+// A region has reported in. Kept here as well as in state so that a step in a healthy terminal
+// returns without reading anything.
+let regionReady = false
+// A step is still running, so a slow one can't overlap the next.
+let stepping = false
+
+// Notes that the pane is open and starts the walk. Running the command on a pane that is already
+// open changes nothing, so a second clock never starts. Each open gives the terminal's region
+// another try: a terminal that fell back to rows may only have loaded its region slowly, so the
+// fallback is dropped and the region gets its 3 seconds again. Whether the region reported in
+// carries over, so a terminal whose region drew keeps it and never waits.
+async function openStage($: EngineInterface) {
+  if (walker !== null) return
+  const seen = closes
+  const at = await $.clock.now()
+  await update($, stage, current => ({ ...current, open: true, openedAt: at, plain: false }))
+  // The pane closed while this was writing. That close had no clock to cancel, and may have read
+  // the stage before this write and left it alone, so the stage is put back to closed here and no
+  // clock starts for a pane that isn't there.
+  if (closes !== seen) {
+    await update($, stage, current => ({ ...current, open: false }))
+    return
+  }
+  // Another open may have started the clock while this one was writing.
+  if (walker !== null) return
+  walker = $.clock.every(STEP_MS, () => {
+    void step($)
+  })
+}
+
+// Stops the walk when the pane closes. The close is counted before anything else, with nothing
+// awaited first, so an open still writing the stage always sees it. The clock goes next, so a
+// failed write can't leave it running. The sprites keep their places for the next open.
+async function closeStage($: EngineInterface) {
+  closes += 1
+  const running = walker
+  walker = null
+  running?.cancel()
+  if ((await read($, stage)).open) await update($, stage, current => ({ ...current, open: false }))
+}
+
+// One tick of the walk's clock. In a terminal whose region reported in there is nothing to do. In a
+// terminal still waiting on its region, the step checks whether it has waited too long. Where the
+// board is drawn here the sprites walk, laid out the way the board was last drawn: a picture at its
+// own columns, rows at the dock's. Runs on a timer, so it never throws.
+async function step($: EngineInterface) {
+  const how = drawnAs
+  const columns = how === 'picture' ? pictureDrawnAt : PANE_COLUMNS
+  if (stepping || (how === 'region' && regionReady)) return
+  if (how !== 'region' && how !== 'picture' && how !== 'rows') return
+  stepping = true
+  try {
+    const now = await read($, stage)
+    if (!now.open) return
+    if (how === 'region') await fallBack($, now)
+    else await walk($, now, how === 'picture', columns)
+  } catch {
+    // This step is skipped; the next one tries again.
+  } finally {
+    stepping = false
+  }
+}
+
+// A terminal region that hasn't reported in by FALLBACK_MS after the pane opened is taken for one
+// that failed to load, and the pane switches to rows drawn here. Ready is checked again inside the
+// write, so a region that reports in at the last moment still wins.
+async function fallBack($: EngineInterface, now: Stage) {
+  if (now.ready) {
+    regionReady = true
+    return
+  }
+  if (now.plain || now.openedAt === null) return
+  if ((await $.clock.now()) - now.openedAt < FALLBACK_MS) return
+  await update($, stage, current => (current.ready ? current : { ...current, plain: true }))
+}
+
+// Whether a stored position is a real place on the board.
+function isPlace(position: unknown): position is { x: number; y: number } {
+  return isPlain(position) && Number.isFinite(position.x) && Number.isFinite(position.y)
+}
+
+// Moves every sprite toward its home on the board as it stands now, `columns` wide, in one write.
+//
+// On the picture a sprite the walk hasn't placed yet starts at its home, so a new agent appears in
+// place, and a sprite only walks when its card moves. The picture takes two steps a tick, as many
+// a second as the terminal's region takes, and flips the walking frame in the same write. The rows
+// fallback takes one step a tick and keeps the walk-in from the left edge, as the region does.
+//
+// Nothing placed and nothing moving means nothing written, so a settled board never redraws.
+async function walk($: EngineInterface, now: Stage, picture: boolean, columns: number) {
+  const plan = arrange(await snapshotOf($), columns) as { homes: Record<string, { x: number; y: number }>; obstacles: unknown[] }
+  let from = now.positions
+  if (picture) {
+    const unplaced = Object.keys(plan.homes).filter(id => !(Object.hasOwn(from, id) && isPlace(from[id])))
+    if (unplaced.length > 0) from = { ...from, ...Object.fromEntries(unplaced.map(id => [id, { x: plan.homes[id].x, y: plan.homes[id].y }])) }
+  }
+  let next = advance(from, plan.homes, plan.obstacles) as Stage['positions']
+  if (picture) next = advance(next, plan.homes, plan.obstacles) as Stage['positions']
+  if (same(now.positions, next)) return
+  const moved = Object.entries(next).some(([id, to]) => from[id]?.x !== to.x || from[id]?.y !== to.y)
+  await update($, stage, current => {
+    const frame = current.frame === 1 ? 1 : 0
+    return { ...current, positions: next, frame: picture && moved ? (frame === 1 ? 0 : 1) : frame }
+  })
+}
+
+// Whether a post is exactly the region's `{ ready: true }`, with nothing else in it.
+function isReady(data: unknown) {
+  return isPlain(data) && Object.keys(data).length === 1 && Object.hasOwn(data, 'ready') && data.ready === true
+}
+
+// The terminal's region drew. From now on the step leaves the terminal alone, and a pane that had
+// fallen back to rows gets its region again.
+async function reportIn($: EngineInterface) {
+  regionReady = true
+  const now = await read($, stage)
+  if (now.ready && !now.plain) return
+  await update($, stage, current => ({ ...current, ready: true, plain: false }))
+}
+
 export const register: Register = on => {
   // Every hook below follows one rule: the board's own work is wrapped so its failure is
   // swallowed, and the hook hands back exactly what next(e) gave it, or lets what next(e) threw
@@ -714,7 +993,22 @@ export const register: Register = on => {
   on('command.run', { command: 'brigade-board' }, async $ => {
     await refresh($)
     await $.ui.open({ id: PANE, title: 'Brigade board', columns: PANE_COLUMNS })
+    try {
+      await openStage($)
+    } catch {
+      // The board shows without walking until the next open.
+    }
     return { text: 'Board opened.' }
+  })
+
+  on('ui.close', async ($, e, next) => {
+    const ran = await next(e)
+    try {
+      if (e.id === PANE) await closeStage($)
+    } catch {
+      // The clock has already stopped; only the stage's open flag may be stale.
+    }
+    return ran
   })
 
   // Every agent of the session goes on the board as it starts, works and finishes. These hooks
@@ -768,15 +1062,22 @@ export const register: Register = on => {
     } catch {
       // The agent keeps saying what it said before.
     }
-    if (id === undefined || act === null) return next(e)
+    if (act === null) return next(e)
     try {
-      // Every call counts toward the cap, so past it an agent's tool calls cost nothing more here.
-      const looks = toolLooks.get(id) ?? 0
-      if (looks < TOOL_LOOKS) toolLooks.set(id, looks + 1)
-      if (looks < TOOL_LOOKS) {
-        const paths = [fields.file_path, fields.command].filter(value => typeof value === 'string')
-        // A write can tell us the role; reads and mentions never do.
-        await learn($, { type: 'tool', id, paths, act })
+      // A call without an agent id is the main session's. It works ticket after ticket, so it is
+      // heard for its whole life, with no cap, but only when the call names a board folder.
+      if (id === undefined) {
+        const paths = [fields.file_path, fields.command].filter((value): value is string => typeof value === 'string')
+        if (onBoard(paths)) await learn($, { type: 'tool', id: 'main', paths, act }, true)
+      } else {
+        // Every call counts toward the cap, so past it an agent's tool calls cost nothing more here.
+        const looks = toolLooks.get(id) ?? 0
+        if (looks < TOOL_LOOKS) toolLooks.set(id, looks + 1)
+        if (looks < TOOL_LOOKS) {
+          const paths = [fields.file_path, fields.command].filter(value => typeof value === 'string')
+          // A write can tell us the role; reads and mentions never do.
+          await learn($, { type: 'tool', id, paths, act })
+        }
       }
     } catch {
       // Nothing learned from this call.
@@ -796,20 +1097,78 @@ export const register: Register = on => {
   on('ui.message', async ($, e, next) => {
     if (e.requestId === PANE) {
       try {
-        await detailFrom($, e.data)
+        if (isReady(e.data)) await reportIn($)
+        else await detailFrom($, e.data)
       } catch {
-        // The detail box stays as it was until the next click.
+        // The detail box, or the region's ready flag, stays as it was until the next post.
       }
     }
     return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const snapshot = await snapshotOf($)
-    const { Box, Client, Text } = $.ui.resolve(e)
-    if (e.surface === 'terminal' || e.surface === 'desktop') {
-      return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
+    const elements = $.ui.resolve(e)
+    const { Box, Client, Svg, Text } = elements
+    // An empty board, drawn as plain lines when the board itself can't be read.
+    let snapshot: Snapshot = {
+      project: projectOf({ mode: 'tickets', repo: '', count: 0 }) as Project,
+      lanes: toWorkLanes([]) as WorkLane[],
+      agents: [],
+      weather: null,
+      messages: [],
+      learnings: { total: 0, lines: [] },
+      detail: null,
+      now: 0,
     }
+    try {
+      snapshot = await snapshotOf($)
+      const shown = await read($, stage)
+      if (e.surface === 'terminal' && !shown.plain) {
+        drawnAs = 'region'
+        return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
+      }
+      // The terminal whose region never reported in gets the painted board as rows; desktop can't
+      // load a region at all and gets it as a picture. Either way the detail box, when it is up, is
+      // already drawn in, and the buttons that open it sit underneath.
+      if (e.surface === 'terminal') {
+        const rows = (
+          <Box flexDirection="column">
+            {boardRows(snapshot, shown.positions).map(runs => (
+              <Text>
+                {runs.map(run => (
+                  <Text color={run.color} backgroundColor={run.backgroundColor} bold={run.bold}>
+                    {run.text}
+                  </Text>
+                ))}
+              </Text>
+            ))}
+            {detailRow($, elements, snapshot)}
+          </Box>
+        )
+        drawnAs = 'rows'
+        return rows
+      }
+      if (e.surface === 'desktop') {
+        // A plain image with no size of its own. The app scales it to the pane, and swaps a changed
+        // one in place; a sized, interactive picture sits in a frame that reloads, and flashes, on
+        // every change.
+        const columns = pictureColumns(e.viewport?.columns)
+        const picture = pictureFor(snapshot, shown, columns)
+        const drawn = (
+          <Box flexDirection="column">
+            <Svg source={picture.source} alt="Brigade board" />
+            {detailRow($, elements, snapshot)}
+          </Box>
+        )
+        drawnAs = 'picture'
+        pictureDrawnAt = columns
+        return drawn
+      }
+    } catch {
+      // Not drawn this time; the plain lines below still show the board, or an empty one when
+      // the board itself couldn't be read.
+    }
+    drawnAs = 'lines'
     // Surfaces without a region get the same board as plain lines. Text from files only ever
     // goes through Text, so nothing in it can turn into a link or markup, and every line goes
     // through plain first. A crowd of agents is listed up to a dozen, then counted.

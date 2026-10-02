@@ -1,7 +1,23 @@
 // The board's pixel sprites, its palette, and the rules for naming and colouring agents.
 // Each sprite is two animation frames of '#' (lit) and '.' (empty) rows, one set per model size.
 
+// The sprites the terminal draws: 3 cells wide and one text row tall (two pixel rows), so a board
+// with thirty agents on it still fits in one pane. Every size is the same box; the colour says
+// which model an agent runs on, and the shape only hints at it.
 export const SPRITES = {
+  s: [['.#.', '###'], ['.#.', '#.#']],
+  m: [['###', '#.#'], ['###', '.#.']],
+  l: [['#.#', '###'], ['###', '#.#']],
+  xl: [['###', '###'], ['###', '#.#']],
+}
+
+// Cells a terminal sprite covers: width is the bitmap width, height is half its pixel rows, since
+// one cell row shows two pixel rows.
+export const SIZES = { s: { w: 3, h: 1 }, m: { w: 3, h: 1 }, l: { w: 3, h: 1 }, xl: { w: 3, h: 1 } }
+
+// The detailed sprites, for a surface that can draw real pixels, like the desktop picture. They
+// grow with the model: 7x6, 9x8, 11x10 and 13x12 pixels.
+export const ART = {
   s: [
     ['..#.#..', '.#####.', '##.#.##', '#######', '.#.#.#.', '#.....#'],
     ['..#.#..', '.#####.', '##.#.##', '#######', '.#...#.', '..#.#..'],
@@ -19,9 +35,6 @@ export const SPRITES = {
     ['....#...#....', '#....#.#....#', '#..#######..#', '#.#########.#', '####.###.####', '#############', '.###########.', '..#.#####.#..', '..###...###..', '..#..###..#..', '.#.........#.', '#...........#'],
   ],
 }
-
-// Cells a sprite covers: width is the bitmap width, height is half its pixel rows.
-export const SIZES = { s: { w: 7, h: 3 }, m: { w: 9, h: 4 }, l: { w: 11, h: 5 }, xl: { w: 13, h: 6 } }
 // Which size a model draws at, from its id, case-insensitive substring match:
 // 'haiku' -> 's', 'sonnet' -> 'm', 'opus' -> 'l', 'fable' or 'mythos' -> 'xl', anything else -> 'm'.
 export function sizeOf(modelId) {

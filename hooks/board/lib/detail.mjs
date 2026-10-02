@@ -85,6 +85,15 @@ function names(v) {
   return list(v).map(str).filter(Boolean)
 }
 
+// Stars for each service tier. The header shows these instead of the tier's name.
+const EFFORT = { 'one-star': '★', 'two-star': '★★', 'three-star': '★★★' }
+
+// 'Effort: ★★' for a known tier, or nothing for anything else.
+function effortOf(tier) {
+  const stars = Object.hasOwn(EFFORT, tier) ? EFFORT[tier] : ''
+  return stars && `Effort: ${stars}`
+}
+
 // The header's project line. Anything other than a dish reads as the ticket board.
 export function projectOf(input) {
   const src = obj(input)
@@ -96,7 +105,7 @@ export function projectOf(input) {
   const plan = obj(src.plan)
   const ticket = obj(src.ticket)
   const progress = isNum(src.total) ? `${count(src.done)} of ${count(src.total)} done` : ''
-  const detail = [str(plan.ticket), str(ticket.kind) || str(plan.kind), progress, str(plan.tier)]
+  const detail = [str(plan.ticket), str(ticket.kind) || str(plan.kind), progress, effortOf(plan.tier)]
     .filter(Boolean)
     .join(' · ')
   return {

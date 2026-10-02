@@ -4,6 +4,18 @@ import {
   envelope, planInfo, noteFrom, latest, ledgerTail, findingsOf, messagesFrom, learningsFrom,
 } from '../../hooks/board/lib/dish.mjs'
 
+// Runs `fn` `runs` times and gives back the fastest run in milliseconds. A busy machine only ever
+// makes a run slower, so the fastest one is the closest to what the code itself costs.
+function fastestOf(runs, fn) {
+  let best = Infinity
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now()
+    fn()
+    best = Math.min(best, performance.now() - start)
+  }
+  return best
+}
+
 const verdict = [
   '---',
   'doc: verdict',
@@ -461,16 +473,15 @@ test('hostile input is read in one pass, well under 100 ms', () => {
     '  - { id: F1,\n' + fill('    summary: "\n'), 'blocking:\n' + fill('  - '),
   ]
   for (const text of hostile) {
-    let started = performance.now()
-    const learned = learningsFrom(text)
-    const learnMs = performance.now() - started
-    started = performance.now()
-    const found = findingsOf(wrap(text))
-    const note = noteFrom(wrap(text), 1)
-    const check = noteFrom(wrap(text, 'plan_check'), 1)
-    const findMs = performance.now() - started
-    assert.ok(learnMs < 100, `learningsFrom took ${learnMs} ms`)
-    assert.ok(findMs < 100, `findingsOf took ${findMs} ms`)
+    let learned, found, note, check
+    const learnMs = fastestOf(5, () => { learned = learningsFrom(text) })
+    const findMs = fastestOf(5, () => {
+      found = findingsOf(wrap(text))
+      note = noteFrom(wrap(text), 1)
+      check = noteFrom(wrap(text, 'plan_check'), 1)
+    })
+    assert.ok(learnMs < 100, `learningsFrom took ${learnMs} ms at best of five`)
+    assert.ok(findMs < 100, `findingsOf took ${findMs} ms at best of five`)
     assert.ok(Array.isArray(learned.lines) && Array.isArray(found) && note !== null && check !== null)
   }
 })

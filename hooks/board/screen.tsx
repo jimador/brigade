@@ -43,7 +43,10 @@ function regionAt(regions: Region[], x: number, y: number) {
 
 export default function Screen(props: Snapshot, surface: ClientSurface<View>) {
   latest = props
-  if (surface.state === undefined) {
+  // Whether this is the region's first drawing. Its own state starts out empty, so that tells us;
+  // a flag in the module wouldn't, because every pane that shows the region shares the module.
+  const first = surface.state === undefined
+  if (first) {
     surface.setState(START)
     // Every quarter second the sprites take a step toward home and flip to their other frame,
     // stepping around each other and around the name lines on the board.
@@ -84,6 +87,9 @@ export default function Screen(props: Snapshot, surface: ClientSurface<View>) {
   const view = surface.state ?? START
   const frame = draw(props, view, widthOf(surface))
   drawnRegions = frame.regions
+  // Tell the hooks module, once, that the region loaded and drew. Without this it takes the region
+  // for one that failed to load and draws the board itself after a few seconds.
+  if (first) surface.post({ ready: true })
   return (
     <Box flexDirection="column">
       {frame.rows.map((runs: Run[]) => (

@@ -158,13 +158,25 @@ and [docs/overrides.md](docs/overrides.md).
 
 Run `/brigade-board` to open the task board in a pane. While a dish is being worked, the header
 names the repo and the dish's delivery branch, the ticket's title, and a detail line with the
-ticket, its kind, how many work items are done and the service tier. At the top right, the context meter shows how full the session's context
-window is, as a percent and a bar that turns amber at half full and red at three quarters.
+ticket, its kind, how many work items are done and the service tier as `Effort:` with one to
+three stars. At the top right, the context meter shows how full the session's context window
+is, as a percent and a bar that turns amber at half full and red at three quarters.
+
+The board is drawn differently on each surface. In the terminal it is an animated region:
+sprites walk, and the pointer hovers and clicks. The desktop app does not load a plugin's
+drawing region today, so there the hooks module draws the board as a picture with the same
+header, lanes, cards, sprites, messages, learnings and legend. The picture fills the pane: it is
+drawn about as wide as the pane (96 to 200 columns) and the app scales it to fit, and it only
+changes when something on the board does. If the terminal's region does not load within 3
+seconds, the terminal pane falls back to rows of text; opening the board again gives the region
+another try. Other surfaces (mobile, the editor's panel) show the board as plain lines.
 
 Below the header, five lanes hold one card for each work item of the dish being worked, titled
-by the first sentence of the item's goal. An item goes in the first lane whose rule matches,
-looking at who is working it now, then at its newest report and verdict, then at the plan's own
-status:
+by the first sentence of the item's goal. The dish being worked is the one the working agent
+seen most recently is on, so the board follows the main session from one dish to the next; an
+agent that has been quiet for ten minutes no longer picks the dish. An item goes in the first
+lane whose rule matches, looking at who is working it now, then at its newest report and
+verdict, then at the plan's own status:
 
 - **To do** holds items the plan has not dispatched yet; a heavy item carries a `heavy` pill.
 - **Cooking** holds an item a cook is working, or one the plan has dispatched; when a cook works
@@ -184,17 +196,20 @@ instead, sorted into the same five lanes by status, and the header reads `Ticket
 ticket count.
 
 Every agent in the session is a retro pixel sprite, standing on the card it works, or with the
-crew under the lanes when its card isn't on the board. A bigger model draws a bigger sprite
-(haiku, sonnet, opus, fable, smallest to largest), coloured by its model family as the legend at
-the bottom right shows; a finished agent turns grey and a failed one red. Each sprite carries
+crew under the lanes when its card isn't on the board. Every sprite is one row tall, and its
+colour tells the model: haiku, sonnet, opus or fable, as the legend at the bottom right shows; a
+finished agent turns grey and a failed one red. Each sprite carries
 its role mark, name and role (`♨ Miso · cook`) and an activity line: what its latest tool call
 does, such as `reading gateway.ts`, `editing bucket.ts` or `running tests`, and `finished` once
 it is done. The role shows once the board can tell it, from the agent's type or label or from
 what it writes (an edit in a worktree makes a cook, a verdict an inspector, a brief a scout);
-until then it reads `agent`. A new sprite walks in from the left edge, and a sprite walks to its
-card's new lane when the card moves, a step every quarter second, never overlapping another
-sprite or a name line. Point at a sprite for a hover card with its model, item, state, tokens
-and running time. A finished agent stays on the board for two minutes.
+until then it reads `agent`. A sprite stands still on its card and moves only while it walks
+there: when its card moves, it walks to the card's new lane, a step every quarter second, never
+overlapping another sprite or a name line. In the terminal a new sprite walks in from the left
+edge; in the desktop app it appears in place on its card. In the terminal, point at a sprite for
+a hover card with its model, item, state, tokens and running time. The desktop picture has no
+tooltips; the buttons under it open each agent's details. A finished agent stays on the board
+for two minutes.
 
 The Messages panel shows the newest four messages, made from the notes agents leave in the dish
 folder: a cook's report reads `Miso → inspector: token-bucket ready for review`, a failed verdict
@@ -204,15 +219,17 @@ is named when exactly one agent in that role is on the item, and goes by the rol
 Learnings panel lists up to five of the newest learnings in `.brigade/LEARNINGS.md`: each `## `
 heading, or each bullet of a dated retro section.
 
-Click a card, an agent or a message to open a detail box over the board. A work item's box has
-its goal, files, dependencies, attempts, newest cook report, newest review with its findings,
-and every agent on the item; a ticket's box has its title, kind, assignee and goal; an agent's
-has its model, item, activity, tokens, running time and the tail of its working memory; a
-message's has its text, its item, the file it came from and the start of that file. Click `[x]`
-or anywhere off the box to close it.
+In the terminal, click a card, an agent or a message to open a detail box over the board, and
+click `[x]` or anywhere off the box to close it. Clicks do not reach the desktop app's picture,
+so a row of buttons under it opens the detail of a card, an agent or a message, and closes it;
+the terminal's fallback rows carry the same buttons. A work item's box has its goal, files,
+dependencies, attempts, newest cook report, newest review with its findings, and every agent on
+the item; a ticket's box has its title, kind, assignee and goal; an agent's has its model, item,
+activity, tokens, running time and the tail of its working memory; a message's has its text,
+its item, the file it came from and the start of that file.
 
-The pane asks its dock for 124 columns, enough for five lanes side by side; below 104 columns
-the lanes wrap into bands, and below 70 the two panels stack. The board reads the ticket folder
+The pane asks its dock for 124 columns, enough for five lanes side by side; in the terminal,
+below 104 columns the lanes wrap into bands, and below 70 the two panels stack. The board reads the ticket folder
 `.brigade/config.md` names, the dish folders under `.brigade/dishes/` and
 `.brigade/LEARNINGS.md`, and writes no files. It needs a Claude Code build with mods (function
 hooks).
@@ -244,7 +261,7 @@ board's own code and draws every frame with it; the whole run plays in under 30 
 | `scripts/board-demo` | regenerates the board demo in this README from the board's own drawing code; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
-| `hooks/board/` | the live board pane (`/brigade-board`): the task board with agents as pixel sprites sized by model, a context meter, Messages and Learnings panels, and a detail box on click |
+| `hooks/board/` | the live board pane (`/brigade-board`): the task board with agents as pixel sprites coloured by model, a context meter, Messages and Learnings panels, and a detail box on click in the terminal, from a button on desktop |
 | `evals/` | `claude plugin eval` suite: eight expected-workflow cases with scaffolded fixtures; results stay local |
 | `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
 

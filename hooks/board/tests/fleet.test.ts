@@ -30,8 +30,8 @@ async function step($: Parameters<Parameters<typeof test>[1]>[0], agentId: strin
 }
 
 // Lets the sprites walk in and stand still, then moves the pointer onto the sprite whose name
-// tag matches. On a card the tag sits on the row under the sprite, from its left edge; in the
-// crew it sits beside the sprite, one cell to its right, level with its lower rows.
+// tag matches. The tag sits beside the sprite, one cell to its right, on the sprite's own row,
+// unless the name is too long for that and goes on the row under the sprite, from its left edge.
 async function hover(ui: Ui, tag: RegExp) {
   await ui.advance(250 * 60)
   const rows = (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object'))
@@ -49,13 +49,29 @@ test('a spawned agent shows as a named sprite, adds its tokens, and stays two mi
   const ran = await $.agent.spawn({ tool_use_id: 't1', prompt: 'p', description: 'scout:board-data', subagentType: 'brigade:brigade-scout', provider: 'anthropic', model: 'haiku', parentModel: 'x', fork: false } as never)
   expect(ran).toEqual({ model: 'claude-haiku-4-5', agentId: 'a1' })
   await step($, 'a1')
-  for (const surface of ['terminal', 'desktop'] as const) {
+  {
     await $.command.run(OPEN)
-    const ui = await $.ui.mount({ plugin: 'brigade', surface, component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+    const ui = await $.ui.mount({ plugin: 'brigade', surface: 'terminal', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
     await ui.resize({ columns: 80, rows: 30, in: 'stage' })
     expect(await ui.find({ type: 'Text', text: /⌕ Basil/, in: 'stage' })).toBeDefined()
     await hover(ui, /⌕ Basil/)
     expect(await ui.find({ type: 'Text', text: /15 tokens/, in: 'stage' })).toBeDefined()
+    await ui.unmount()
+  }
+  {
+    // On desktop the board is a picture: Basil's name is drawn in it, and his button opens a box
+    // that lists what he spent.
+    await $.command.run(OPEN)
+    const desktop = () => $.ui.mount({ plugin: 'brigade', surface: 'desktop', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
+    const sourceOf = async (ui: Ui) => String(((await ui.find({ type: 'Svg' }))?.props as { source?: unknown } | undefined)?.source)
+    let ui = await desktop()
+    expect(await sourceOf(ui)).toContain('Basil')
+    expect(await sourceOf(ui)).toMatch(/<text [^>]*>[^<]*Basil[^<]*<\/text>/)
+    await ui.press({ key: 'agent-0' })
+    await ui.unmount()
+    ui = await desktop()
+    expect(await sourceOf(ui)).toContain('Tokens: 15')
+    await ui.press({ key: 'close-details' })
     await ui.unmount()
   }
   await $.turn.complete({ agentId: 'a1', answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'error' } as never)
@@ -226,14 +242,17 @@ test('what an agent is doing shows on its card within a tick, for its whole life
   await $.tool.call({ agentId: 'c1', tool: 'Read', file_path: `${DISH}/packets/token-bucket.md` } as never)
   await $.tool.call({ agentId: 'c1', tool: 'Edit', file_path: '/repo/.brigade/worktrees/limits--token-bucket/src/bucket.ts' } as never)
   await clock.advance(2000)
-  expect(await ui.find({ type: 'Text', text: /│♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /│editing bucket\.ts +│/, in: 'stage' })).toBeDefined()
+  // The haiku sprite takes the card's first 3 cells and its name shares that row, one cell to the
+  // right; the activity goes on the next row, with 22 - 3 - 1 = 18 cells, so 'editing bucket.ts'
+  // fits whole with a cell to spare.
+  expect(await ui.find({ type: 'Text', text: /│.{3} ♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│.{3} editing bucket\.ts +│/, in: 'stage' })).toBeDefined()
   // Long past the calls that work out who an agent is, what it is doing still reaches its card.
   for (let i = 0; i < 400; i++) await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'ls' } as never)
   await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'node --test test/bucket.test.mjs' } as never)
   await clock.advance(2000)
-  expect(await ui.find({ type: 'Text', text: /│running tests +│/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /editing bucket\.ts/, in: 'stage' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /│.{3} running tests +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /editing bucket\.t/, in: 'stage' })).toBeUndefined()
   await ui.unmount()
   // Surfaces without a region say the same in a line per agent.
   const text = await $.ui.mount({ plugin: 'brigade', surface: 'mobile', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })

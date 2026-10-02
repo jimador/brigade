@@ -466,10 +466,23 @@ function addAgent(fleet, event) {
   return fleet.agents[event.id]
 }
 
+// The main session's id on the roster. A helper agent works one item of one dish and finishes,
+// but the main session moves from dish to dish, so it follows whatever it touched last.
+const MAIN = 'main'
+
 // Fills in what's still unknown about an agent from fresh evidence. A role counts as unknown
-// while it is still the catch-all 'agent'.
+// while it is still the catch-all 'agent'. A helper keeps the first dish and item it showed. The
+// main session takes any new dish it names, dropping the item it had there, and any new item.
 function fillIdentity(agent, who) {
   if (agent.role === 'agent') agent.role = who.role
+  if (agent.id === MAIN) {
+    if (!blank(who.dish) && who.dish !== agent.dish) {
+      agent.dish = who.dish
+      agent.item = null
+    }
+    if (!blank(who.item)) agent.item = who.item
+    return
+  }
   if (blank(agent.dish)) agent.dish = who.dish
   if (blank(agent.item)) agent.item = who.item
 }
@@ -478,24 +491,32 @@ function fillIdentity(agent, who) {
 // 'complete'. A 'tool' event is { type, id, at, paths, act }; its paths fill the dish and item,
 // its act the role. An 'activity' event is { type, id, text } and says what a working agent is
 // doing now; it never adds an agent or wakes a finished one.
+// Any event that reaches an agent and carries a time stamps it as the agent's `seenAt`. An event
+// without a time leaves the stamp alone, so a check that applies an event without one only to see
+// whether anything changed still finds nothing new.
 // Events without an id, or of a type we don't know, give back an unchanged copy.
 export function applyEvent(fleet, event) {
   const next = copyFleet(fleet)
   if (!event || typeof event !== 'object' || blank(event.id)) return next
+  const agent = applyTo(next, event)
+  if (agent && !blank(event.at)) agent.seenAt = event.at
+  return next
+}
+
+// Applies one event to an already-copied roster and returns the agent it reached, or null when
+// it reached nobody.
+function applyTo(next, event) {
   const known = Object.hasOwn(next.agents, event.id)
 
   if (event.type === 'spawn') {
-    if (!known) {
-      addAgent(next, event)
-      return next
-    }
+    if (!known) return addAgent(next, event)
     const agent = next.agents[event.id]
     fillIdentity(agent, identify(event))
     for (const field of ['model', 'description', 'subagentType']) {
       if (blank(agent[field]) && !blank(event[field])) agent[field] = event[field]
     }
     if (blank(agent.startedAt) && !blank(event.at)) agent.startedAt = event.at
-    return next
+    return agent
   }
 
   if (event.type === 'step') {
@@ -503,35 +524,35 @@ export function applyEvent(fleet, event) {
     const tokens = Number(event.tokens)
     if (Number.isFinite(tokens)) agent.tokens += tokens
     if (!blank(event.model)) agent.model = event.model
-    return next
+    return agent
   }
 
   if (event.type === 'tool') {
     const agent = known ? next.agents[event.id] : addAgent(next, { id: event.id, at: event.at })
     fillIdentity(agent, identify({ paths: event.paths, act: event.act }))
-    return next
+    return agent
   }
 
   if (event.type === 'complete') {
-    if (!known) return next
+    if (!known) return null
     const agent = next.agents[event.id]
     agent.endedAt = event.at ?? null
     agent.state = event.reason === 'error' || event.reason === 'aborted' ? 'failed' : 'done'
     agent.activity = null
-    return next
+    return agent
   }
 
   if (event.type === 'activity') {
-    if (!known) return next
+    if (!known) return null
     const agent = next.agents[event.id]
-    if (agent.state !== 'working') return next
+    if (agent.state !== 'working') return agent
     // The text is drawn on the board as it is, so it is made safe here too, whoever sent it.
     const said = typeof event.text === 'string' ? drawable(event.text, ACTIVITY_MAX) : ''
     agent.activity = said.trim() ? said : null
-    return next
+    return agent
   }
 
-  return next
+  return null
 }
 
 // Times may arrive as epoch milliseconds or as date strings; both become milliseconds.

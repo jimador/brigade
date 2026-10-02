@@ -59,6 +59,20 @@ export type Snapshot = {
   detail: Detail | null
   now: number
 }
+// Where the hooks module keeps the walk when it draws the board itself, and whether the region reported in.
+export type Stage = {
+  positions: Record<string, { x: number; y: number }>
+  // Which of its two frames a walking sprite shows in the desktop picture. Missing counts as 0.
+  frame: 0 | 1
+  // The pane is open.
+  open: boolean
+  // When it was last opened, from the engine's clock.
+  openedAt: number | null
+  // The terminal's region posted that it drew.
+  ready: boolean
+  // The terminal fell back to rows drawn by the hooks module.
+  plain: boolean
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -73,6 +87,7 @@ declare module 'claude-code' {
       messages: Message[]
       learnings: Learnings
       detail: Detail | null
+      stage: Stage
     }
   }
 }

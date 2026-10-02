@@ -6,6 +6,18 @@ import { identify, roleFromAct, activityOf, emptyFleet, applyEvent, prune } from
 
 const DISH = '/path/to/repo/.brigade/dishes/obsidian-example'
 
+// Runs `fn` `runs` times and gives back the fastest run in milliseconds. A busy machine only ever
+// makes a run slower, so the fastest one is the closest to what the code itself costs.
+function fastestOf(runs, fn) {
+  let best = Infinity
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now()
+    fn()
+    best = Math.min(best, performance.now() - start)
+  }
+  return best
+}
+
 test('a heavy cook type wins over the plain cook substring', () => {
   const who = identify({ description: 'cook:board-tickets:0', subagentType: 'brigade:brigade-cook-heavy' })
   assert.equal(who.role, 'heavy')
@@ -241,6 +253,81 @@ test('prune drops long-finished agents and keeps working ones', () => {
   assert.equal(kept.agents.busy.state, 'working')
 })
 
+test('every kind of event stamps when its agent was last seen', () => {
+  let fleet = applyEvent(emptyFleet(), { type: 'spawn', id: 'a', at: 1 })
+  assert.equal(fleet.agents.a.seenAt, 1)
+  fleet = applyEvent(fleet, { type: 'step', id: 'a', at: 2, tokens: 1 })
+  assert.equal(fleet.agents.a.seenAt, 2)
+  fleet = applyEvent(fleet, { type: 'tool', id: 'a', at: 3, paths: ['src/a.js'] })
+  assert.equal(fleet.agents.a.seenAt, 3)
+  fleet = applyEvent(fleet, { type: 'activity', id: 'a', at: 4, text: 'searching' })
+  assert.equal(fleet.agents.a.seenAt, 4)
+  fleet = applyEvent(fleet, { type: 'spawn', id: 'a', at: 5 })
+  assert.equal(fleet.agents.a.seenAt, 5)
+  fleet = applyEvent(fleet, { type: 'complete', id: 'a', at: 6, reason: 'answer' })
+  assert.equal(fleet.agents.a.seenAt, 6)
+  assert.equal(fleet.agents.a.startedAt, 1)
+  assert.equal(applyEvent(emptyFleet(), { type: 'step', id: 'b', at: 7, tokens: 1 }).agents.b.seenAt, 7)
+  assert.equal(applyEvent(emptyFleet(), { type: 'tool', id: 'c', at: 8 }).agents.c.seenAt, 8)
+})
+
+test('an event without a time keeps the last sighting', () => {
+  let fleet = applyEvent(emptyFleet(), { type: 'spawn', id: 'a', at: 1 })
+  fleet = applyEvent(fleet, { type: 'activity', id: 'a', text: 'searching' })
+  fleet = applyEvent(fleet, { type: 'tool', id: 'a', paths: ['src/a.js'] })
+  fleet = applyEvent(fleet, { type: 'step', id: 'a', tokens: 1 })
+  assert.equal(fleet.agents.a.seenAt, 1)
+})
+
+const ALPHA = '/path/to/repo/.brigade/dishes/alpha'
+const BETA = '/path/to/repo/.brigade/dishes/beta'
+
+// Runs one agent through tool events with the given paths and lists its dish after each one.
+function dishesAlong(id, paths) {
+  let fleet = emptyFleet()
+  return paths.map((path, at) => {
+    fleet = applyEvent(fleet, { type: 'tool', id, at, paths: [path] })
+    return fleet.agents[id].dish
+  })
+}
+
+const HOPS = [`${ALPHA}/PLAN.md`, 'src/a.js', `${BETA}/state/planner.md`, `${ALPHA}/reports/x-cook.md`]
+
+test('the main session follows the latest dish it touches', () => {
+  assert.deepEqual(dishesAlong('main', HOPS), ['alpha', 'alpha', 'beta', 'alpha'])
+})
+
+test('any other agent keeps the first dish it touched', () => {
+  assert.deepEqual(dishesAlong('a1', HOPS), ['alpha', 'alpha', 'alpha', 'alpha'])
+})
+
+test("the main session's item follows its latest evidence and clears with a new dish", () => {
+  let fleet = applyEvent(emptyFleet(), { type: 'tool', id: 'main', at: 1, paths: [`${ALPHA}/packets/first.md`] })
+  assert.equal(fleet.agents.main.item, 'first')
+  fleet = applyEvent(fleet, { type: 'tool', id: 'main', at: 2, paths: ['src/a.js'] })
+  assert.equal(fleet.agents.main.item, 'first')
+  fleet = applyEvent(fleet, { type: 'tool', id: 'main', at: 3, paths: [`${ALPHA}/PLAN.md`] })
+  assert.equal(fleet.agents.main.item, 'first')
+  fleet = applyEvent(fleet, { type: 'tool', id: 'main', at: 4, paths: [`${ALPHA}/packets/second.md`] })
+  assert.equal(fleet.agents.main.dish, 'alpha')
+  assert.equal(fleet.agents.main.item, 'second')
+  fleet = applyEvent(fleet, { type: 'tool', id: 'main', at: 5, paths: [`${BETA}/state/planner.md`] })
+  assert.equal(fleet.agents.main.dish, 'beta')
+  assert.equal(fleet.agents.main.item, null)
+  fleet = applyEvent(fleet, { type: 'tool', id: 'main', at: 6, paths: [`${ALPHA}/reports/x-cook.md`] })
+  assert.equal(fleet.agents.main.dish, 'alpha')
+  assert.equal(fleet.agents.main.item, 'x')
+})
+
+test("the main session's role is still set once and kept", () => {
+  const verdict = `${ALPHA}/reports/x-verdict.md`
+  let fleet = applyEvent(emptyFleet(), { type: 'spawn', id: 'main', at: 1, description: 'planner', subagentType: 'planner' })
+  fleet = applyEvent(fleet, { type: 'tool', id: 'main', at: 2, paths: [verdict], act: { tool: 'Write', filePath: verdict } })
+  assert.equal(fleet.agents.main.role, 'planner')
+  fleet = applyEvent(emptyFleet(), { type: 'tool', id: 'main', at: 1, paths: [verdict], act: { tool: 'Write', filePath: verdict } })
+  assert.equal(fleet.agents.main.role, 'inspector')
+})
+
 // A shell command or path can be any length an agent likes, and the role checks run on every tool
 // call, so each one has to take time in step with the length of its input.
 describe('working out a role costs time in step with the input', () => {
@@ -252,12 +339,10 @@ describe('working out a role costs time in step with the input', () => {
     return piece.repeat(Math.ceil(size / piece.length))
   }
 
-  // Runs `fn` once and fails if it took longer than the limit.
+  // Runs `fn` five times and fails if even the fastest run took longer than the limit.
   function quick(label, fn) {
-    const start = performance.now()
-    fn()
-    const took = performance.now() - start
-    assert.ok(took < LIMIT_MS, `${label} took ${took.toFixed(1)} ms`)
+    const took = fastestOf(5, fn)
+    assert.ok(took < LIMIT_MS, `${label} took ${took.toFixed(1)} ms at best of five`)
   }
 
   const COMMANDS = {
@@ -573,10 +658,9 @@ describe('working out an activity is quick and short for hostile input', () => {
         const text = grow(piece, size)
         assert.ok(text.length >= size)
         for (const act of [{ tool: 'Bash', command: text }, { tool: 'Edit', filePath: text }, { tool: 'Read', filePath: text }]) {
-          const start = performance.now()
-          const result = activityOf(act)
-          const took = performance.now() - start
-          assert.ok(took < LIMIT_MS, `${act.tool} at ${size} took ${took.toFixed(1)} ms`)
+          let result
+          const took = fastestOf(5, () => { result = activityOf(act) })
+          assert.ok(took < LIMIT_MS, `${act.tool} at ${size} took ${took.toFixed(1)} ms at best of five`)
           drawable(result)
         }
       }
@@ -611,10 +695,9 @@ describe('working out an activity is quick and short for hostile input', () => {
       for (const size of SIZES) {
         const command = grow(piece, size)
         assert.ok(command.length >= size)
-        const start = performance.now()
-        const result = activityOf({ tool: 'Bash', command })
-        const took = performance.now() - start
-        assert.ok(took < LIMIT_MS, `Bash at ${size} took ${took.toFixed(1)} ms`)
+        let result
+        const took = fastestOf(5, () => { result = activityOf({ tool: 'Bash', command }) })
+        assert.ok(took < LIMIT_MS, `Bash at ${size} took ${took.toFixed(1)} ms at best of five`)
         drawable(result)
         assert.equal(result, answer)
       }

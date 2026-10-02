@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { projectOf, cardDetail, ticketDetail, agentDetail, messageDetail } from '../../hooks/board/lib/detail.mjs'
+import { cellWidth } from '../../hooks/board/lib/canvas.mjs'
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
 
@@ -22,11 +23,11 @@ function assertSound(d, kind) {
 
 // projectOf
 
-test('a dish project names the ticket, its kind, progress and tier', () => {
+test('a dish project names the ticket, its kind, progress and effort', () => {
   const p = projectOf({
     mode: 'dish',
     repo: 'acme/widgets',
-    plan: { ticket: 'ACME-42', branch: 'feat/token-bucket', tier: 'standard', kind: 'chore' },
+    plan: { ticket: 'ACME-42', branch: 'feat/token-bucket', tier: 'two-star', kind: 'chore' },
     ticket: { title: 'Rate limit the public API', kind: 'feature' },
     done: 2,
     total: 5,
@@ -36,7 +37,7 @@ test('a dish project names the ticket, its kind, progress and tier', () => {
     repo: 'acme/widgets',
     branch: 'feat/token-bucket',
     title: 'Rate limit the public API',
-    detail: 'ACME-42 · feature · 2 of 5 done · standard',
+    detail: 'ACME-42 · feature · 2 of 5 done · Effort: ★★',
   })
 })
 
@@ -44,7 +45,7 @@ test('a dish project with no ticket falls back to the plan for its title and kin
   const p = projectOf({
     mode: 'dish',
     repo: 'acme/widgets',
-    plan: { ticket: 'ACME-42', branch: null, tier: 'light', kind: 'bug' },
+    plan: { ticket: 'ACME-42', branch: null, tier: 'one-star', kind: 'bug' },
     ticket: null,
     done: 0,
     total: 3,
@@ -54,7 +55,7 @@ test('a dish project with no ticket falls back to the plan for its title and kin
     repo: 'acme/widgets',
     branch: null,
     title: 'ACME-42',
-    detail: 'ACME-42 · bug · 0 of 3 done · light',
+    detail: 'ACME-42 · bug · 0 of 3 done · Effort: ★',
   })
 })
 
@@ -69,6 +70,35 @@ test('a dish project leaves out a missing tier', () => {
   })
   assert.equal(p.detail, 'ACME-7 · bug · 1 of 4 done')
   assert.equal(p.branch, 'fix/retry')
+})
+
+// The same dish at a given tier, for the effort cases below.
+function effortLine(tier) {
+  return projectOf({
+    mode: 'dish',
+    repo: 'acme/widgets',
+    plan: { ticket: 'acme-12', branch: 'feat/limits', tier, kind: 'feature' },
+    ticket: null,
+    done: 0,
+    total: 2,
+  }).detail
+}
+
+test('each service tier shows as one, two or three effort stars', () => {
+  assert.equal(effortLine('three-star'), 'acme-12 · feature · 0 of 2 done · Effort: ★★★')
+  assert.equal(effortLine('two-star'), 'acme-12 · feature · 0 of 2 done · Effort: ★★')
+  assert.equal(effortLine('one-star'), 'acme-12 · feature · 0 of 2 done · Effort: ★')
+})
+
+test('an unknown or mistyped tier shows no effort at all', () => {
+  for (const tier of ['gold', 'standard', 'Three-Star', ' two-star', 'toString', '', 3, null, undefined, {}]) {
+    assert.equal(effortLine(tier), 'acme-12 · feature · 0 of 2 done', `tier ${JSON.stringify(tier)}`)
+  }
+})
+
+test('an effort star takes one cell, so the header columns stay put', () => {
+  assert.equal(cellWidth('★'), 1)
+  assert.equal(cellWidth('Effort: ★★★'), 11)
 })
 
 test('a ticket board counts its tickets, singular for one', () => {

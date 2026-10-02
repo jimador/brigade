@@ -165,20 +165,21 @@ async function rows(ui: Ui) {
   return (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object')).map(row => row.text)
 }
 
-// Clicks the first cell of the first match of `pattern` on the board, `dy` rows below it.
-async function click(ui: Ui, pattern: RegExp, dy = 0) {
+// Clicks the first match of `pattern` on the board, `dx` cells right of its first cell and `dy`
+// rows below it.
+async function click(ui: Ui, pattern: RegExp, dy = 0, dx = 0) {
   const all = await rows(ui)
   const y = all.findIndex(row => pattern.test(row))
   expect(y).toBeGreaterThanOrEqual(0)
   const x = Array.from(all[y].slice(0, all[y].search(pattern))).length
-  await ui.pointer({ type: 'down', x, y: y + dy, button: 'left', in: 'stage' })
+  await ui.pointer({ type: 'down', x: x + dx, y: y + dy, button: 'left', in: 'stage' })
 }
 
-// Clicks the sprite whose name tag matches, once the sprites have walked home. On a card the tag
-// sits on the row under the sprite, from its left edge.
+// Clicks the sprite whose name tag matches, once the sprites have walked home. On a card a short
+// name sits beside the sprite, one cell to its right, so the sprite's last column is two cells left.
 async function clickSprite(ui: Ui, tag: RegExp) {
   await ui.advance(250 * 60)
-  await click(ui, tag, -1)
+  await click(ui, tag, 0, -2)
 }
 
 // Whether the detail box is up: its close button shows on its top edge.
