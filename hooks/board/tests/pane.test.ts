@@ -21,12 +21,13 @@ test('the board draws and animates on the terminal, and shows as a picture on de
   await ui.post({ nonsense: true }, { in: 'stage' })
   expect(await ui.find({ type: 'Text', text: /To do 0/, in: 'stage' })).toBeDefined()
   await ui.unmount()
-  // Desktop has no region: the same board is a picture, as wide as the five lanes, with the legend.
+  // Desktop has no region: the same board is a picture, with the legend. The pane is 60 of the
+  // app's columns, so the board is drawn at its narrowest, 96 columns.
   const desk = await $.ui.mount({ plugin: 'brigade', surface: 'desktop', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 60, rows: 30 } })
   const svg = await desk.find({ type: 'Svg' })
   const source = String((svg?.props as { source?: unknown }).source)
   for (const lane of ['To do', 'Cooking', 'In review', 'Rework', 'Done', 'Color:']) expect(source).toContain(lane)
-  expect((svg?.props as { width?: unknown }).width).toBe(124 * 9)
+  expect(source).toContain(`viewBox="0 0 ${96 * 9} `)
   await desk.advance(250)
   expect(await desk.find({ type: 'Svg' })).toBeDefined()
   await desk.unmount()

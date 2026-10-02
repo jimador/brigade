@@ -59,14 +59,14 @@ test('a spawned agent shows as a named sprite, adds its tokens, and stays two mi
     await ui.unmount()
   }
   {
-    // On desktop the board is a picture: Basil is in it with a tooltip, and his button opens a
-    // box that lists what he spent.
+    // On desktop the board is a picture: Basil's name is drawn in it, and his button opens a box
+    // that lists what he spent.
     await $.command.run(OPEN)
     const desktop = () => $.ui.mount({ plugin: 'brigade', surface: 'desktop', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })
     const sourceOf = async (ui: Ui) => String(((await ui.find({ type: 'Svg' }))?.props as { source?: unknown } | undefined)?.source)
     let ui = await desktop()
     expect(await sourceOf(ui)).toContain('Basil')
-    expect(await sourceOf(ui)).toMatch(/<title>Basil · [^<]+<\/title>/)
+    expect(await sourceOf(ui)).toMatch(/<text [^>]*>[^<]*Basil[^<]*<\/text>/)
     await ui.press({ key: 'agent-0' })
     await ui.unmount()
     ui = await desktop()

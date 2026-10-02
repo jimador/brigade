@@ -10,7 +10,7 @@ import { safeText } from './lib/canvas.mjs'
 import { agentDetail, cardDetail, messageDetail, projectOf, ticketDetail } from './lib/detail.mjs'
 import { envelope, findingsOf, ledgerTail, learningsFrom, messagesFrom, noteFrom } from './lib/dish.mjs'
 import { activityOf, applyEvent, prune } from './lib/fleet.mjs'
-import { ROLES } from './lib/sprites.mjs'
+import { colorOf, ROLES, sizeOf } from './lib/sprites.mjs'
 import { advance } from './lib/stage.mjs'
 import { forecast } from './lib/weather.mjs'
 import { PHASES, pickDish, planItems, ticketCards, toWorkLanes, workCards } from './lib/work.mjs'
@@ -31,9 +31,10 @@ const work = atom({ plugin: 'brigade', key: 'work' } as const, toWorkLanes([]) a
 const messages = atom({ plugin: 'brigade', key: 'messages' } as const, [] as Message[])
 const learnings = atom({ plugin: 'brigade', key: 'learnings' } as const, { total: 0, lines: [] } as Learnings)
 const detail = atom({ plugin: 'brigade', key: 'detail' } as const, null as Detail | null)
-// Where the sprites stand when the hooks module draws the board itself, whether the pane is open,
-// and whether the terminal's region reported in or the pane fell back to rows drawn here.
-const STAGE_START: Stage = { positions: {}, open: false, openedAt: null, ready: false, plain: false }
+// Where the sprites stand when the hooks module draws the board itself, which frame a walking one
+// shows, whether the pane is open, and whether the terminal's region reported in or the pane fell
+// back to rows drawn here.
+const STAGE_START: Stage = { positions: {}, frame: 0, open: false, openedAt: null, ready: false, plain: false }
 const stage = atom({ plugin: 'brigade', key: 'stage' } as const, STAGE_START)
 
 // How long a finished agent stays on the board before it leaves.
@@ -707,6 +708,14 @@ function contextLine(reading: Weather | null) {
 // row of buttons under it that open the detail box. The app refuses a picture wider or taller
 // than this many pixels, and it checks that after the hook has returned, so we check first.
 const PICTURE_MAX_PX = 4096
+// The picture is drawn as many board columns as the pane is wide in the app's own cells, times
+// 1.4: a pane the app calls 108 columns is about 1260 pixels across, and gets 151 columns. The app
+// scales a picture wider than the pane down to fill it but never grows a narrower one, so the
+// picture comes out a little wider than the pane and fills it. A very narrow pane still gets a
+// readable 96 columns, and a very wide one stops at 200 so the board doesn't turn into a thin strip.
+const PICTURE_SCALE = 1.4
+const PICTURE_MIN_COLUMNS = 96
+const PICTURE_MAX_COLUMNS = 200
 // How many buttons of each kind go under the picture, and the longest label a button gets.
 const BUTTON_CARDS = 12
 const BUTTON_AGENTS = 12
@@ -715,10 +724,13 @@ const LABEL_MAX = 24
 
 type Picture = { source: string; width: number; height: number }
 type DetailButton = { key: string; label: string; open: Target }
+type Region = { kind: string; id: string; x: number; y: number; w: number; h: number; frame: 0 | 1 }
 
-// A string, or the fallback when it is missing or empty.
-function or(value: unknown, fallback: string) {
-  return typeof value === 'string' && value !== '' ? value : fallback
+// How many columns to draw the desktop picture at, from the pane's width in the app's cells.
+// Without a usable width it is the dock's own 124.
+function pictureColumns(paneColumns: unknown) {
+  if (typeof paneColumns !== 'number' || !Number.isFinite(paneColumns)) return PANE_COLUMNS
+  return Math.min(PICTURE_MAX_COLUMNS, Math.max(PICTURE_MIN_COLUMNS, Math.round(paneColumns * PICTURE_SCALE)))
 }
 
 // A button label from file text. Control characters become spaces and invisible marks go, as on
@@ -731,25 +743,27 @@ function labelOf(text: string, kind: string) {
   return label.trim() === '' ? kind : label
 }
 
-// An agent's tooltip, on one line: 'Basil · cook · claude-haiku-4-5 · editing bucket.ts'.
-function tooltipOf(agent: Agent) {
-  return plain([or(agent.name, agent.id), roleLabel(agent.role), or(agent.model, 'unknown model'), or(agent.activity, agent.state)].join(' · '))
-}
-
-// The board as one SVG picture: every sprite where the walk has got it to, or at its home when it
-// hasn't started, stepping between its two frames, with a tooltip over each one. Throws when the
-// board is too big for a picture the app will draw.
-function pictureFor(snapshot: Snapshot, positions: Stage['positions']): Picture {
-  const still = { positions, hovered: null, over: null }
-  const zero = draw(snapshot, { ...still, frame: 0 }, PANE_COLUMNS)
-  const one = draw(snapshot, { ...still, frame: 1 }, PANE_COLUMNS)
-  // The painter names each sprite by the safe form of its agent's id.
-  const byId = new Map(snapshot.agents.map(agent => [safeText(agent.id), agent]))
-  const titles = (zero.regions as { kind: string; id: string; x: number; y: number; w: number; h: number }[]).flatMap(region => {
+// The board as one still SVG picture, `columns` wide: every sprite drawn in real pixels where the
+// walk has got it to, or at its home when the walk hasn't placed it. A sprite at home stands on
+// frame 0 and a walking one shows the stage's frame, which the walk flips as it moves them, so the
+// picture only changes when something on the board does. It holds no tooltips: the app shows it as
+// a plain image, which has none. Throws when the board is too big for a picture the app will draw.
+function pictureFor(snapshot: Snapshot, shown: Stage, columns: number): Picture {
+  const drawn = draw(snapshot, { positions: shown.positions, frame: shown.frame === 1 ? 1 : 0, hovered: null, over: null }, columns)
+  // The painter names each sprite by the safe form of its agent's id, and when two agents share
+  // one, the first of them is the one it draws.
+  const byId = new Map<string, Agent>()
+  for (const agent of snapshot.agents) {
+    const id = safeText(agent.id)
+    if (!byId.has(id)) byId.set(id, agent)
+  }
+  const sprites = (drawn.regions as Region[]).flatMap(region => {
     const agent = region.kind === 'agent' ? byId.get(region.id) : undefined
-    return agent ? [{ x: region.x, y: region.y, w: region.w, h: region.h, text: tooltipOf(agent) }] : []
+    if (!agent) return []
+    const { x, y, w, h, frame } = region
+    return [{ x, y, w, h, frame, size: sizeOf(agent.model), color: colorOf(agent.role, agent.state, agent.model) }]
   })
-  const picture = pictureOf({ rows: zero.rows, altRows: one.rows, columns: PANE_COLUMNS, titles }) as Picture
+  const picture = pictureOf({ rows: drawn.rows, columns, sprites }) as Picture
   const fits = (px: number) => Number.isFinite(px) && px > 0 && px <= PICTURE_MAX_PX
   if (!fits(picture.width) || !fits(picture.height)) throw new Error('the board is too big for a picture')
   return picture
@@ -815,7 +829,7 @@ function boardRows(snapshot: Snapshot, positions: Stage['positions']) {
   return rows
 }
 
-// How often the walk takes a step while the pane is open, and how long a terminal waits for its
+// How often the walk's clock ticks while the pane is open, and how long a terminal waits for its
 // region to report in before drawing the board itself.
 const STEP_MS = 500
 const FALLBACK_MS = 3000
@@ -823,6 +837,8 @@ const FALLBACK_MS = 3000
 // How the pane was last drawn: by the terminal's region, as a picture, as rows drawn here, or as
 // plain lines. A render may not write state, so it notes this here and the walk's step reads it.
 let drawnAs: 'region' | 'picture' | 'rows' | 'lines' | null = null
+// How many columns the last picture was drawn at, so the walk lays the board out the same way.
+let pictureDrawnAt = PANE_COLUMNS
 // The walk's clock while the pane is open. There is never more than one.
 let walker: { cancel(): void } | null = null
 // A region has reported in. Kept here as well as in state so that a step in a healthy terminal
@@ -832,13 +848,14 @@ let regionReady = false
 let stepping = false
 
 // Notes that the pane is open and starts the walk. Running the command on a pane that is already
-// open changes nothing, so a second clock never starts. Whether the region reported in, and the
-// fallback, carry over from earlier opens: a terminal whose region drew once keeps it, and one
-// whose region never drew goes straight to its rows.
+// open changes nothing, so a second clock never starts. Each open gives the terminal's region
+// another try: a terminal that fell back to rows may only have loaded its region slowly, so the
+// fallback is dropped and the region gets its 3 seconds again. Whether the region reported in
+// carries over, so a terminal whose region drew keeps it and never waits.
 async function openStage($: EngineInterface) {
   if (walker !== null) return
   const at = await $.clock.now()
-  await update($, stage, current => ({ ...current, open: true, openedAt: at }))
+  await update($, stage, current => ({ ...current, open: true, openedAt: at, plain: false }))
   // Another open may have started the clock while this one was writing.
   if (walker !== null) return
   walker = $.clock.every(STEP_MS, () => {
@@ -857,10 +874,11 @@ async function closeStage($: EngineInterface) {
 
 // One tick of the walk's clock. In a terminal whose region reported in there is nothing to do. In a
 // terminal still waiting on its region, the step checks whether it has waited too long. Where the
-// board is drawn here, as a picture or as rows, the sprites take a step. Runs on a timer, so it
-// never throws.
+// board is drawn here the sprites walk, laid out the way the board was last drawn: a picture at its
+// own columns, rows at the dock's. Runs on a timer, so it never throws.
 async function step($: EngineInterface) {
   const how = drawnAs
+  const columns = how === 'picture' ? pictureDrawnAt : PANE_COLUMNS
   if (stepping || (how === 'region' && regionReady)) return
   if (how !== 'region' && how !== 'picture' && how !== 'rows') return
   stepping = true
@@ -868,7 +886,7 @@ async function step($: EngineInterface) {
     const now = await read($, stage)
     if (!now.open) return
     if (how === 'region') await fallBack($, now)
-    else await walk($, now)
+    else await walk($, now, how === 'picture', columns)
   } catch {
     // This step is skipped; the next one tries again.
   } finally {
@@ -889,13 +907,34 @@ async function fallBack($: EngineInterface, now: Stage) {
   await update($, stage, current => (current.ready ? current : { ...current, plain: true }))
 }
 
-// Moves every sprite one step toward its home on the board as it stands now. Nothing moving means
-// nothing written, so a settled board never redraws.
-async function walk($: EngineInterface, now: Stage) {
-  const plan = arrange(await snapshotOf($), PANE_COLUMNS) as { homes: Record<string, unknown>; obstacles: unknown[] }
-  const next = advance(now.positions, plan.homes, plan.obstacles) as Stage['positions']
+// Whether a stored position is a real place on the board.
+function isPlace(position: unknown): position is { x: number; y: number } {
+  return isPlain(position) && Number.isFinite(position.x) && Number.isFinite(position.y)
+}
+
+// Moves every sprite toward its home on the board as it stands now, `columns` wide, in one write.
+//
+// On the picture a sprite the walk hasn't placed yet starts at its home, so a new agent appears in
+// place, and a sprite only walks when its card moves. The picture takes two steps a tick, as many
+// a second as the terminal's region takes, and flips the walking frame in the same write. The rows
+// fallback takes one step a tick and keeps the walk-in from the left edge, as the region does.
+//
+// Nothing placed and nothing moving means nothing written, so a settled board never redraws.
+async function walk($: EngineInterface, now: Stage, picture: boolean, columns: number) {
+  const plan = arrange(await snapshotOf($), columns) as { homes: Record<string, { x: number; y: number }>; obstacles: unknown[] }
+  let from = now.positions
+  if (picture) {
+    const unplaced = Object.keys(plan.homes).filter(id => !(Object.hasOwn(from, id) && isPlace(from[id])))
+    if (unplaced.length > 0) from = { ...from, ...Object.fromEntries(unplaced.map(id => [id, { x: plan.homes[id].x, y: plan.homes[id].y }])) }
+  }
+  let next = advance(from, plan.homes, plan.obstacles) as Stage['positions']
+  if (picture) next = advance(next, plan.homes, plan.obstacles) as Stage['positions']
   if (same(now.positions, next)) return
-  await update($, stage, current => ({ ...current, positions: next }))
+  const moved = Object.entries(next).some(([id, to]) => from[id]?.x !== to.x || from[id]?.y !== to.y)
+  await update($, stage, current => {
+    const frame = current.frame === 1 ? 1 : 0
+    return { ...current, positions: next, frame: picture && moved ? (frame === 1 ? 0 : 1) : frame }
+  })
 }
 
 // Whether a post is exactly the region's `{ ready: true }`, with nothing else in it.
@@ -1085,14 +1124,19 @@ export const register: Register = on => {
         return rows
       }
       if (e.surface === 'desktop') {
-        const picture = pictureFor(snapshot, shown.positions)
+        // A plain image with no size of its own. The app scales it to the pane, and swaps a changed
+        // one in place; a sized, interactive picture sits in a frame that reloads, and flashes, on
+        // every change.
+        const columns = pictureColumns(e.viewport?.columns)
+        const picture = pictureFor(snapshot, shown, columns)
         const drawn = (
           <Box flexDirection="column">
-            <Svg source={picture.source} alt="Brigade board" width={picture.width} height={picture.height} isInteractive={true} />
+            <Svg source={picture.source} alt="Brigade board" />
             {detailRow($, elements, snapshot)}
           </Box>
         )
         drawnAs = 'picture'
+        pictureDrawnAt = columns
         return drawn
       }
     } catch {

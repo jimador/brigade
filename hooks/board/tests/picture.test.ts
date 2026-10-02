@@ -115,20 +115,30 @@ test('on desktop the pane is a picture of the board with buttons under it, and n
   expect(await ui.findAll({ type: 'Client' })).toHaveLength(0)
   const svg = await ui.find({ type: 'Svg' })
   expect(svg).toBeDefined()
-  const props = svg?.props as { source: string; alt: string; width: number; height: number; isInteractive: boolean }
-  expect(props.source.startsWith('<svg')).toBe(true)
-  expect(props.source.length).toBeLessThanOrEqual(131072)
+  const props = (svg?.props ?? {}) as Record<string, unknown>
+  const source = String(props.source)
+  expect(source.startsWith('<svg')).toBe(true)
+  expect(source.length).toBeLessThanOrEqual(131072)
   expect(props.alt).toBe('Brigade board')
-  expect(typeof props.width).toBe('number')
-  expect(typeof props.height).toBe('number')
-  expect(props.width).toBe(124 * 9)
-  expect(props.height % 18).toBe(0)
-  expect(props.isInteractive).toBe(true)
+  // A plain image with no size of its own: the app scales it to the pane and swaps it in place
+  // when it changes. A sized, interactive one sits in a frame that reloads, and flashes, each time.
+  expect('width' in props).toBe(false)
+  expect('height' in props).toBe(false)
+  expect('isInteractive' in props).toBe(false)
+  // Drawn at the pane's width: the kit's 124 columns give the board 174, 9 pixels each.
+  const box = /viewBox="0 0 (\d+) (\d+)"/.exec(source)
+  expect(box?.[1]).toBe(String(174 * 9))
+  expect(Number(box?.[2]) % 18).toBe(0)
   // The board itself is in the picture: the lanes and the cards.
-  expect(props.source).toContain('Rework')
-  expect(props.source).toContain('token-bucket')
-  // Basil's tooltip says who he is and what he is doing, on one line.
-  expect(props.source).toMatch(/<title>Basil · cook · claude-haiku-4-5 · [^<\n]+<\/title>/)
+  expect(source).toContain('Rework')
+  expect(source).toContain('token-bucket')
+  // No tooltips, and nothing in the picture moves on its own.
+  expect(source).not.toContain('<title')
+  expect(source).not.toContain('<animate')
+  // Basil is drawn in real pixels: one path, in the haiku family's colour.
+  const paths = source.match(/<path [^>]*>/g) ?? []
+  expect(paths).toHaveLength(1)
+  expect(paths[0]).toMatch(/^<path fill="#4cc9f0" d="M[^"]+"\/>$/)
   expect(await ui.find({ type: 'Text', text: /^Details:$/ })).toBeDefined()
   const row = await buttons(ui)
   expect(row.filter(b => /^card-\d+$/.test(b.key)).map(b => b.label).sort()).toEqual(['clock-source', 'token-bucket'])
@@ -137,6 +147,21 @@ test('on desktop the pane is a picture of the board with buttons under it, and n
   expect(row).toContainEqual({ key: 'message-0', label: 'inspector → Basil' })
   expect(row.some(b => b.key === 'close-details')).toBe(false)
   await ui.unmount()
+  // Nothing has moved, so the next mount draws the very same picture.
+  const again = await mount($, 'desktop')
+  expect(await sourceOf(again)).toBe(source)
+  await again.unmount()
+})
+
+test("the picture is drawn at the pane's width, from 96 to 200 columns", async ($, on) => {
+  mock.clock(on)
+  // 108 columns of the app's give 151 of the board's, 1359 pixels; the narrowest board is 96
+  // columns, and the widest 200.
+  for (const [columns, px] of [[108, 1359], [50, 864], [400, 1800]]) {
+    const ui = await $.ui.mount({ plugin: 'brigade', surface: 'desktop', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns, rows: 40 } })
+    expect(await sourceOf(ui)).toContain(`viewBox="0 0 ${px} `)
+    await ui.unmount()
+  }
 })
 
 test("pressing a card's button opens its box in the picture, and Close details closes it", async ($, on) => {
@@ -219,7 +244,7 @@ test('the row holds at most 12 cards, 12 agents and 4 messages, in the board ord
   await ui.unmount()
 })
 
-test('a hostile card id and agent name give clean, cut labels and an escaped tooltip', async ($, on) => {
+test('a hostile card id and agent name give clean, cut labels and leave no markup in the picture', async ($, on) => {
   mock.clock(on)
   const nasty = `<script>alert(1)</script>\u0007\u001b[31m\n\ud800${'x'.repeat(5000)}`
   const kept = store(on, {
@@ -241,7 +266,7 @@ test('a hostile card id and agent name give clean, cut labels and an escaped too
   const source = await sourceOf(ui)
   expect(source.length).toBeLessThanOrEqual(131072)
   expect(source).not.toContain('<script')
-  expect(source).toMatch(/<title>&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
+  expect(source).not.toContain('<title')
   // Pressing the hostile card's button changes nothing: no such card can be opened.
   await ui.press({ key: 'card-0' })
   expect(kept.get('detail')).toBeUndefined()

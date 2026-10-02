@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { arrange } from '../lib/board-layout.mjs'
+import { draw } from '../lib/board-paint.mjs'
 import { register } from '../register.tsx'
 
 const PANE = { title: 'Brigade board', isFocused: false, bodyColumns: 124, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
@@ -65,17 +66,41 @@ async function sourceOf(ui: Ui) {
   return svg === undefined ? '' : String((svg.props as { source?: unknown }).source ?? '')
 }
 
-// Where Basil's tooltip box sits in the picture, in cells, or null when the picture has none.
-function tooltipBox(source: string): Box | null {
-  const hit = /<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)" fill="#000" fill-opacity="0"><title>Basil · /.exec(source)
-  return hit === null ? null : { x: Number(hit[1]) / 9, y: Number(hit[2]) / 18, w: Number(hit[3]) / 9, h: Number(hit[4]) / 18 }
+// The colours the picture draws a sprite in, by model family.
+const HAIKU = '#4cc9f0'
+const OPUS = '#ffd166'
+
+// The one path the picture draws in a colour, as its `d`, or null when there is none.
+function pathIn(source: string, color: string) {
+  const hits = [...source.matchAll(new RegExp(`<path fill="${color}" d="([^"]*)"/>`, 'g'))]
+  expect(hits.length).toBeLessThanOrEqual(1)
+  return hits.length === 0 ? null : hits[0][1]
+}
+
+// Where the sprite drawn in a colour sits, in cells: its path's first corner, 9 by 18 pixels a cell.
+function spriteAt(source: string, color: string) {
+  const hit = /^M([\d.]+) ([\d.]+)/.exec(pathIn(source, color) ?? '')
+  return hit === null ? null : { x: Math.floor(Number(hit[1]) / 9), y: Math.floor(Number(hit[2]) / 18) }
+}
+
+// The drawing of the sprite in a colour, wherever it stands: its path with every corner counted
+// from the first one, so two paths match when they draw the same frame.
+function shapeOf(source: string, color: string) {
+  const d = pathIn(source, color) ?? ''
+  const first = /^M([\d.]+) ([\d.]+)/.exec(d)
+  if (first === null) return ''
+  const [x0, y0] = [Number(first[1]), Number(first[2])]
+  return d.replace(/M([\d.]+) ([\d.]+)/g, (_, x, y) => `M${(Number(x) - x0).toFixed(1)} ${(Number(y) - y0).toFixed(1)}`)
 }
 
 async function buttons(ui: Ui) {
   return (await ui.findAll({ type: 'Button' })).map(b => ({ key: String((b.props as { key?: unknown }).key), label: b.text }))
 }
 
-test('on desktop a sprite walks to its card when the card moves lane', async ($, on) => {
+// The kit mounts the pane 124 of the app's columns wide, so the picture is drawn at 174.
+const PICTURE_COLUMNS = 174
+
+test('on desktop a sprite walks to its card when the card moves lane, two steps a tick', async ($, on) => {
   const clock = mock.clock(on)
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const { kept } = store(on, BOARD)
@@ -85,29 +110,64 @@ test('on desktop a sprite walks to its card when the card moves lane', async ($,
   await ui.unmount()
   ui = await mount($, 'desktop')
   const before = await sourceOf(ui)
-  const settled = tooltipBox(before)
+  const settled = spriteAt(before, HAIKU)
+  const still = shapeOf(before, HAIKU)
   expect(settled).not.toBeNull()
   // The card moves from To do to Done, the far end of the board.
   kept.set('work', { value: lanes({ todo: ['acme-13'], done: ['acme-12'] }), version: (kept.get('work')?.version ?? 0) + 1 })
-  await clock.advance(1000)
+  await clock.advance(500)
   await ui.unmount()
   ui = await mount($, 'desktop')
-  // Two steps in, Basil is on his way: at most two steps from where he stood.
-  const walking = tooltipBox(await sourceOf(ui))
+  // One tick in, Basil has taken two steps: more than one step's 2 cells across, at most 4.
+  const first = await sourceOf(ui)
+  const walking = spriteAt(first, HAIKU)
   expect(walking).not.toBeNull()
-  expect(Math.abs((walking?.x ?? 0) - (settled?.x ?? 0))).toBeLessThanOrEqual(4)
-  expect(walking).not.toEqual(settled)
+  const across = Math.abs((walking?.x ?? 0) - (settled?.x ?? 0))
+  expect(across).toBeGreaterThan(2)
+  expect(across).toBeLessThanOrEqual(4)
+  // While he walks his drawing changes from one tick to the next, in shape as well as place.
+  await clock.advance(500)
+  await ui.unmount()
+  ui = await mount($, 'desktop')
+  const second = await sourceOf(ui)
+  expect(spriteAt(second, HAIKU)).not.toEqual(walking)
+  expect(shapeOf(second, HAIKU)).not.toBe(shapeOf(first, HAIKU))
   await clock.advance(60000)
   await ui.unmount()
   ui = await mount($, 'desktop')
   const after = await sourceOf(ui)
   expect(after).not.toBe(before)
+  // Home again he stands still, drawn as at rest.
+  expect(shapeOf(after, HAIKU)).toBe(still)
   await ui.unmount()
-  // His tooltip box now sits on the acme-12 card in the Done lane, where the layout puts him.
+  // He now stands on the acme-12 card in the Done lane, where the layout puts him.
   const tree = (await $.ui.render(pane('terminal'))) as Node
-  const home = (arrange(tree.props?.props, 124) as { homes: Record<string, Box> }).homes.c1
+  const home = (arrange(tree.props?.props, PICTURE_COLUMNS) as { homes: Record<string, Box> }).homes.c1
   expect(home.x).toBeGreaterThanOrEqual(100)
-  expect(tooltipBox(after)).toEqual(home)
+  expect(spriteAt(after, HAIKU)).toEqual({ x: home.x, y: home.y })
+})
+
+test('on desktop an agent that joins while the pane is open appears at its home', async ($, on) => {
+  const clock = mock.clock(on)
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const { kept } = store(on, BOARD)
+  await $.command.run(OPEN)
+  let ui = await mount($, 'desktop')
+  await clock.advance(10000)
+  await ui.unmount()
+  // Sage, an opus cook on no card, joins the roster while the pane is open.
+  const sage = { ...BASIL, id: 'c2', name: 'Sage', model: 'claude-opus-4-1', dish: null }
+  kept.set('fleet', { value: { agents: { c1: BASIL, c2: sage }, order: ['c1', 'c2'] }, version: (kept.get('fleet')?.version ?? 0) + 1 })
+  await clock.advance(500)
+  ui = await mount($, 'desktop')
+  const at = spriteAt(await sourceOf(ui), OPUS)
+  await ui.unmount()
+  // One tick later he is drawn where the painter puts a sprite that stands at home.
+  const tree = (await $.ui.render(pane('terminal'))) as Node
+  const drawn = draw(tree.props?.props, { positions: {}, frame: 0, hovered: null, over: null }, PICTURE_COLUMNS) as { regions: ({ kind: string; id: string } & Box)[] }
+  const region = drawn.regions.find(r => r.kind === 'agent' && r.id === 'c2')
+  expect(region).toBeDefined()
+  expect(at).toEqual({ x: region?.x, y: region?.y })
 })
 
 test('a settled board costs no stage writes', async ($, on) => {
@@ -118,7 +178,7 @@ test('a settled board costs no stage writes', async ($, on) => {
   const ui = await mount($, 'desktop')
   await clock.advance(10000)
   const version = kept.get('stage')?.version ?? 0
-  // Basil walked in from the edge, so the stage was written while he did.
+  // The first step put Basil at his home, so the stage was written once after the open.
   expect(version).toBeGreaterThan(1)
   // Twenty more steps with nobody left to move.
   await clock.advance(10000)
@@ -319,7 +379,9 @@ test('closing the pane stops its clock, and opening it again starts exactly one'
   const b = bench()
   await b.open()
   expect(b.live().map(timer => timer.ms)).toEqual([500])
-  await b.render('desktop')
+  // With no viewport to measure, the picture is drawn at the dock's 124 columns.
+  const svg = nodes(await b.render('desktop'), 'Svg')[0]
+  expect(String(svg?.props?.source)).toContain('viewBox="0 0 1116 ')
   await b.advance(2000)
   expect(b.kept.get('stage')?.value).toMatchObject({ open: true, openedAt: 1000 })
   // Running the command again while the pane is open adds no second clock and keeps the time it opened.
@@ -358,6 +420,40 @@ test('closing the pane stops its clock, and opening it again starts exactly one'
   expect(b.live()).toHaveLength(0)
 })
 
+test('opening the pane again gives a terminal that fell back its region, and another 3 seconds', async () => {
+  const b = bench()
+  await b.open()
+  expect((await b.render('terminal')).type).toBe('Client')
+  await b.advance(3000)
+  expect(b.kept.get('stage')?.value).toMatchObject({ ready: false, plain: true })
+  expect(nodes(await b.render('terminal'), 'Client')).toHaveLength(0)
+  await b.close()
+  // The region may only have loaded slowly, so the next open tries it again.
+  await b.open()
+  expect(b.kept.get('stage')?.value).toMatchObject({ open: true, ready: false, plain: false })
+  expect((await b.render('terminal')).type).toBe('Client')
+  await b.advance(2500)
+  expect((await b.render('terminal')).type).toBe('Client')
+  await b.advance(500)
+  expect(b.kept.get('stage')?.value).toMatchObject({ ready: false, plain: true })
+  await b.close()
+})
+
+test('the rows fallback keeps the walk-in from the left edge, one step a tick', async () => {
+  const b = bench()
+  await b.open()
+  expect((await b.render('terminal')).type).toBe('Client')
+  await b.advance(3000)
+  expect(b.kept.get('stage')?.value).toMatchObject({ plain: true })
+  expect(nodes(await b.render('terminal'), 'Client')).toHaveLength(0)
+  // Basil starts just off the left edge, three cells out, and comes in 2 cells a tick.
+  await b.advance(500)
+  expect((b.kept.get('stage')?.value as { positions: Record<string, { x: number }> }).positions.c1?.x).toBe(-1)
+  await b.advance(500)
+  expect((b.kept.get('stage')?.value as { positions: Record<string, { x: number }> }).positions.c1?.x).toBe(1)
+  await b.close()
+})
+
 test('only an exact { ready: true } counts, and a late one brings the region back', async () => {
   const b = bench()
   await b.open()
@@ -378,6 +474,11 @@ test('only an exact { ready: true } counts, and a late one brings the region bac
   expect(b.kept.get('stage')?.value).toMatchObject({ ready: true, plain: false })
   expect((await b.render('terminal')).type).toBe('Client')
   await b.advance(10000)
+  expect((await b.render('terminal')).type).toBe('Client')
+  await b.close()
+  // A terminal whose region drew keeps it when the pane opens again.
+  await b.open()
+  expect(b.kept.get('stage')?.value).toMatchObject({ open: true, ready: true, plain: false })
   expect((await b.render('terminal')).type).toBe('Client')
   await b.close()
 })

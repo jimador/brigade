@@ -62,6 +62,8 @@ export type Snapshot = {
 // Where the hooks module keeps the walk when it draws the board itself, and whether the region reported in.
 export type Stage = {
   positions: Record<string, { x: number; y: number }>
+  // Which of its two frames a walking sprite shows in the desktop picture. Missing counts as 0.
+  frame: 0 | 1
   // The pane is open.
   open: boolean
   // When it was last opened, from the engine's clock.
