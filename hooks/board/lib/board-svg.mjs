@@ -189,24 +189,32 @@ function rowSvg(cells, top) {
 
 const SPRITE_COLOR = /^#[0-9a-f]{6}$/i
 
-// A sprite the caller placed, checked and pulled onto the board. Every value comes from outside,
-// so each is read once and anything of the wrong type gives null: a size that isn't one of ART's
-// own keys, a colour that isn't six-digit hex, a position or size that isn't a finite number (a
-// numeric string included), a width or height that isn't positive. The box is floored to whole
-// cells and clamped to the board; one that doesn't touch the board gives null too.
-function spriteOf(sprite, columns, height) {
+// A sprite the caller handed over, checked. Every value comes from outside, so each is read once
+// and anything of the wrong type gives null: a size that isn't one of ART's own keys, a colour that
+// isn't six-digit hex, a position or size that isn't a finite number (a numeric string included),
+// a width or height that isn't positive. The box comes back floored to whole cells.
+function checked(sprite) {
   if (sprite === null || typeof sprite !== 'object') return null
   const { x, y, w, h, size, color, frame } = sprite
   if (typeof size !== 'string' || !Object.hasOwn(ART, size)) return null
   if (typeof color !== 'string' || !SPRITE_COLOR.test(color)) return null
   if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null
   const [bx, by, bw, bh] = [x, y, w, h].map(Math.floor)
+  return { bx, by, bw, bh, bitmap: ART[size][frame === 1 ? 1 : 0], fill: color.toLowerCase() }
+}
+
+// A checked sprite pulled onto the board: its box is clamped to the board, and one that doesn't
+// touch the board gives null.
+function spriteOf(sprite, columns, height) {
+  const s = checked(sprite)
+  if (s === null) return null
+  const { bx, by, bw, bh, bitmap, fill } = s
   const left = Math.min(Math.max(bx, 0), columns)
   const top = Math.min(Math.max(by, 0), height)
   const right = Math.min(bx + bw, columns)
   const bottom = Math.min(by + bh, height)
   if (right <= left || bottom <= top) return null
-  return { left, top, right, bottom, bitmap: ART[size][frame === 1 ? 1 : 0], fill: color.toLowerCase() }
+  return { left, top, right, bottom, bitmap, fill }
 }
 
 // A sprite as one path in real pixels. A pixel is as big as fits the box across, and down with a
@@ -232,6 +240,21 @@ function spritePath({ left, top, right, bottom, bitmap, fill }) {
     }
   })
   return `<path fill="${fill}" d="${d.join('')}"/>`
+}
+
+/**
+ * Draws one sprite on its own, as the path the picture would draw for it at that place. The demo
+ * uses it to draw each sprite's art once and place it wherever the sprite stands. There is no
+ * board here, so the box is never clamped to one.
+ * @param sprite { x, y, w, h, size, color, frame }: a box in cells, an ART size, a '#rrggbb'
+ *   colour and frame 0 or 1, checked the same way the picture checks its sprites
+ * @return the sprite's `<path .../>`, or '' when a value is bad or the box floors to nothing
+ */
+export function spriteMarkup(sprite) {
+  const s = checked(sprite)
+  if (s === null || s.bw <= 0 || s.bh <= 0) return ''
+  const { bx, by, bw, bh, bitmap, fill } = s
+  return spritePath({ left: bx, top: by, right: bx + bw, bottom: by + bh, bitmap, fill })
 }
 
 // Blanks the characters of the cells a sprite covers, keeping their backgrounds, so the terminal's

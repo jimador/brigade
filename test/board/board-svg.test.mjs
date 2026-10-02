@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
-import { pictureOf, CELL_W, CELL_H, SVG_MAX } from '../../hooks/board/lib/board-svg.mjs'
+import { pictureOf, spriteMarkup, CELL_W, CELL_H, SVG_MAX } from '../../hooks/board/lib/board-svg.mjs'
 import { draw } from '../../hooks/board/lib/board-paint.mjs'
 import { PALETTE, ART } from '../../hooks/board/lib/sprites.mjs'
 
@@ -798,4 +798,64 @@ test('thirty sprites add at most 20000 characters and cost little next to the bo
   const without = bestOf(5, () => { for (let i = 0; i < 4; i++) pictureOf({ rows, columns: 160 }) })
   const withSprites = bestOf(5, () => { for (let i = 0; i < 4; i++) pictureOf({ rows, columns: 160, sprites }) })
   assert.ok(withSprites <= without * 2, `with sprites ${withSprites.toFixed(2)} ms, without ${without.toFixed(2)} ms`)
+})
+
+// A second small board with two sprites, l and xl this time, so the pin covers the sizes whose
+// pixels fall on fractions.
+const PINNED_ROWS = [
+  [run('Hi ', { bold: true }), run('▄▄', { color: '#4cc9f0' }), run('  ok')],
+  [run('to do', { backgroundColor: '#1a1c2e' }), run('     ')],
+]
+const PINNED_SPRITES = [
+  { x: 1, y: 0, w: 3, h: 1, size: 'l', color: '#ffd166', frame: 1 },
+  { x: 6, y: 1, w: 3, h: 1, size: 'xl', color: '#4cc9f0', frame: 0 },
+]
+
+test('a board with an l and an xl sprite comes out exactly as pinned', () => {
+  // Written down from the picture code before the sprite drawing was shared with the demo.
+  const pinned = '<svg xmlns="http://www.w3.org/2000/svg" width="81" height="36" viewBox="0 0 81 36"><rect width="81" height="36" fill="#0f1020"/><style>text{font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.b{font-weight:700}</style><rect x="36" y="9" width="9" height="9" fill="#4cc9f0"/><text x="0" y="13" fill="#e8e6d9" class="b">H</text><text x="63 72" y="13" fill="#e8e6d9">ok</text><rect x="0" y="18" width="45" height="18" fill="#1a1c2e"/><text x="0 9 18 27 36" y="31" fill="#e8e6d9">to do</text><path fill="#ffd166" d="M13.8 1h1.6v1.6h-1.6zM20.2 1h1.6v1.6h-1.6zM9 2.6h1.6v1.6h-1.6zM15.4 2.6h1.6v1.6h-1.6zM18.6 2.6h1.6v1.6h-1.6zM25 2.6h1.6v1.6h-1.6zM9 4.2h1.6v1.6h-1.6zM12.2 4.2h11.2v1.6h-11.2zM25 4.2h1.6v1.6h-1.6zM9 5.8h17.6v1.6h-17.6zM9 7.4h4.8v1.6h-4.8zM17 7.4h1.6v1.6h-1.6zM21.8 7.4h4.8v1.6h-4.8zM9 9h17.6v1.6h-17.6zM10.6 10.6h14.4v1.6h-14.4zM12.2 12.2h3.2v1.6h-3.2zM20.2 12.2h3.2v1.6h-3.2zM10.6 13.8h1.6v1.6h-1.6zM15.4 13.8h4.8v1.6h-4.8zM23.4 13.8h1.6v1.6h-1.6zM12.2 15.4h1.6v1.6h-1.6zM21.8 15.4h1.6v1.6h-1.6z"/><path fill="#4cc9f0" d="M59.33 19h1.33v1.33h-1.33zM64.67 19h1.33v1.33h-1.33zM60.67 20.33h1.33v1.33h-1.33zM63.33 20.33h1.33v1.33h-1.33zM58 21.67h9.33v1.33h-9.33zM56.67 23h12v1.33h-12zM55.33 24.33h4v1.33h-4zM60.67 24.33h4v1.33h-4zM66 24.33h4v1.33h-4zM54 25.67h17.33v1.33h-17.33zM54 27h17.33v1.33h-17.33zM54 28.33h4v1.33h-4zM59.33 28.33h6.67v1.33h-6.67zM67.33 28.33h4v1.33h-4zM56.67 29.67h4v1.33h-4zM64.67 29.67h4v1.33h-4zM55.33 31h2.67v1.33h-2.67zM60.67 31h4v1.33h-4zM67.33 31h2.67v1.33h-2.67zM54 32.33h2.67v1.33h-2.67zM68.67 32.33h2.67v1.33h-2.67zM55.33 33.67h1.33v1.33h-1.33zM68.67 33.67h1.33v1.33h-1.33z"/></svg>'
+  assert.equal(pictureOf({ rows: PINNED_ROWS, columns: 9, sprites: PINNED_SPRITES }).source, pinned)
+})
+
+// --- one sprite on its own, as the demo draws it --------------------------------------------------
+
+test('spriteMarkup draws an m sprite exactly where and as the picture does', () => {
+  const one = spriteMarkup(SPRITE)
+  assert.ok(one.startsWith('<path fill="'), one)
+  assert.ok(one.startsWith('<path fill="#06d6a0" d="M94 73h2v2h-2z'), one)
+  assert.equal(one, pathsIn(pictureOf({ rows: blank(6, 20), columns: 20, sprites: [SPRITE] }).source)[0])
+  assert.deepEqual(litOf(dOf(one), 90, 73, 2), litOfArt(ART.m[0]))
+})
+
+test('spriteMarkup at cell 0, 0 draws the same art from the top left corner', () => {
+  const d = dOf(spriteMarkup({ ...SPRITE, x: 0, y: 0 }))
+  assert.ok(d.startsWith('M4 1h2v2h-2z'), d)
+  assert.deepEqual(litOf(d, 0, 1, 2), litOfArt(ART.m[0]))
+})
+
+test('spriteMarkup draws the second bitmap on frame 1 and the first on any other', () => {
+  assert.deepEqual(litOf(dOf(spriteMarkup({ ...SPRITE, frame: 1 })), 90, 73, 2), litOfArt(ART.m[1]))
+  for (const frame of [0, 2, undefined, '1', true]) {
+    assert.deepEqual(litOf(dOf(spriteMarkup({ ...SPRITE, frame })), 90, 73, 2), litOfArt(ART.m[0]), `frame ${String(frame)}`)
+  }
+})
+
+test('spriteMarkup gives an empty string for a bad size, a bad colour or a string position', () => {
+  for (const bad of [
+    null, undefined, 'm', 7,
+    { ...SPRITE, size: 'xxl' }, { ...SPRITE, size: '__proto__' }, { ...SPRITE, size: null },
+    { ...SPRITE, color: 'red' }, { ...SPRITE, color: '#abc' }, { ...SPRITE, color: '#06d6a0"/><script>' },
+    { ...SPRITE, x: '10' }, { ...SPRITE, y: '4' }, { ...SPRITE, x: NaN }, { ...SPRITE, w: 0 }, { ...SPRITE, h: -1 },
+    { ...SPRITE, w: 0.5 },
+  ]) {
+    assert.equal(spriteMarkup(bad), '', JSON.stringify(bad))
+  }
+})
+
+test('spriteMarkup has no board to clamp to, and matches each sprite the picture pins', () => {
+  // Past the right edge of any small board, the art is still drawn in full.
+  const far = spriteMarkup({ ...SPRITE, x: 500 })
+  assert.ok(far.startsWith('<path fill="#06d6a0" d="M4504 73h2v2h-2z'), far)
+  const paths = pathsIn(pictureOf({ rows: PINNED_ROWS, columns: 9, sprites: PINNED_SPRITES }).source)
+  assert.deepEqual(paths, PINNED_SPRITES.map(spriteMarkup))
 })
