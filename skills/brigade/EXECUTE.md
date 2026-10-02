@@ -42,13 +42,15 @@ Invoking `brigade-execute` is the Planner's opt-in to multi-agent orchestration 
 cook/inspect/land loop. Invoke the Workflow tool by name, `name: "brigade:brigade-execute"`,
 the same as research — never by `scriptPath`, which the tool rejects for plugin-cache
 files — with args (may arrive as a JSON string): `{ dishDir, repoRoot, now, tier, deliverySlug, deliveryBranch, gate: [],
-maxParallel, overrides, promptOverrides, items: [{slug, status, dependsOn: [], heavy,
+maxParallel, overrides, promptOverrides, writing, items: [{slug, status, dependsOn: [], heavy,
 packet}] }`. `packet` is the item's full, standalone work-packet text; `gate` is the repo's
 verification gate commands (resolved `gate` wins over `.brigade/config.md`); `overrides` is
 the `config` object from `brigade-config resolve --json` (passing the whole resolve output
 also works — the scripts unwrap `.config`); `promptOverrides` comes from
-`brigade-config prompts --json`, as in Phase 1. When building `items` from PLAN.md, map
-frontmatter `depends_on` → `dependsOn` (the script also accepts `depends_on` as an alias).
+`brigade-config prompts --json`, as in Phase 1; `writing` is the output of
+`brigade-config writing --json`, which hands each cook and inspector its writing rules. When
+building `items` from PLAN.md, map frontmatter `depends_on` → `dependsOn` (the script also
+accepts `depends_on` as an alias).
 
 The script runs the whole DAG: per-item worktree creation, the tier's escalation ladder
 (haiku retry → heavy cook, in order), adversarial review, linear rebase + fast-forward

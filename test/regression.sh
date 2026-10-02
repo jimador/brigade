@@ -1048,6 +1048,70 @@ EOF
   [ -z "$out3" ] || fail "hook produced output in a non-brigade repo: $out3"
 }
 
+# The Planner writes plans, packets, the ticket comment and the PR body itself, so the
+# session-start hook is the only place its writing rules can reach it. The block shows up
+# when the repo sets a preset or a planner-side rule, and stays away otherwise. A broken
+# or failing config must never fail the hook.
+test_hook_writing_rules() {
+  base="$TMP_ROOT/hook-writing"
+  heading="## writing rules (for the artifacts YOU write"
+  mkdir -p "$base/home"
+  hook_run() { CLAUDE_PROJECT_DIR="$1" BRIGADE_HOME="$base/home" HOME="$base/home" bash "$2"; }
+
+  # (a) a preset and one ticket_comment rule: the block names both.
+  withrules="$base/with-rules"
+  mkdir -p "$withrules/.brigade"
+  (cd "$withrules" && git init -q)
+  cat >"$withrules/.brigade/config.local.json" <<'EOF'
+{ "writing": { "preset": "ste-80",
+  "rules": { "ticket_comment": ["Tell alex which acme service changed in the first sentence."] } } }
+EOF
+  out="$(hook_run "$withrules" "$ROOT/hooks/session-start.sh")" ||
+    fail "hook failed on a repo with writing rules"
+  printf '%s\n' "$out" | grep -Fq "$heading" ||
+    fail "hook did not print the writing rules block: $out"
+  printf '%s\n' "$out" | grep -Fq "ste-80" || fail "writing rules block does not name the preset: $out"
+  printf '%s\n' "$out" | grep -Fq "skills/brigade/writing/ste-80.md" ||
+    fail "writing rules block does not give the preset's rule text path: $out"
+  printf '%s\n' "$out" | grep -Fq "ticket_comment" || fail "writing rules block does not name the artifact: $out"
+  printf '%s\n' "$out" | grep -Fq "Tell alex which acme service changed in the first sentence." ||
+    fail "writing rules block does not carry the ticket_comment rule: $out"
+
+  # (b) no writing config at all: nothing new.
+  plain="$base/plain"
+  mkdir -p "$plain/.brigade"
+  (cd "$plain" && git init -q)
+  out="$(hook_run "$plain" "$ROOT/hooks/session-start.sh")" || fail "hook failed on a repo with no writing config"
+  printf '%s\n' "$out" | grep -Fq "## writing rules" && fail "hook printed writing rules for a repo with none: $out"
+
+  # (c) only a scout-side rule (brief): the Planner writes none of those, so still nothing.
+  briefonly="$base/brief-only"
+  mkdir -p "$briefonly/.brigade"
+  (cd "$briefonly" && git init -q)
+  printf '%s\n' '{ "writing": { "rules": { "brief": ["Lead with the answer."] } } }' \
+    >"$briefonly/.brigade/config.local.json"
+  out="$(hook_run "$briefonly" "$ROOT/hooks/session-start.sh")" || fail "hook failed on a brief-only writing config"
+  printf '%s\n' "$out" | grep -Fq "## writing rules" && fail "hook printed writing rules with no planner-side rule: $out"
+
+  # (d) a config file that is not JSON: the hook still exits 0.
+  broken="$base/broken"
+  mkdir -p "$broken/.brigade"
+  (cd "$broken" && git init -q)
+  printf '%s\n' '{ "writing": { "preset": "ste-80", ' >"$broken/.brigade/config.local.json"
+  hook_run "$broken" "$ROOT/hooks/session-start.sh" >/dev/null 2>&1 || fail "hook failed on an invalid JSON config"
+
+  # (e) a brigade-config that fails and prints junk: the hook still exits 0 and stays quiet.
+  stubroot="$base/stub-plugin"
+  mkdir -p "$stubroot/hooks" "$stubroot/scripts"
+  cp "$ROOT/hooks/session-start.sh" "$stubroot/hooks/session-start.sh"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$stubroot/scripts/brigade-status"
+  printf '%s\n' '#!/bin/sh' 'echo "{ not json"' 'exit 3' >"$stubroot/scripts/brigade-config"
+  chmod +x "$stubroot/scripts/brigade-status" "$stubroot/scripts/brigade-config"
+  out="$(hook_run "$plain" "$stubroot/hooks/session-start.sh")" || fail "hook failed when brigade-config failed"
+  printf '%s\n' "$out" | grep -Fq "## writing rules" && fail "hook printed writing rules from a failing brigade-config: $out"
+  return 0
+}
+
 test_validate_ledger_artifacts() {
   fixture="$TMP_ROOT/validate-ledger"
   mkdir -p "$fixture/.brigade/dishes/sample/state"
@@ -4341,6 +4405,7 @@ test_onboard_status
 test_onboard_apply
 test_onboard_detect
 test_hook_onboard_drift
+test_hook_writing_rules
 test_validate_ledger_artifacts
 test_validate_design_ledger
 test_validate_retro_readiness

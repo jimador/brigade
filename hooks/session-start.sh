@@ -48,6 +48,38 @@ if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-config"
     echo "## planner prompt overrides (these apply to YOU, the Planner, for this whole session)"
     printf '%s\n' "$PLANNER_OVERRIDES"
   fi
+  # The Planner writes plans, packets, the ticket comment and the PR body itself, so their
+  # writing rules have to reach the session here too. Says nothing when the repo sets no
+  # preset and no rule for those four, or when the config can't be read.
+  WRITING_JSON="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-config" writing --json 2>/dev/null || true)"
+  WRITING_RULES=""
+  if [ -n "$WRITING_JSON" ]; then
+    WRITING_RULES="$(node -e '
+      let s = "";
+      process.stdin.on("data", (d) => { s += d; });
+      process.stdin.on("end", () => {
+        try {
+          const w = JSON.parse(s);
+          const rules = w && typeof w.rules === "object" && w.rules ? w.rules : {};
+          const preset = typeof w.preset === "string" ? w.preset : "none";
+          const mine = ["plan", "packet", "ticket_comment", "pr_body"]
+            .filter((a) => Array.isArray(rules[a]) && rules[a].length);
+          if (preset === "none" && !mine.length) return;
+          const out = ["preset: " + preset + (w.presetFile ? " (rule text: " + w.presetFile + ")" : "")];
+          for (const a of mine) {
+            out.push(a + ":");
+            for (const r of rules[a]) out.push("  - " + String(r).replace(/\s*\n\s*/g, " "));
+          }
+          console.log(out.join("\n"));
+        } catch {}
+      });
+    ' <<<"$WRITING_JSON" 2>/dev/null || true)"
+  fi
+  if [ -n "$WRITING_RULES" ]; then
+    echo
+    echo "## writing rules (for the artifacts YOU write: plans, packets, ticket comments, pull request bodies)"
+    printf '%s\n' "$WRITING_RULES" | sed 's/^/  /'
+  fi
 fi
 
 # Onboarding drift: auto-apply pending mechanical steps; point at /brigade:onboard for the rest.

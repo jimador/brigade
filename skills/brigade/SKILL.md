@@ -173,8 +173,9 @@ Resolve once per dish (zero model tokens):
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" doctor             # validate every layer; exit 1 on problems
 ```
 
-Pass the resolved settings into every workflow script as `overrides`, and the prompt stacks
-as `promptOverrides`. A `doctor` failure is a readiness failure — name the file and key before
+Pass the resolved settings into every workflow script as `overrides`, the prompt stacks as
+`promptOverrides`, and the output of `brigade-config writing --json` as `writing`. A `doctor`
+failure is a readiness failure — name the file and key before
 dispatching. Overrides only add instructions, never remove a gate: details in `CONFIG.md`.
 
 ## Setup
@@ -246,7 +247,7 @@ tool by name — `name: "brigade:brigade-research"` — never by `scriptPath`: t
 manifest registers the three scripts, and the Workflow tool rejects a `scriptPath` under
 the plugin cache because it is outside the directories the session can read. Pass args
 `{ dishDir, repoRoot, now, tier, questions: [{n, topic, question, why, allowWeb}],
-overrides, promptOverrides }`. It returns `{ briefs: [{n, topic, answer, confidence, briefPath,
+overrides, promptOverrides, writing }`. It returns `{ briefs: [{n, topic, answer, confidence, briefPath,
 notVerified}], dropped, failed }`, capped at the resolved scout budget. At ★★★ you may
 additionally read pivotal files directly.
 
