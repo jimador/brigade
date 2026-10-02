@@ -173,7 +173,7 @@ test('a work item moves To do, Cooking, In review, Rework as events and files ar
   await $.session.start({ cwd: '/repo' }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
   const ui = await open($)
   expect(await ui.find({ type: 'Text', text: /^repo · feat\/limits/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^acme-12 · feature · 0 of 2 done · two-star/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^acme-12 · feature · 0 of 2 done · Effort: ★★$/, in: 'stage' })).toBeDefined()
   expect(await laneOfCard(ui, 'token-bucket')).toBe('To do')
   expect(await laneOfCard(ui, 'usage-docs')).toBe('To do')
 
