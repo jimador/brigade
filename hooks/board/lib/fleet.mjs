@@ -162,6 +162,112 @@ export function roleFromAct(act) {
   return null
 }
 
+// How much of a shell command decides what its agent is doing. This runs on every tool call of
+// every agent, so a huge command must cost no more than a short one.
+const ACTIVITY_COMMAND_LIMIT = 400
+
+// The longest activity the board will ever be handed, and the longest file and program names
+// inside one.
+const ACTIVITY_MAX = 32
+const FILE_NAME_MAX = 24
+const PROGRAM_NAME_MAX = 16
+
+const SEARCH_TOOLS = new Set(['Grep', 'Glob'])
+const BRIEFING_TOOLS = new Set(['Agent', 'Task', 'Workflow'])
+const WEB_TOOLS = new Set(['WebFetch', 'WebSearch'])
+
+// Bits of a shell command that mean it runs a test suite, found by plain substring search.
+const TEST_RUNS = [
+  'node --test', 'npm test', 'npm run test', 'pnpm test', 'yarn test', 'pytest', 'go test', 'cargo test',
+  'gradle test', 'gradlew test', 'mvn test', 'plugin test', 'regression.sh',
+]
+
+// Programs that run the script named by their first argument, so 'bash tests/run.sh' runs a
+// script under a test folder just as './tests/run.sh' does.
+const SCRIPT_RUNNERS = new Set(['sh', 'bash', 'zsh', 'node', 'python', 'python3'])
+
+// Characters that must never reach the board: control characters (newlines and escapes among
+// them), invisible formatting such as right-to-left overrides, line and paragraph separators,
+// and half of a broken surrogate pair. Each one becomes a space.
+const UNDRAWABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu
+
+// Makes outside text safe to draw and at most `max` characters long. Only `max + 1` characters
+// are ever looked at, and a wide character made of two halves is never cut in two.
+function drawable(value, max) {
+  let out = value.slice(0, max + 1).replace(UNDRAWABLE, ' ').slice(0, max)
+  const last = out.charCodeAt(out.length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1)
+  return out
+}
+
+function isSeparator(code) {
+  return code === 0x2f || code === 0x5c
+}
+
+// The last part of a path, ignoring trailing slashes, so '/a/b/' gives 'b'. One backward scan.
+function lastSegment(path) {
+  let end = path.length
+  while (end > 0 && isSeparator(path.charCodeAt(end - 1))) end--
+  let start = end
+  while (start > 0 && !isSeparator(path.charCodeAt(start - 1))) start--
+  return path.slice(start, end)
+}
+
+// The drawable last part of a path clipped to `max`, or null when there is nothing to show.
+function nameOf(path, max) {
+  const name = drawable(lastSegment(path), max)
+  return name.trim() ? name : null
+}
+
+function unquoted(word) {
+  return word.replace(/["']/g, '')
+}
+
+// True when one command of a list runs a script under a 'test' or 'tests' folder, either
+// directly or through a shell, node or python.
+function runsTestScript(piece) {
+  const words = piece.trim().split(/\s+/)
+  let program = unquoted(words[0])
+  if (SCRIPT_RUNNERS.has(lastSegment(program))) {
+    program = unquoted(words.slice(1).find((word) => !word.startsWith('-')) ?? '')
+  }
+  const path = `/${program}`
+  return path.includes('/test/') || path.includes('/tests/')
+}
+
+function commandActivity(fullCommand) {
+  const raw = fullCommand.slice(0, ACTIVITY_COMMAND_LIMIT)
+  const command = raw.replace(UNDRAWABLE, ' ')
+  if (TEST_RUNS.some((run) => command.includes(run))) return 'running tests'
+  // Split before scrubbing, since a newline ends a command just as ';' does.
+  if (raw.split(COMMAND_BREAK).some((piece) => runsTestScript(piece.replace(UNDRAWABLE, ' ')))) {
+    return 'running tests'
+  }
+  const first = command.trim().split(/\s+/, 1)[0]
+  const word = unquoted(first ?? '')
+  if (word === 'git') return 'running git'
+  const program = nameOf(word, PROGRAM_NAME_MAX)
+  return program ? `running ${program}` : null
+}
+
+// What one tool call looks like to a person watching, in two or three words, or null when it
+// says nothing useful. `act` is { tool, filePath, command }, all optional. The answer is short
+// and holds nothing but plain characters, because the board draws it as it is.
+export function activityOf(act) {
+  if (!act || typeof act !== 'object') return null
+  const tool = act.tool
+  if (WRITE_TOOLS.has(tool) || tool === 'Read') {
+    const name = nameOf(text(act.filePath), FILE_NAME_MAX)
+    if (!name) return null
+    return `${tool === 'Read' ? 'reading' : 'editing'} ${name}`
+  }
+  if (SEARCH_TOOLS.has(tool)) return 'searching'
+  if (tool === 'Bash') return commandActivity(text(act.command))
+  if (BRIEFING_TOOLS.has(tool)) return 'briefing agents'
+  if (WEB_TOOLS.has(tool)) return 'on the web'
+  return null
+}
+
 function itemFromClues(pieces) {
   for (const piece of pieces) {
     const cleaned = withoutPlannerState(piece)
@@ -233,6 +339,7 @@ function addAgent(fleet, event) {
     endedAt: null,
     ticket: null,
     lane: null,
+    activity: null,
   }
   fleet.order.push(event.id)
   return fleet.agents[event.id]
@@ -246,8 +353,10 @@ function fillIdentity(agent, who) {
   if (blank(agent.item)) agent.item = who.item
 }
 
-// Returns a new roster with one event applied: 'spawn', 'step', 'tool' or 'complete'. A 'tool'
-// event is { type, id, at, paths, act }; its paths fill the dish and item, its act the role.
+// Returns a new roster with one event applied: 'spawn', 'step', 'tool', 'activity' or
+// 'complete'. A 'tool' event is { type, id, at, paths, act }; its paths fill the dish and item,
+// its act the role. An 'activity' event is { type, id, text } and says what a working agent is
+// doing now; it never adds an agent or wakes a finished one.
 // Events without an id, or of a type we don't know, give back an unchanged copy.
 export function applyEvent(fleet, event) {
   const next = copyFleet(fleet)
@@ -287,6 +396,17 @@ export function applyEvent(fleet, event) {
     const agent = next.agents[event.id]
     agent.endedAt = event.at ?? null
     agent.state = event.reason === 'error' || event.reason === 'aborted' ? 'failed' : 'done'
+    agent.activity = null
+    return next
+  }
+
+  if (event.type === 'activity') {
+    if (!known) return next
+    const agent = next.agents[event.id]
+    if (agent.state !== 'working') return next
+    // The text is drawn on the board as it is, so it is made safe here too, whoever sent it.
+    const said = typeof event.text === 'string' ? drawable(event.text, ACTIVITY_MAX) : ''
+    agent.activity = said.trim() ? said : null
     return next
   }
 
