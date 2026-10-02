@@ -1545,6 +1545,79 @@ for (const [out, re, label] of checks) {
 JS
 }
 
+test_execute_writing_rules() {
+  # Each agent that writes an artifact gets that artifact's writing rules and nobody
+  # else's. args.writing comes from the operator's config, so a bad shape there has to
+  # leave the prompt alone rather than throw: a type mismatch in this path once ended a
+  # whole run before a single agent started.
+  node - "$ROOT/workflows/config.js" <<'JS' || fail "withWritingRules does not append exactly one artifact's rules, or mishandles a bad shape"
+const fs = require('fs')
+const assert = require('assert')
+const src = fs.readFileSync(process.argv[2], 'utf8')
+const fn = new Function(src + '; return typeof withWritingRules === "function" ? withWritingRules : null')()
+assert.ok(fn, 'withWritingRules is missing from workflows/config.js')
+
+const writing = {
+  preset: 'ste-80',
+  presetFile: '/path/to/repo/skills/brigade/writing/ste-80.md',
+  rules: {
+    report: ['Report rule one.', 'Report rule two.'],
+    verdict: ['Verdict rule.'],
+    brief: ['Brief rule.'],
+    packet: ['Packet rule.'],
+    ticket_comment: ['Comment rule.'],
+    pr_body: ['PR rule.'],
+  },
+  checks: {},
+}
+const head = (artifact) => `BASE\n\nWRITING RULES for the ${artifact} you write (from this repo's brigade configuration):\n\n`
+assert.strictEqual(fn('BASE', writing, 'report'), `${head('report')}- Report rule one.\n- Report rule two.\n`, 'report block')
+assert.strictEqual(fn('BASE', writing, 'verdict'), `${head('verdict')}- Verdict rule.\n`, 'verdict block')
+assert.strictEqual(fn('BASE', writing, 'brief'), `${head('brief')}- Brief rule.\n`, 'brief block')
+// The preset's own rule text is for packets only, so the file path never shows up here.
+assert.ok(!fn('BASE', writing, 'report').includes('ste-80'), 'presetFile leaked into a prompt')
+
+// Bad entries are skipped; the good ones still land.
+assert.strictEqual(
+  fn('BASE', { rules: { report: [42, 'Kept rule.', null, '', '   ', { x: 1 }] } }, 'report'),
+  `${head('report')}- Kept rule.\n`,
+  'non-string entries were not skipped',
+)
+
+// Every one of these leaves the prompt exactly as it was, and none of them throws.
+const unchanged = [
+  [undefined, 'report', 'writing undefined'],
+  [null, 'report', 'writing null'],
+  ['a string', 'report', 'writing a string'],
+  [['report'], 'report', 'writing an array'],
+  [42, 'report', 'writing a number'],
+  [{}, 'report', 'rules missing'],
+  [{ rules: null }, 'report', 'rules null'],
+  [{ rules: 'report' }, 'report', 'rules a string'],
+  [{ rules: ['Report rule.'] }, 'report', 'rules an array'],
+  [{ rules: { report: 'a bare string' } }, 'report', 'list a bare string'],
+  [{ rules: { report: [] } }, 'report', 'list empty'],
+  [{ rules: { report: [42, null, '  '] } }, 'report', 'list of non-strings'],
+  [writing, 'nope', 'unknown artifact'],
+  [writing, undefined, 'no artifact'],
+  [writing, 'constructor', 'artifact named after an Object property'],
+  [writing, '__proto__', 'artifact named __proto__'],
+]
+for (const [w, artifact, label] of unchanged) {
+  let out
+  try {
+    out = fn('BASE', w, artifact)
+  } catch (err) {
+    console.error(`${label}: threw ${err && err.message}`)
+    process.exit(1)
+  }
+  assert.strictEqual(out, 'BASE', `${label}: expected the prompt unchanged, got ${JSON.stringify(out)}`)
+}
+JS
+  # The three call sites are pinned by test_workflow_smoke, which runs each workflow
+  # and reads every prompt it hands an agent.
+}
+
 test_workflow_scripts_parse() {
   # Workflow scripts run inside an async function the Workflow tool builds, where a
   # top-level return and the agent()/parallel() globals are legal. Plain node --check
@@ -2455,7 +2528,12 @@ function typeDefault(propSchema) {
 function phaseStub() {}
 function logStub() {}
 
+// Every prompt handed to an agent, with its label, so the writing-rules check below can
+// see exactly what each agent was told.
+let CAPTURED = []
+
 async function agentStub(prompt, opts) {
+  CAPTURED.push({ label: (opts && opts.label) || '', prompt })
   const result = { ...KITCHEN_SINK }
   const schema = (opts && opts.schema) || {}
   const required = schema.required || []
@@ -2523,14 +2601,79 @@ const WORKFLOWS = [
   },
 ]
 
-async function runOne(wf) {
+async function runOne(wf, extraArgs) {
   const src = fs.readFileSync(path.join(ROOT, wf.file), 'utf8').replace('export const meta', 'const meta')
   const fn = new Function('args', 'phase', 'log', 'agent', 'parallel', 'pipeline', 'workflow', src)
-  const result = await fn(wf.args, phaseStub, logStub, agentStub, parallelStub, pipelineStub, undefined)
+  const result = await fn({ ...wf.args, ...(extraArgs || {}) }, phaseStub, logStub, agentStub, parallelStub, pipelineStub, undefined)
   if (result === null || typeof result !== 'object') {
     throw new Error(`expected a non-null object return, got: ${JSON.stringify(result)}`)
   }
   return result
+}
+
+// Run one workflow and hand back every prompt it gave an agent, in order.
+async function capture(wf, extraArgs) {
+  CAPTURED = []
+  await runOne(wf, extraArgs)
+  return CAPTURED.slice()
+}
+
+// Writing rules: one distinct marker sentence per artifact, so a prompt that picks up
+// another artifact's rules is easy to spot. Only the cook (report), inspector (verdict)
+// and scout (brief) write a ruled artifact in these runs; every other prompt, the
+// review workflow's included, must come out exactly as it does with no rules at all.
+const MARKERS = {
+  report: 'Marker: alex wants the report rules here.',
+  verdict: 'Marker: alex wants the verdict rules here.',
+  brief: 'Marker: alex wants the brief rules here.',
+  packet: 'Marker: alex wants the packet rules here.',
+  ticket_comment: 'Marker: alex wants the ticket_comment rules here.',
+  pr_body: 'Marker: alex wants the pr_body rules here.',
+}
+const WRITING = {
+  preset: 'none',
+  presetFile: null,
+  rules: Object.fromEntries(Object.entries(MARKERS).map(([artifact, marker]) => [artifact, [marker]])),
+  checks: {},
+}
+const OWNERS = [['cook:', 'report'], ['inspect:', 'verdict'], ['scout:', 'brief']]
+const ownerOf = (label) => (OWNERS.find(([prefix]) => label.startsWith(prefix)) || [])[1] || null
+const MALFORMED = [
+  undefined, null, 'report', ['report'], {}, { rules: null }, { rules: ['x'] },
+  { rules: { report: 'a bare string', verdict: 'a bare string', brief: 'a bare string' } },
+  { rules: { report: [42, null], verdict: [{}], brief: [''] } },
+]
+
+async function checkWritingRules() {
+  const problems = []
+  const seen = { report: 0, verdict: 0, brief: 0 }
+  for (const wf of WORKFLOWS) {
+    const plain = await capture(wf, {})
+    const ruled = await capture(wf, { writing: WRITING })
+    if (ruled.length !== plain.length) {
+      problems.push(`${wf.name}: ${ruled.length} prompts with writing rules, ${plain.length} without`)
+      continue
+    }
+    ruled.forEach((call, i) => {
+      const owner = ownerOf(call.label)
+      if (owner) seen[owner] += 1
+      for (const [artifact, marker] of Object.entries(MARKERS)) {
+        const has = call.prompt.includes(marker)
+        if (artifact === owner && !has) problems.push(`${wf.name} ${call.label}: missing the ${artifact} rules`)
+        if (artifact !== owner && has) problems.push(`${wf.name} ${call.label}: carries the ${artifact} rules`)
+      }
+      if (owner && !call.prompt.startsWith(plain[i].prompt)) problems.push(`${wf.name} ${call.label}: the rules did not go on the end of the prompt`)
+      if (!owner && call.prompt !== plain[i].prompt) problems.push(`${wf.name} ${call.label}: prompt changed though it writes no ruled artifact`)
+    })
+    for (const bad of MALFORMED) {
+      const got = await capture(wf, { writing: bad })
+      if (JSON.stringify(got) !== JSON.stringify(plain)) problems.push(`${wf.name}: writing=${JSON.stringify(bad)} changed a prompt`)
+    }
+  }
+  for (const [artifact, count] of Object.entries(seen)) {
+    if (!count) problems.push(`no agent that writes a ${artifact} was dispatched, so its rules went unchecked`)
+  }
+  return problems
 }
 
 async function main() {
@@ -2544,6 +2687,20 @@ async function main() {
       console.error(`FAIL ${wf.name}`)
       console.error(err && err.stack ? err.stack : String(err))
     }
+  }
+  try {
+    const problems = await checkWritingRules()
+    if (problems.length) {
+      failed = true
+      console.error('FAIL writing rules')
+      for (const p of problems) console.error(`  ${p}`)
+    } else {
+      console.log('OK   writing rules reach the cook, inspector and scout only')
+    }
+  } catch (err) {
+    failed = true
+    console.error('FAIL writing rules')
+    console.error(err && err.stack ? err.stack : String(err))
   }
   if (failed) {
     console.error('WORKFLOW SMOKE: at least one workflow threw or returned a non-object — see above')
@@ -4195,6 +4352,7 @@ test_execute_artifact_verification
 test_execute_verdict_scribe
 test_execute_guarded_agent_calls
 test_execute_prompt_overrides_normalize
+test_execute_writing_rules
 test_workflow_scripts_parse
 test_schema_examples_validate
 test_review_config

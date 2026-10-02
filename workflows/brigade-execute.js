@@ -89,6 +89,22 @@ function withPromptOverrides(basePrompt, fragments) {
   return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${usable.join('\n\n')}\n`
 }
 
+// Adds the repo's writing rules for one artifact (report, verdict or brief) to the end of
+// the prompt of the agent that writes it, so each agent sees its own rules and no one
+// else's. `writing` is args.writing, the output of `brigade-config writing --json`. It
+// comes from operator config, so any odd shape just leaves the prompt as it was: a type
+// mismatch here once ended a whole run. The preset's own rule text is for packets, so it
+// never goes in here.
+function withWritingRules(prompt, writing, artifact) {
+  const rules = writing && typeof writing === 'object' && !Array.isArray(writing) ? writing.rules : null
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return prompt
+  if (typeof artifact !== 'string' || !Object.prototype.hasOwnProperty.call(rules, artifact)) return prompt
+  const list = Array.isArray(rules[artifact]) ? rules[artifact] : []
+  const usable = list.filter((rule) => typeof rule === 'string' && rule.trim().length > 0)
+  if (!usable.length) return prompt
+  return `${prompt}\n\nWRITING RULES for the ${artifact} you write (from this repo's brigade configuration):\n\n${usable.map((rule) => `- ${rule}`).join('\n')}\n`
+}
+
 const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' } } }
 
 const SCHEMA_COOK_RETURN = { type: 'object', required: ['status', 'attempt', 'branch', 'reportPath', 'filesChanged', 'summary'], properties: { status: { enum: ['done', 'blocked'] }, attempt: { type: 'integer' }, branch: { type: 'string' }, reportPath: { type: 'string' }, filesChanged: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' }, blockedReason: { type: 'string' } } }
@@ -295,6 +311,8 @@ const A = typeof args === 'string' ? JSON.parse(args) : args
 // overridable without touching this script.
 const POLICY = resolvePolicy(A.tier, A.overrides)
 const PROMPT_EXTRAS = A.promptOverrides || {}
+// The repo's writing rules per artifact (`brigade-config writing --json`); may be absent.
+const WRITING = A.writing
 
 // Every run gets one fixed stamp (A.now) from the harness. The runtime forbids
 // reading the wall clock or generating randomness directly, so every timestamp
@@ -776,9 +794,13 @@ async function runItem(item, promises) {
     let cookResult
     try {
       cookResult = await guarded(`cook:${item.slug}:${i}`, () => structuredAgent(
-        withPromptOverrides(
-          cookPrompt(item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, i),
-          PROMPT_EXTRAS.cook,
+        withWritingRules(
+          withPromptOverrides(
+            cookPrompt(item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, i),
+            PROMPT_EXTRAS.cook,
+          ),
+          WRITING,
+          'report',
         ),
         { label: `cook:${item.slug}:${i}`, phase: 'Cook', schema: SCHEMA_COOK_RETURN, agentType },
       ))
@@ -802,9 +824,13 @@ async function runItem(item, promises) {
 
     blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
     const verdictResult = await guarded(`inspect:${item.slug}:${i}`, () => structuredAgent(
-      withPromptOverrides(
-        inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
-        PROMPT_EXTRAS.inspector,
+      withWritingRules(
+        withPromptOverrides(
+          inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
+          PROMPT_EXTRAS.inspector,
+        ),
+        WRITING,
+        'verdict',
       ),
       {
         label: `inspect:${item.slug}:${i}`,

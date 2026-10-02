@@ -89,6 +89,22 @@ function withPromptOverrides(basePrompt, fragments) {
   return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${usable.join('\n\n')}\n`
 }
 
+// Adds the repo's writing rules for one artifact (report, verdict or brief) to the end of
+// the prompt of the agent that writes it, so each agent sees its own rules and no one
+// else's. `writing` is args.writing, the output of `brigade-config writing --json`. It
+// comes from operator config, so any odd shape just leaves the prompt as it was: a type
+// mismatch here once ended a whole run. The preset's own rule text is for packets, so it
+// never goes in here.
+function withWritingRules(prompt, writing, artifact) {
+  const rules = writing && typeof writing === 'object' && !Array.isArray(writing) ? writing.rules : null
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return prompt
+  if (typeof artifact !== 'string' || !Object.prototype.hasOwnProperty.call(rules, artifact)) return prompt
+  const list = Array.isArray(rules[artifact]) ? rules[artifact] : []
+  const usable = list.filter((rule) => typeof rule === 'string' && rule.trim().length > 0)
+  if (!usable.length) return prompt
+  return `${prompt}\n\nWRITING RULES for the ${artifact} you write (from this repo's brigade configuration):\n\n${usable.map((rule) => `- ${rule}`).join('\n')}\n`
+}
+
 const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' } } }
 
 const SCHEMA_COOK_RETURN = { type: 'object', required: ['status', 'attempt', 'branch', 'reportPath', 'filesChanged', 'summary'], properties: { status: { enum: ['done', 'blocked'] }, attempt: { type: 'integer' }, branch: { type: 'string' }, reportPath: { type: 'string' }, filesChanged: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' }, blockedReason: { type: 'string' } } }

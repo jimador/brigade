@@ -12,6 +12,8 @@ const A = typeof args === 'string' ? JSON.parse(args) : args
 // overridable without touching this script.
 const POLICY = resolvePolicy(A.tier, A.overrides)
 const PROMPT_EXTRAS = A.promptOverrides || {}
+// The repo's writing rules per artifact (`brigade-config writing --json`); may be absent.
+const WRITING = A.writing
 
 // Every run gets one fixed stamp (A.now) from the harness. The runtime forbids
 // reading the wall clock or generating randomness directly, so every timestamp
@@ -493,9 +495,13 @@ async function runItem(item, promises) {
     let cookResult
     try {
       cookResult = await guarded(`cook:${item.slug}:${i}`, () => structuredAgent(
-        withPromptOverrides(
-          cookPrompt(item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, i),
-          PROMPT_EXTRAS.cook,
+        withWritingRules(
+          withPromptOverrides(
+            cookPrompt(item, agentType, worktreePath, branch, reportPath, verdictPath, findingsHistory, i),
+            PROMPT_EXTRAS.cook,
+          ),
+          WRITING,
+          'report',
         ),
         { label: `cook:${item.slug}:${i}`, phase: 'Cook', schema: SCHEMA_COOK_RETURN, agentType },
       ))
@@ -519,9 +525,13 @@ async function runItem(item, promises) {
 
     blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
     const verdictResult = await guarded(`inspect:${item.slug}:${i}`, () => structuredAgent(
-      withPromptOverrides(
-        inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
-        PROMPT_EXTRAS.inspector,
+      withWritingRules(
+        withPromptOverrides(
+          inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
+          PROMPT_EXTRAS.inspector,
+        ),
+        WRITING,
+        'verdict',
       ),
       {
         label: `inspect:${item.slug}:${i}`,
