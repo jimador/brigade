@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Fleet, Lane, Note, Snapshot, Weather } from '../../types'
+import type { Agent, Fleet, Lane, Memory, Note, Snapshot, Weather } from '../../types'
 import { boardDirFrom, laneOf, parseTicket, toLanes } from './lib/board.mjs'
 import { latest, ledgerTail, noteFrom, planInfo } from './lib/dish.mjs'
 import { applyEvent, prune } from './lib/fleet.mjs'
@@ -17,6 +17,9 @@ const selected = atom({ plugin: 'brigade', key: 'selected' } as const, null as s
 const dishes = atom({ plugin: 'brigade', key: 'dishes' } as const, {} as Record<string, string>)
 // The newest things agents wrote (reports, verdicts, briefs, memory updates), newest first.
 const notes = atom({ plugin: 'brigade', key: 'notes' } as const, [] as Note[])
+// The working memory of the agent the operator clicked. `lines` is null when the agent has no
+// memory file yet. It lives in state so that storing it redraws the pane straight away.
+const memory = atom({ plugin: 'brigade', key: 'memory' } as const, null as Memory | null)
 
 // How long a finished agent stays on the board before it leaves.
 const KEEP_MS = 120000
@@ -171,10 +174,6 @@ type Plan = ReturnType<typeof planInfo>
 // read again when its mtime moves, so quiet dishes cost a few folder listings per tick.
 let dishCache: Record<string, { mtimeMs: number; plan?: Plan; note?: Note | null }> = {}
 
-// The working memory of the agent the operator clicked, read on each tick. `lines` is null when
-// the agent has no memory file yet.
-let memory: { id: string; name: string; lines: string[] | null } | null = null
-
 // Reads every dish's plan to learn which ticket it belongs to, and gathers the newest notes
 // from the dishes that are still moving. Missing folders are skipped; a file that won't read
 // throws, and the board keeps what it had until the next tick.
@@ -225,18 +224,19 @@ async function refreshNotes($: EngineInterface) {
   if (!same(await read($, notes), nextNotes)) await update($, notes, () => nextNotes)
 }
 
-// Reads the working memory of the clicked agent, when it is one with a dish and an item.
+// Reads the working memory of the clicked agent, when it is one with a dish and an item, and
+// stores it only when it changed, so an idle board never redraws.
 async function refreshMemory($: EngineInterface) {
   const id = await read($, selected)
   const agent = id === null ? undefined : (await read($, fleet)).agents[id]
-  if (id === null || !agent || agent.dish == null || agent.item == null) {
-    memory = null
-    return
+  let next: Memory | null = null
+  if (id !== null && agent && agent.dish != null && agent.item != null) {
+    const root = (await $.session.root()).replace(/[\\/]+$/, '')
+    const path = `${root}/.brigade/dishes/${agent.dish}/state/${agent.item}.md`
+    const lines = (await $.fs.exists(path)) ? (ledgerTail(await $.fs.read(path), MEMORY_LINES) as string[]) : null
+    next = { id, name: agent.name, lines }
   }
-  const root = (await $.session.root()).replace(/[\\/]+$/, '')
-  const path = `${root}/.brigade/dishes/${agent.dish}/state/${agent.item}.md`
-  const lines = (await $.fs.exists(path)) ? (ledgerTail(await $.fs.read(path), MEMORY_LINES) as string[]) : null
-  memory = { id, name: agent.name, lines }
+  if (!same(await read($, memory), next)) await update($, memory, () => next)
 }
 
 // One line per note: time (UTC), who wrote it, for which item, and what it says.
@@ -268,6 +268,9 @@ const refresh = async ($: EngineInterface) => {
       const before = await read($, fleet)
       if ((prune(before, now, KEEP_MS) as Fleet).order.length !== before.order.length) {
         await update($, fleet, roster => prune(roster, now, KEEP_MS) as Fleet)
+        // Agents that left stop holding a tool-call count.
+        const after = await read($, fleet)
+        for (const id of [...toolLooks.keys()]) if (!Object.hasOwn(after.agents, id)) toolLooks.delete(id)
       }
     } catch {
       // The roster stays as it was.
@@ -372,7 +375,15 @@ export const register: Register = on => {
   })
 
   on('ui.message', async ($, e, next) => {
-    if (e.requestId === PANE) await selectFrom($, e.data)
+    if (e.requestId === PANE) {
+      await selectFrom($, e.data)
+      // Read the clicked agent's memory now rather than on the next tick, so it shows at once.
+      try {
+        await refreshMemory($)
+      } catch {
+        // The memory shown stays as it was until the next tick.
+      }
+    }
     return next(e)
   })
 
@@ -382,7 +393,8 @@ export const register: Register = on => {
     const { Box, Client, Markdown, Text } = $.ui.resolve(e)
     // What agents wrote, and the clicked agent's memory. Note text comes from files, so it only
     // ever goes through Text; the memory goes through one Markdown as a code block.
-    const shown = memory !== null && memory.id === snapshot.selected ? memory : null
+    const current = await read($, memory)
+    const shown = current !== null && current.id === snapshot.selected ? current : null
     const below = (
       <>
         <Text bold>NOTES</Text>

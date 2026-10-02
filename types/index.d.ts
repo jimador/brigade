@@ -21,6 +21,7 @@ export type Agent = {
 export type Fleet = { agents: Record<string, Agent>; order: string[] }
 export type Note = { at: number; dish: string; item: string; role: string; kind: string; gist: string }
 export type Snapshot = { lanes: Lane[]; agents: Agent[]; weather: Weather | null; selected: string | null; now: number }
+export type Memory = { id: string; name: string; lines: string[] | null }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -31,6 +32,7 @@ declare module 'claude-code' {
       selected: string | null
       notes: Note[]
       dishes: Record<string, string>
+      memory: Memory | null
     }
   }
 }
