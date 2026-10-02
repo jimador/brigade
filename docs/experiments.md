@@ -66,3 +66,23 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   choreography.
 - decision: reject
 - evidence: `docs/architecture.md` § Git model.
+
+### E-004 The ste-80 writing preset for work packets
+
+- date: 2026-10-03
+- hypothesis: an agent given a packet whose steps follow the `ste-80` preset
+  (`skills/brigade/writing/ste-80.md`) passes the packet's Verify step on the first attempt
+  more often than an agent given the same packet written as packets are today.
+- setup: the kit in `evals/experiments/writing-rules/` — one fixture repo (`fixture.sh`,
+  plain JavaScript, `node --test`) and six work items of graded difficulty, two of them with
+  a hazard a hasty reader gets wrong. Each item has a `plain.md` and a `ste-80.md` packet with
+  the same files, contracts, Verify command and facts; only the writing differs. Each
+  item-and-style cell runs at least three times on one model: a fresh fixture copy, one
+  agent, the packet as its whole instruction, one attempt, judged by the item's hidden test
+  through `verify.sh`. The grid repeats on a second model family when one is available.
+  Held constant: fixture, facts, Verify command, judge and model.
+- metric: first-attempt pass rate per style (passes / runs, with the run count), per model.
+- result: pending
+- decision: keep watching
+- evidence: `.brigade/evals/writing-rules/` (local run records, never committed); the kit's
+  `README.md` says how a run goes.

@@ -1,0 +1,44 @@
+diff --git a/src/slug.js b/src/slug.js
+index 59309d9..4750dc2 100644
+--- a/src/slug.js
++++ b/src/slug.js
+@@ -1,11 +1,16 @@
+ // Turns a title into a URL slug: lower-case letters and digits, with every run of
+-// other characters replaced by one dash. Leading and trailing dashes are dropped.
+-function slugify(title) {
++// other characters replaced by one separator. Leading and trailing separators are
++// dropped. The separator is a dash unless options.separator gives another one.
++function slugify(title, options = {}) {
++  const separator = options.separator === undefined ? '-' : options.separator
++  if (typeof separator !== 'string' || separator.length === 0) {
++    throw new TypeError('separator must be a non-empty string')
++  }
+   return String(title)
+     .toLowerCase()
+     .split(/[^a-z0-9]+/)
+     .filter((word) => word.length > 0)
+-    .join('-')
++    .join(separator)
+ }
+ 
+ module.exports = { slugify }
+diff --git a/test/slug.test.js b/test/slug.test.js
+index 59ee55d..f527e9d 100644
+--- a/test/slug.test.js
++++ b/test/slug.test.js
+@@ -9,3 +9,15 @@ test('slugify lower-cases and joins words with dashes', () => {
+ test('slugify drops punctuation at the ends', () => {
+   assert.equal(slugify('  -- Release notes: v2! --'), 'release-notes-v2')
+ })
++
++test('slugify joins words with the given separator', () => {
++  assert.equal(slugify('Hello World', { separator: '_' }), 'hello_world')
++  assert.equal(slugify('Hello World', {}), 'hello-world')
++})
++
++test('slugify rejects an empty separator', () => {
++  assert.throws(() => slugify('Hello World', { separator: '' }), {
++    name: 'TypeError',
++    message: 'separator must be a non-empty string',
++  })
++})

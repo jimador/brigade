@@ -1,0 +1,48 @@
+diff --git a/src/duration.js b/src/duration.js
+index 289d296..b1f77b1 100644
+--- a/src/duration.js
++++ b/src/duration.js
+@@ -1,11 +1,20 @@
+-// Reads a duration such as "90s", "5m" or "2h" and returns it in milliseconds.
+-// Anything else throws, so a typo in a config value fails loudly.
+-const UNIT_MS = { s: 1000, m: 60 * 1000, h: 60 * 60 * 1000 }
++// Reads a duration such as "90s", "5m", "2d" or "1h30m" and returns it in
++// milliseconds. A compound duration lists its parts from days down to seconds, each
++// unit at most once. Anything else throws, so a typo in a config value fails loudly.
++const UNIT_MS = { d: 24 * 60 * 60 * 1000, h: 60 * 60 * 1000, m: 60 * 1000, s: 1000 }
++const PATTERN = /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/
+ 
+ function parseDuration(text) {
+-  const match = /^(\d+)(s|m|h)$/.exec(String(text).trim())
+-  if (!match) throw new Error(`invalid duration: ${text}`)
+-  return Number(match[1]) * UNIT_MS[match[2]]
++  const trimmed = String(text).trim()
++  const match = PATTERN.exec(trimmed)
++  // The pattern also matches the empty string, which is not a duration.
++  if (!match || trimmed === '') throw new Error(`invalid duration: ${text}`)
++  const units = ['d', 'h', 'm', 's']
++  let total = 0
++  units.forEach((unit, index) => {
++    if (match[index + 1] !== undefined) total += Number(match[index + 1]) * UNIT_MS[unit]
++  })
++  return total
+ }
+ 
+ module.exports = { parseDuration }
+diff --git a/test/duration.test.js b/test/duration.test.js
+index b45ad59..85f60e6 100644
+--- a/test/duration.test.js
++++ b/test/duration.test.js
+@@ -11,3 +11,12 @@ test('parseDuration reads seconds, minutes and hours', () => {
+ test('parseDuration rejects an unknown unit', () => {
+   assert.throws(() => parseDuration('5w'), { message: 'invalid duration: 5w' })
+ })
++
++test('parseDuration reads days and compound durations', () => {
++  assert.equal(parseDuration('2d'), 172800000)
++  assert.equal(parseDuration('1h30m'), 5400000)
++})
++
++test('parseDuration rejects parts out of order', () => {
++  assert.throws(() => parseDuration('30m1h'), { message: 'invalid duration: 30m1h' })
++})

@@ -1,0 +1,47 @@
+diff --git a/src/date-range.js b/src/date-range.js
+index a952bff..3e94460 100644
+--- a/src/date-range.js
++++ b/src/date-range.js
+@@ -25,4 +25,22 @@ function parseRange(text) {
+   return { start, end }
+ }
+ 
+-module.exports = { parseRange }
++const DAY_MS = 24 * 60 * 60 * 1000
++
++// The number of calendar days in the range, counting both the start and the end.
++// Both ends sit at midnight UTC, so the gap is a whole number of days.
++function countDays(range) {
++  return Math.round((range.end.getTime() - range.start.getTime()) / DAY_MS) + 1
++}
++
++// Every day in the range as a YYYY-MM-DD string, start and end included. It works
++// on fresh Date objects so the range's own start and end never move.
++function eachDay(range) {
++  const days = []
++  for (let time = range.start.getTime(); time <= range.end.getTime(); time += DAY_MS) {
++    days.push(new Date(time).toISOString().slice(0, 10))
++  }
++  return days
++}
++
++module.exports = { parseRange, countDays, eachDay }
+diff --git a/test/date-range.test.js b/test/date-range.test.js
+index 2df22b3..357c701 100644
+--- a/test/date-range.test.js
++++ b/test/date-range.test.js
+@@ -15,3 +15,14 @@ test('parseRange rejects a range that ends before it starts', () => {
+ test('parseRange rejects a day that does not exist', () => {
+   assert.throws(() => parseRange('2026-02-30..2026-03-01'), /invalid date/)
+ })
++
++const { countDays, eachDay } = require('../src/date-range.js')
++
++test('countDays counts both ends', () => {
++  assert.equal(countDays(parseRange('2026-03-01..2026-03-05')), 5)
++  assert.equal(countDays(parseRange('2026-03-01..2026-03-01')), 1)
++})
++
++test('eachDay crosses a month end', () => {
++  assert.deepEqual(eachDay(parseRange('2026-02-28..2026-03-01')), ['2026-02-28', '2026-03-01'])
++})
