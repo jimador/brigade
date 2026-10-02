@@ -11,7 +11,7 @@ A description is any other prose in the packet, such as the goal.
 
 Apply the S rules to every step, every hazard and every description in the packet.
 
-- S1. Write one instruction in each sentence.
+- S1. Write one instruction in each sentence. If a sentence joins two actions with "and", "then" or a semicolon, split the sentence in two.
 - S2. Start each instruction with the verb in the imperative, as in "Run the tests".
 - S3. Keep each sentence in a step to 20 words or fewer.
 - S4. Keep each sentence in a hazard or a description to 25 words or fewer.

@@ -8,8 +8,9 @@ The file is a work packet written under a writing preset. Read its `### Steps` a
 `### Contracts you code against` sections.
 
 PASS only if all of these hold:
-1. Every sentence in Steps and in Preconditions & hazards gives exactly one instruction. A
-   sentence joined with "and", "then" or a semicolon into two actions fails this.
+1. No sentence in Steps or in Preconditions & hazards gives two instructions. A sentence
+   that joins two actions with "and", "then" or a semicolon fails this. A sentence may
+   state a fact instead of an instruction, such as what goes wrong in a hazard.
 2. Every instruction sentence starts with a verb in the imperative ("Open", "Add", "Run"),
    or with a condition clause ("If ...,") followed by that imperative verb.
 3. A condition comes before the instruction it limits ("If X, do Y", never "Do Y if X").

@@ -2182,6 +2182,35 @@ JS
     fail "the hostile writing plan was not validated quickly"
 }
 
+test_writing_long_step_grader() {
+  # The eval grader no-long-step must count words in a sentence, not in a line. It once
+  # failed every packet written under the preset, because a step holds a label and two
+  # short sentences on one line. The pattern comes from the grader file itself, so the
+  # file and this test cannot drift.
+  node - "$ROOT/evals/packet-follows-writing-preset/graders/no-long-step.md" <<'JS' ||
+const fs = require('fs')
+const text = fs.readFileSync(process.argv[2], 'utf8')
+const raw = /^pattern: '(.*)'$/m.exec(text)
+if (!raw) throw new Error('no single-quoted pattern: line in the grader')
+if (!/^match: not_contains$/m.test(text)) throw new Error('the grader no longer says match: not_contains')
+const re = new RegExp(raw[1].replace(/''/g, "'"))
+const words = (n) => Array.from({ length: n }, () => 'word').join(' ')
+const cases = [
+  ['1. **Explore (read-only, 1 file):** Read `src/profile.js` and no other file. If the file differs from the pasted anchor, report BLOCKED with what you found.', false, 'label and two short sentences'],
+  ['1. ' + words(19) + ' end.', false, 'a 20-word sentence'],
+  ['1. ' + words(20) + ' end.', true, 'a 21-word sentence'],
+  ['2. **Implement:** ' + words(20) + ' end.', true, 'a label then a 21-word sentence'],
+  ['2. **Implement:** ' + words(19) + ' end.', false, 'a label then a 20-word sentence'],
+  ['- ' + words(30) + ' end.', false, 'a long bullet that is not a numbered line'],
+  ['1. Short.\n2. ' + words(21) + ' end.', true, 'a long step on the second line'],
+]
+for (const [line, want, label] of cases) {
+  if (re.test(line) !== want) throw new Error(`${label}: expected ${want ? 'a match' : 'no match'}`)
+}
+JS
+    fail "the no-long-step grader does not count words in a sentence"
+}
+
 test_guard_arithmetic() {
   # $(( )) arithmetic is inert data, not a command substitution or a heredoc.
   assert_guard_allows 'git commit -m "$((1+1))"'
@@ -4455,6 +4484,7 @@ test_validate_retro_readiness
 test_validate_analyst_modes
 test_validate_writing_checks
 test_validate_writing_cost
+test_writing_long_step_grader
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_execute_verdict_scribe
