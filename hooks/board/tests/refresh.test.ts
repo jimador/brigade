@@ -14,8 +14,11 @@ type Listing = { name: string; kind: 'file' | 'dir' | 'other'; size: number; mti
 // its text and mtime; folders are implied by the paths. Tests change `files` as they go, and each
 // test uses its own mtimes so the board's file caches, which live for the whole module, never
 // hand one test another's files. Every path the board lists or reads is written down in `touched`.
-function world(on: On, files: Record<string, { text: string; mtimeMs: number }>) {
+// The session's folder is `/repo` unless a test names another. `passes` counts the board's
+// refresh passes, through the one context reading each pass makes.
+function world(on: On, files: Record<string, { text: string; mtimeMs: number }>, root = '/repo') {
   const touched: string[] = []
+  let passes = 0
   const dirsOf = () => {
     const dirs = new Set<string>()
     for (const path of Object.keys(files)) {
@@ -25,7 +28,7 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
     return dirs
   }
   on('ui.open', async () => ({ value: { isPlaced: true } }))
-  on('session.root', async () => ({ value: '/repo' }))
+  on('session.root', async () => ({ value: root }))
   on('fs.exists', async ($$, e) => ({ value: e.path in files || dirsOf().has(e.path) }))
   on('fs.read', async ($$, e) => {
     touched.push(e.path)
@@ -45,14 +48,17 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>)
     }
     return { value: [...names.values()] }
   })
-  on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 58000, window: 100000, percent: 58 }, rateLimits: [] } }))
+  on('session.usage', async () => {
+    passes++
+    return { value: { startedAt: 0, context: { tokens: 58000, window: 100000, percent: 58 }, rateLimits: [] } }
+  })
   on('command.register', async () => ({ value: {} }))
   on('tool.call', async () => ({ result: 'ok' }))
   on('turn.complete', async () => ({ text: '' }))
   on('turn.step', async function* () {
     return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: USAGE } as never
   })
-  return { touched }
+  return { touched, passes: () => passes }
 }
 
 const ticket = (id: string, status: string) => `---\nid: ${id}\ntitle: Ticket ${id}\nstatus: ${status}\n---\n`
@@ -225,5 +231,91 @@ test('a dish with a plan days old still reads its notes while an agent works it,
   files[`${DISH}/reports/token-bucket-cook.md`] = { text: REPORT, mtimeMs: at + 50 }
   await clock.advance(2000)
   expect(await laneOfCard(ui, 'token-bucket')).toBe('In review')
+  await ui.unmount()
+})
+
+// A session that runs inside a git worktree of the main checkout. The worktree has no .brigade/
+// of its own: that folder is untracked and lives only in the main checkout.
+const MAIN = '/path/to/repo'
+const ALPHA = `${MAIN}/.brigade/worktrees/alpha`
+
+test('a session in a git worktree reads .brigade/ from the main checkout and shows the dish', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const { touched, passes } = world(
+    on,
+    {
+      [`${MAIN}/.brigade/config.md`]: { text: '- source: local\n- database_id: .brigade/board\n', mtimeMs: 300 },
+      [`${MAIN}/.brigade/board/acme-12.md`]: { text: ticket('acme-12', 'in_progress'), mtimeMs: 301 },
+      [`${MAIN}/.brigade/dishes/acme-limits/PLAN.md`]: { text: PLAN, mtimeMs: at },
+    },
+    ALPHA,
+  )
+  let asked = 0
+  on('session.repo', async () => {
+    asked++
+    return { value: { root: `${MAIN}/`, remote: null, internal: false, name: 'repo' } }
+  })
+  await $.session.start({ cwd: ALPHA }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  const ui = await open($)
+  // The header names the repository, not the worktree folder, and the ticket comes from the
+  // main checkout's ticket folder.
+  expect(await ui.find({ type: 'Text', text: /^repo · feat\/limits/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Ticket acme-12/, in: 'stage' })).toBeDefined()
+  expect(await laneOfCard(ui, 'token-bucket')).toBe('To do')
+  expect(await laneOfCard(ui, 'usage-docs')).toBe('To do')
+  expect(touched).toContain(`${MAIN}/.brigade/board/acme-12.md`)
+  expect(touched.filter(path => path.startsWith(`${ALPHA}/`))).toEqual([])
+  // However many passes run, the repository is asked about once.
+  await clock.advance(2000)
+  await clock.advance(2000)
+  expect(passes()).toBeGreaterThanOrEqual(3)
+  expect(asked).toBe(1)
+  await ui.unmount()
+})
+
+test('outside a repository the board reads from the session folder, as before', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const plain = '/path/to/plain'
+  const { touched, passes } = world(on, { [`${plain}/.brigade/dishes/acme-limits/PLAN.md`]: { text: PLAN, mtimeMs: at } }, plain)
+  let asked = 0
+  on('session.repo', async () => {
+    asked++
+    return { value: null }
+  })
+  await $.session.start({ cwd: plain }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  const ui = await open($)
+  expect(await ui.find({ type: 'Text', text: /^plain · feat\/limits/, in: 'stage' })).toBeDefined()
+  expect(await laneOfCard(ui, 'token-bucket')).toBe('To do')
+  expect(touched.every(path => path.startsWith(`${plain}/`))).toBe(true)
+  // "Not in a repository" is an answer, so it is not asked again.
+  await clock.advance(2000)
+  await clock.advance(2000)
+  expect(passes()).toBeGreaterThanOrEqual(3)
+  expect(asked).toBe(1)
+  await ui.unmount()
+})
+
+test('when the repository call fails the board reads from the session folder, asking at most once a pass', async ($, on) => {
+  const clock = mock.clock(on)
+  const at = await clock.now()
+  const scratch = '/path/to/scratch'
+  const { touched, passes } = world(on, { [`${scratch}/.brigade/dishes/acme-limits/PLAN.md`]: { text: PLAN, mtimeMs: at } }, scratch)
+  let asked = 0
+  on('session.repo', async () => {
+    asked++
+    throw new Error('git is not answering')
+  })
+  await $.session.start({ cwd: scratch }).catch(err => expect(String(err)).toMatch(/no implementation for session\.start/))
+  const ui = await open($)
+  expect(await ui.find({ type: 'Text', text: /^scratch · feat\/limits/, in: 'stage' })).toBeDefined()
+  expect(await laneOfCard(ui, 'token-bucket')).toBe('To do')
+  expect(touched.every(path => path.startsWith(`${scratch}/`))).toBe(true)
+  // A failure is not remembered for good: the next pass asks again, but never more than once.
+  await clock.advance(2000)
+  await clock.advance(2000)
+  expect(asked).toBeGreaterThanOrEqual(2)
+  expect(asked).toBeLessThanOrEqual(passes())
   await ui.unmount()
 })

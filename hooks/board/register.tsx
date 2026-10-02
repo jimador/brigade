@@ -80,9 +80,47 @@ const learn = async ($: EngineInterface, event: { type: 'tool'; id: string; path
   }
 }
 
-// The session's root folder without a trailing slash, and its last part, which names the repo.
+// The folder the board reads `.brigade/` from, without a trailing slash, and its last part, which
+// names the repo. It is the repository's root, because in a git worktree the session's own folder
+// has no `.brigade/`: that folder is untracked and lives only in the main checkout, and for a
+// worktree the engine answers with the main checkout's root. Outside a repository, or when the
+// engine can't say, it is the session's folder, as it always was.
+//
+// The board wants this several times a tick, and asking for the repository can be slow, so the
+// answer is kept for as long as the session's folder stays the same. A failed ask is only kept
+// until the next pass, so a hiccup at the start doesn't leave the board empty for good, and a
+// call that keeps failing still costs one ask a pass at most. The ask itself is kept, not just
+// its answer, so a click that lands while it is out waits for it instead of asking again.
+type RepoAsk = { session: string; pass: number; failed: boolean; root: Promise<string> }
+let repoAsk: RepoAsk | null = null
+// Goes up at the start of every refresh pass.
+let pass = 0
+
 async function rootOf($: EngineInterface) {
-  return (await $.session.root()).replace(/[\\/]+$/, '')
+  const session = (await $.session.root()).replace(/[\\/]+$/, '')
+  const kept = repoAsk
+  if (kept !== null && kept.session === session && !(kept.failed && kept.pass !== pass)) return kept.root
+  const ask: RepoAsk = { session, pass, failed: false, root: Promise.resolve(session) }
+  ask.root = repoRootOf($, session, () => {
+    ask.failed = true
+  })
+  repoAsk = ask
+  return ask.root
+}
+
+// The repository's root when the engine gives one, or the session's folder. No repository is an
+// answer; a throw or an answer without a usable root is a failure, reported through `failed`.
+async function repoRootOf($: EngineInterface, session: string, failed: () => void) {
+  try {
+    const repo: unknown = await $.session.repo()
+    if (repo == null) return session
+    const root = isPlain(repo) ? repo.root : undefined
+    if (typeof root === 'string' && root !== '') return root.replace(/[\\/]+$/, '')
+  } catch {
+    // Read from the session's folder until the next pass asks again.
+  }
+  failed()
+  return session
 }
 
 function repoOf(root: string) {
@@ -344,6 +382,7 @@ let running: Promise<void> | null = null
 const refresh = async ($: EngineInterface) => {
   if (running) return running
   running = (async () => {
+    pass++
     try {
       // Agents that finished more than two minutes ago leave the board. Only a pass that
       // drops someone writes, so an idle board never redraws.
