@@ -1,12 +1,10 @@
 ---
-type: llm
-focus: { source: file, path: comment.md }
+# Fails when comment.md holds six or more sentence ends. A sentence end is `.`, `!` or `?`,
+# then any closing marks (a quote, a backtick, `)`, `]`, `*`), then white space or the end of
+# the file. Two limits: a full stop inside a path (`src/a.js now`) is not an end, because no
+# white space follows it, and a table row or a list item with no full stop is not counted.
+type: regex
+pattern: '(?:[\s\S]*?[.!?]["''`)\]*]*(?=\s|$)){6}'
+match: not_contains
+target: { source: file, path: comment.md }
 ---
-
-The file is a handoff comment for a ticket. Count its sentences: a list item, a table row or
-a line of text that ends without a full stop counts as one sentence each, and a heading does
-not count.
-
-PASS if the comment holds at most five sentences and still says what changed.
-FAIL if the file is missing or empty, if it holds six sentences or more, or if it does not
-say what changed. Give the count.

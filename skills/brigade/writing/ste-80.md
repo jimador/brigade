@@ -11,7 +11,7 @@ A description is any other prose in the packet, such as the goal.
 
 Apply the S rules to every step, every hazard and every description in the packet.
 
-- S1. Write one instruction in each sentence. If a sentence joins two actions with "and", "then" or a semicolon, split the sentence in two.
+- S1. Write one instruction in each sentence. If a sentence joins two actions with "and", "then" or a semicolon, split the sentence in two. Write "Report BLOCKED with the output", not "Stop and report BLOCKED".
 - S2. Start each instruction with the verb in the imperative, as in "Run the tests".
 - S3. Keep each sentence in a step to 20 words or fewer.
 - S4. Keep each sentence in a hazard or a description to 25 words or fewer.
@@ -31,9 +31,9 @@ Apply the S rules to every step, every hazard and every description in the packe
 
 Apply the C rules to the contracts and to each acceptance criterion in the packet.
 
-- C1. Write the requirement keywords MUST, SHOULD and MAY in capitals.
+- C1. State each requirement in a contract or a criterion with MUST, SHOULD or MAY, in capitals.
 - C2. Give each keyword the usual meaning. MUST is required, SHOULD applies unless the packet states a reason, and MAY is optional.
-- C3. Write each criterion as a fact that a command or a reader can observe, as in "`./test/regression.sh` exits 0".
+- C3. Write each criterion as a fact that a command or a reader can observe, as in "`./test/regression.sh` MUST exit 0".
 - C4. State one fact in each criterion. If a criterion holds two facts, split the criterion in two.
 
 ## Any language model must be able to read it

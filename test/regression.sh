@@ -2211,6 +2211,34 @@ JS
     fail "the no-long-step grader does not count words in a sentence"
 }
 
+test_writing_sentence_count_grader() {
+  # The eval grader at-most-five-sentences must count sentence ends with a pattern. A judge
+  # once failed two comments of exactly five sentences. The pattern comes from the grader
+  # file itself, so the file and this test cannot drift.
+  node - "$ROOT/evals/writing-rules-reach-ticket-comment/graders/at-most-five-sentences.md" <<'JS' ||
+const fs = require('fs')
+const text = fs.readFileSync(process.argv[2], 'utf8')
+const raw = /^pattern: '(.*)'$/m.exec(text)
+if (!raw) throw new Error('no single-quoted pattern: line in the grader')
+if (!/^type: regex$/m.test(text)) throw new Error('the grader is not type: regex')
+if (!/^match: not_contains$/m.test(text)) throw new Error('the grader does not say match: not_contains')
+const re = new RegExp(raw[1].replace(/''/g, "'"))
+const sentences = (n) => Array.from({ length: n }, (_, i) => `Sentence ${i} is here.`).join(' ')
+const paths = (n) => Array.from({ length: n }, () => 'Open src/a.js now.').join(' ')
+const cases = [
+  [sentences(5), false, 'five sentences'],
+  [sentences(5) + '\n', false, 'five sentences and a newline'],
+  [sentences(6), true, 'six sentences'],
+  [paths(5), false, 'five sentences that each hold a path'],
+  [sentences(5) + ' He wrote "done."', true, 'six sentences, the last with a closing quote'],
+]
+for (const [comment, want, label] of cases) {
+  if (re.test(comment) !== want) throw new Error(`${label}: expected ${want ? 'a match' : 'no match'}`)
+}
+JS
+    fail "the at-most-five-sentences grader does not count sentence ends"
+}
+
 test_guard_arithmetic() {
   # $(( )) arithmetic is inert data, not a command substitution or a heredoc.
   assert_guard_allows 'git commit -m "$((1+1))"'
@@ -4485,6 +4513,7 @@ test_validate_analyst_modes
 test_validate_writing_checks
 test_validate_writing_cost
 test_writing_long_step_grader
+test_writing_sentence_count_grader
 test_execute_ledger_wiring
 test_execute_artifact_verification
 test_execute_verdict_scribe
