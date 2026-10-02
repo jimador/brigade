@@ -841,6 +841,10 @@ let drawnAs: 'region' | 'picture' | 'rows' | 'lines' | null = null
 let pictureDrawnAt = PANE_COLUMNS
 // The walk's clock while the pane is open. There is never more than one.
 let walker: { cancel(): void } | null = null
+// How many times the pane has closed. An open notes it before writing the stage and checks it
+// after, so it sees a close that came in at any point meanwhile, whatever order the state calls
+// ran in.
+let closes = 0
 // A region has reported in. Kept here as well as in state so that a step in a healthy terminal
 // returns without reading anything.
 let regionReady = false
@@ -854,22 +858,28 @@ let stepping = false
 // carries over, so a terminal whose region drew keeps it and never waits.
 async function openStage($: EngineInterface) {
   if (walker !== null) return
+  const seen = closes
   const at = await $.clock.now()
   await update($, stage, current => ({ ...current, open: true, openedAt: at, plain: false }))
-  // A close that came in while this was writing has nothing to cancel yet, and leaves the stage
-  // saying closed. Starting the clock then would keep it running for a pane that isn't there.
-  const now = await read($, stage)
-  if (!now.open) return
-  // Another open may have started the clock while this one was writing or reading.
+  // The pane closed while this was writing. That close had no clock to cancel, and may have read
+  // the stage before this write and left it alone, so the stage is put back to closed here and no
+  // clock starts for a pane that isn't there.
+  if (closes !== seen) {
+    await update($, stage, current => ({ ...current, open: false }))
+    return
+  }
+  // Another open may have started the clock while this one was writing.
   if (walker !== null) return
   walker = $.clock.every(STEP_MS, () => {
     void step($)
   })
 }
 
-// Stops the walk when the pane closes. The clock goes first, so a failed write can't leave it
-// running. The sprites keep their places for the next open.
+// Stops the walk when the pane closes. The close is counted before anything else, with nothing
+// awaited first, so an open still writing the stage always sees it. The clock goes next, so a
+// failed write can't leave it running. The sprites keep their places for the next open.
 async function closeStage($: EngineInterface) {
+  closes += 1
   const running = walker
   walker = null
   running?.cancel()

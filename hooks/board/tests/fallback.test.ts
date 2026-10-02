@@ -569,3 +569,46 @@ test('a close that lands while the open is writing the stage leaves no clock', a
   // No step ran: nothing read the stage, and arrange was never called.
   expect(b.reads).toEqual([])
 })
+
+test('a close that reads the stage before the open writes it still leaves no clock', async () => {
+  const b = bench()
+  // Swapped with defineProperty, as above. The open's first look at the stage, the one its write
+  // starts from, is held, so the whole close runs before the open writes anything.
+  const swap = (target: object, name: string, value: unknown) => Object.defineProperty(target, name, { value, configurable: true })
+  const held: (() => void)[] = []
+  let holding = false
+  let reading = false
+  swap(b.reads, 'push', (...keys: string[]) => {
+    reading = true
+    return Array.prototype.push.apply(b.reads, keys)
+  })
+  swap(b.kept, 'get', (key: string) => {
+    const read = reading
+    reading = false
+    if (!read || !holding || key !== 'stage') return Map.prototype.get.call(b.kept, key)
+    holding = false
+    // Answered as the bench answers a key it doesn't hold yet.
+    return new Promise(resolve => held.push(() => resolve(Map.prototype.get.call(b.kept, key) ?? { value: undefined, version: 0 })))
+  })
+  // Drawn once as a picture, so a step that does run reads the stage and walks.
+  await b.render('desktop')
+  holding = true
+  let opened = false
+  const opening = b.open().then(() => {
+    opened = true
+  })
+  for (let i = 0; i < 50 && !opened && held.length < 1; i++) await new Promise(resolve => setTimeout(resolve, 1))
+  expect(held).toHaveLength(1)
+  // The pane closes while the open is about to write. The close finds the stage not open yet, so
+  // it has nothing to cancel and nothing to write.
+  await b.close()
+  expect(b.kept.has('stage')).toBe(false)
+  held.shift()?.()
+  await opening
+  expect(b.kept.get('stage')?.value).toMatchObject({ open: false })
+  expect(b.live()).toHaveLength(0)
+  b.reads.length = 0
+  await b.advance(5000)
+  // No step ran: nothing read the stage, and arrange was never called.
+  expect(b.reads).toEqual([])
+})
