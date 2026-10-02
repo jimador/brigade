@@ -14,13 +14,29 @@ function svg() {
   return fs.readFileSync(SVG, 'utf8')
 }
 
+// The text a frame shows: its own text plus the text of everything it points at, followed down
+// through every <use>.
+function frameText(text, frameId) {
+  const group = text.match(new RegExp(`<g class="f" id="${frameId}">(.*?)</g>`))
+  assert.ok(group, `no frame ${frameId}`)
+  const defs = new Map([...text.matchAll(/<g id="([^"]+)">(.*?)<\/g>/g)].map((m) => [m[1], m[2]]))
+  const textOf = (body) => [
+    ...[...body.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]),
+    ...[...body.matchAll(/<use href="#([^"]+)"/g)].map((m) => {
+      assert.ok(defs.has(m[1]), `missing #${m[1]}`)
+      return textOf(defs.get(m[1]))
+    }),
+  ].join('\n')
+  return textOf(group[1])
+}
+
 test('the committed demo is exactly what the script draws', () => {
   const run = spawnSync(process.execPath, [SCRIPT, '--check'], { encoding: 'utf8' })
   assert.equal(run.status, 0, `--check failed: ${run.stdout}${run.stderr}`)
 })
 
 test('the demo stays small enough for a README', () => {
-  assert.ok(fs.statSync(SVG).size <= 350 * 1024, `${fs.statSync(SVG).size} bytes`)
+  assert.ok(fs.statSync(SVG).size <= 600 * 1024, `${fs.statSync(SVG).size} bytes`)
 })
 
 test('it animates with CSS, honours reduced motion, and says what it is', () => {
@@ -49,16 +65,38 @@ test('every <use> points at something defined in the file', () => {
   for (const ref of refs) assert.ok(ids.has(ref), `missing #${ref}`)
 })
 
-test('it has between 30 and 110 frames', () => {
-  const frames = (svg().match(/<g class="f"/g) ?? []).length
-  assert.ok(frames >= 30 && frames <= 110, `${frames} frames`)
+test('it has at most 180 frames and loops in 30 seconds or less', () => {
+  const text = svg()
+  const frames = (text.match(/<g class="f"/g) ?? []).length
+  assert.ok(frames >= 20 && frames <= 180, `${frames} frames`)
+  const loop = text.match(/\.f\{[^}]*animation:(\d+)ms/)
+  assert.ok(loop, 'no loop length')
+  assert.ok(Number(loop[1]) <= 30_000, `${loop[1]} ms`)
 })
 
-test('the cast and every weather word show up', () => {
+test('it shows the task board: header, lanes, pills, panels, legend and the cast', () => {
   const text = svg()
-  for (const word of ['Basil', 'Sage', 'Miso', 'Nori', 'Clove', 'CLEAR', 'CLOUDY', 'SHOWERS', 'STORM']) {
-    assert.ok(text.includes(word), `missing ${word}`)
+  const words = [
+    'Context', 'To do', 'Cooking', 'In review', 'Rework', 'Done', 'sent back · 2 findings', 'second pass',
+    'Messages', 'Learnings in play', 'Color:', 'Basil', 'Sage', 'Miso', 'Nori', 'Clove',
+  ]
+  for (const word of words) assert.ok(text.includes(word), `missing ${word}`)
+})
+
+test('the old board is gone: no weather words and no bench', () => {
+  const text = svg()
+  for (const word of ['CLEAR', 'CLOUDY', 'SHOWERS', 'STORM', 'BENCH']) {
+    assert.ok(!text.includes(word), `found ${word}`)
   }
+})
+
+test('under reduced motion the one frame left standing is the hover card on Miso', () => {
+  const text = svg()
+  const still = text.match(/@media \(prefers-reduced-motion:reduce\)\{[^}]*\}#(f\d+)\{visibility:visible\}\}/)
+  assert.ok(still, 'no reduced-motion frame')
+  const shown = frameText(text, still[1])
+  assert.match(shown, /Miso · cook/)
+  assert.match(shown, /item token-bucket/)
 })
 
 test('block characters are drawn as shapes, never as text', () => {

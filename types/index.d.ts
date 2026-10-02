@@ -66,7 +66,6 @@ declare module 'claude-code' {
       lanes: Lane[]
       fleet: Fleet
       weather: Weather | null
-      selected: string | null
       notes: Note[]
       dishes: Record<string, string>
       project: Project

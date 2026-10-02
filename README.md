@@ -153,25 +153,72 @@ and [docs/overrides.md](docs/overrides.md).
 ## The board
 
 <p align="center">
-  <img src="docs/assets/svg/board-demo.svg" width="720" alt="The board at work: agents walk in to stand under the tickets they pick up, the hover card shows a cook's model and tokens, and tickets move through review to done as the weather turns from clear to storm">
+  <img src="docs/assets/svg/board-demo.svg" width="720" alt="The task board playing one run of a dish: a scout researches, two cooks start, an inspector sends the token bucket back with two findings and its detail box opens, a fresh cook makes a second pass, and both items reach Done as the context meter fills">
 </p>
 
-Run `/brigade-board` to open a pane with the ticket board in six lanes: BACKLOG, TODO,
-COOKING, IN REVIEW, BLOCKED and DONE. BACKLOG holds `backlog`, `scoping` and `design` tickets,
-plus any status the other lanes don't name. Each lane shows its first tickets as chips and a
-`+N` count of the rest; a ticket an agent is working comes first, so it shows however full its
-lane is. Every agent in the session shows as a pixel sprite; a bigger model draws a bigger
-sprite, and the name tag carries the role mark. Hover a sprite for its model, role, item,
-state, tokens and time; click it to show its working memory under the board. The top row
-reads context-window fill as weather: clear, cloudy, showers, storm, compact soon.
+Run `/brigade-board` to open the task board in a pane. While a dish is being worked, the header
+names the repo and the dish's delivery branch, the ticket's title, and a detail line with the
+ticket, its kind, how many work items are done and the service tier. At the top right, the context meter shows how full the session's context
+window is, as a percent and a bar that turns amber at half full and red at three quarters.
 
-An agent stands under its ticket once something it reads or writes names the dish, and that
-dish's `PLAN.md` names the ticket; until then it waits on the bench. The board lists and reads
-whatever folder `.brigade/config.md` names as the board, and writes no files. It needs a Claude
-Code build with mods (function hooks).
+Below the header, five lanes hold one card for each work item of the dish being worked, titled
+by the first sentence of the item's goal. An item goes in the first lane whose rule matches,
+looking at who is working it now, then at its newest report and verdict, then at the plan's own
+status:
 
-The demo above is drawn by the board's own drawing code, played through a made-up session by
-`scripts/board-demo`.
+- **To do** holds items the plan has not dispatched yet; a heavy item carries a `heavy` pill.
+- **Cooking** holds an item a cook is working, or one the plan has dispatched; when a cook works
+  an item a review has already failed, the card says `second pass`.
+- **In review** holds an item an inspector is working, or whose newest cook report no verdict
+  has answered yet, or that the plan marks in review.
+- **Rework** holds an item whose newest verdict is FAIL with no report since, with a
+  `sent back · N findings` pill, or whose newest report says blocked; the plan's `rework` and
+  `blocked` statuses land here too.
+- **Done** holds an item whose newest verdict is PASS, unless the plan has sent it round again,
+  or that the plan marks done.
+
+A lane shows four cards (Done shows its two newest) and counts the rest as `+N more`; a card an
+agent is working always shows. When no dish is being worked (no agent is working one, and no
+plan that changed in the last day has unfinished items), the lanes show the board's tickets
+instead, sorted into the same five lanes by status, and the header reads `Ticket board` with the
+ticket count.
+
+Every agent in the session is a retro pixel sprite, standing on the card it works, or with the
+crew under the lanes when its card isn't on the board. A bigger model draws a bigger sprite
+(haiku, sonnet, opus, fable, smallest to largest), coloured by its model family as the legend at
+the bottom right shows; a finished agent turns grey and a failed one red. Each sprite carries
+its role mark, name and role (`♨ Miso · cook`) and an activity line: what its latest tool call
+does, such as `reading gateway.ts`, `editing bucket.ts` or `running tests`, and `finished` once
+it is done. The role shows once the board can tell it, from the agent's type or label or from
+what it writes (an edit in a worktree makes a cook, a verdict an inspector, a brief a scout);
+until then it reads `agent`. A new sprite walks in from the left edge, and a sprite walks to its
+card's new lane when the card moves, a step every quarter second, never overlapping another
+sprite or a name line. Point at a sprite for a hover card with its model, item, state, tokens
+and running time. A finished agent stays on the board for two minutes.
+
+The Messages panel shows the newest four messages, made from the notes agents leave in the dish
+folder: a cook's report reads `Miso → inspector: token-bucket ready for review`, a failed verdict
+goes from the inspector back to the cook with its first finding, and a passed verdict, a blocked
+report, a scout's brief and a plan check go to the planner. The cook or inspector in a message
+is named when exactly one agent in that role is on the item, and goes by the role otherwise. The
+Learnings panel lists up to five of the newest learnings in `.brigade/LEARNINGS.md`: each `## `
+heading, or each bullet of a dated retro section.
+
+Click a card, an agent or a message to open a detail box over the board. A work item's box has
+its goal, files, dependencies, attempts, newest cook report, newest review with its findings,
+and every agent on the item; a ticket's box has its title, kind, assignee and goal; an agent's
+has its model, item, activity, tokens, running time and the tail of its working memory; a
+message's has its text, its item, the file it came from and the start of that file. Click `[x]`
+or anywhere off the box to close it.
+
+The pane asks its dock for 124 columns, enough for five lanes side by side; below 104 columns
+the lanes wrap into bands, and below 70 the two panels stack. The board reads the ticket folder
+`.brigade/config.md` names, the dish folders under `.brigade/dishes/` and
+`.brigade/LEARNINGS.md`, and writes no files. It needs a Claude Code build with mods (function
+hooks).
+
+The demo above is generated by `scripts/board-demo`, which plays one made-up run through the
+board's own code and draws every frame with it; the whole run plays in under 30 seconds.
 
 ## What ships
 
@@ -197,7 +244,7 @@ The demo above is drawn by the board's own drawing code, played through a made-u
 | `scripts/board-demo` | regenerates the board demo in this README from the board's own drawing code; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
 | `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
-| `hooks/board/` | the live board pane (`/brigade-board`): the ticket board with agents as pixel sprites sized by model, a context weather gauge, and a notes panel |
+| `hooks/board/` | the live board pane (`/brigade-board`): the task board with agents as pixel sprites sized by model, a context meter, Messages and Learnings panels, and a detail box on click |
 | `evals/` | `claude plugin eval` suite: eight expected-workflow cases with scaffolded fixtures; results stay local |
 | `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
 
