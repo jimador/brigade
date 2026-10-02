@@ -133,6 +133,13 @@ test('safeText drops zero-width and combining marks', () => {
   assert.equal(safeText('a\u200bb\ufeffc\u2060d\ufe0f'), 'abcd')
 })
 
+test('safeText drops line separators and the marks that reorder text', () => {
+  assert.equal(safeText('a\u202eb\u2028c\u2066d'), 'abcd')
+  const all = '\u2028\u2029\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069'
+  assert.equal(safeText(`x${all}y`), 'xy')
+  assert.equal(cellWidth(`ab\u202e`), 2)
+})
+
 test('cellWidth counts wide characters as two cells', () => {
   assert.equal(cellWidth('日本'), 4)
   assert.equal(cellWidth('e\u0301'), 1)

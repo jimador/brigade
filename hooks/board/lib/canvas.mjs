@@ -16,8 +16,10 @@ function coord(n) {
 
 // Control characters would move the cursor or recolour the terminal, so they become a space.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
-// Zero-width characters and combining marks take no cell of their own, so they are dropped.
-const INVISIBLE = /[\u0300-\u036f\u200b-\u200f\u2060\ufe00-\ufe0f\ufeff]/g
+// Zero-width characters and combining marks take no cell of their own, so they are dropped. So
+// are the line and paragraph separators, which can break a row, and the direction marks that
+// make a terminal draw the rest of a row backwards (U+202A to U+202E, U+2066 to U+2069).
+const INVISIBLE = /[\u0300-\u036f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufe00-\ufe0f\ufeff]/g
 
 // Code point ranges a terminal draws two cells wide: CJK, Hangul, fullwidth forms and emoji.
 const WIDE = [
@@ -42,8 +44,8 @@ function cellsOf(ch) {
   return isWide(ch) ? 2 : 1
 }
 
-// Text made safe to draw: control characters become a space and invisible marks are dropped,
-// so every character left takes one or two whole cells.
+// Text made safe to draw: control characters become a space and invisible marks, separators and
+// direction marks are dropped, so every character left takes one or two whole cells.
 export function safeText(text) {
   return String(text ?? '').replace(INVISIBLE, '').replace(CONTROL, ' ')
 }

@@ -263,6 +263,22 @@ test('workCards makes one card per item titled by the first sentence of its goal
   assert.deepEqual(workCards(null, null, null), [])
 })
 
+test('a card title is at most 160 characters, cut with an ellipsis', () => {
+  const endless = 'count calls per customer '.repeat(40).slice(0, 1_000)
+  const [card] = workCards([item({ goal: endless })], [], [])
+  assert.equal(card.title.length, 160)
+  assert.ok(card.title.endsWith('…'))
+  assert.equal(card.title.slice(0, 159), endless.slice(0, 159))
+  const late = workCards([item({ goal: `${'refill '.repeat(50)}the bucket. Then more.` })], [], [])[0]
+  assert.equal(late.title.length, 160)
+  assert.ok(late.title.endsWith('…'))
+  const exact = 'x'.repeat(159) + '.'
+  assert.equal(workCards([item({ goal: exact })], [], [])[0].title, exact)
+  const [ticket] = ticketCards([{ id: 'ACME-9', title: 'y'.repeat(5_000), status: 'todo' }], () => 'todo')
+  assert.equal(ticket.title.length, 160)
+  assert.ok(ticket.title.endsWith('…'))
+})
+
 test('ticketCards puts each board status in its lane', () => {
   const laneOf = (s) => ({ scoping: 'backlog', backlog: 'backlog', todo: 'todo', in_progress: 'in_progress', in_review: 'in_review', blocked: 'blocked', done: 'done' })[s] ?? 'backlog'
   const tickets = [

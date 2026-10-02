@@ -263,11 +263,29 @@ function firstSentence(text) {
   return goal
 }
 
+// The longest card title. Titles come from files, and a goal with no full stop could otherwise
+// hand the board a whole file as one title.
+const TITLE_MAX = 160
+
+// Cuts text longer than `max` characters to `max`, the last one an ellipsis. A character made of
+// two halves is never cut in two.
+function capped(text, max) {
+  if (text.length <= max) return text
+  let cut = text.slice(0, max - 1)
+  const last = cut.charCodeAt(cut.length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1)
+  return cut + '…'
+}
+
 // One card per plan item, in plan order, titled by the first sentence of its goal (or its slug).
 export function workCards(items, notes, agents) {
   return (items ?? [])
     .filter((item) => item && typeof item.slug === 'string' && item.slug !== '')
-    .map((item) => ({ id: item.slug, title: firstSentence(item.goal) || item.slug, ...phaseOf(item, notes, agents) }))
+    .map((item) => ({
+      id: item.slug,
+      title: capped(firstSentence(item.goal) || item.slug, TITLE_MAX),
+      ...phaseOf(item, notes, agents),
+    }))
 }
 
 // How the board's own lanes fold into the five phases.
@@ -283,7 +301,7 @@ export function ticketCards(tickets, laneOf) {
     const id = String(t.id)
     const key = typeof laneOf === 'function' ? laneOf(t.status) : 'backlog'
     const phase = TICKET_PHASES.get(key) ?? 'todo'
-    const title = typeof t.title === 'string' && t.title !== '' ? t.title : id
+    const title = capped(typeof t.title === 'string' && t.title !== '' ? t.title : id, TITLE_MAX)
     if (phase === 'rework') return { id, title, phase, tag: 'blocked', alert: true }
     return { id, title, phase, tag: typeof t.kind === 'string' && t.kind !== '' ? t.kind : null, alert: false }
   })

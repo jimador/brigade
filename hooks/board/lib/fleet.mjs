@@ -235,19 +235,127 @@ function runsTestScript(piece) {
   return path.includes('/test/') || path.includes('/tests/')
 }
 
+// Commands that only set up the shell (change folder, set a variable, read a settings file).
+// They say nothing about the work, so the activity names the command after them instead.
+const SETUP_COMMANDS = new Set(['cd', 'export', 'set', 'source', '.', 'pushd', 'popd'])
+
+// Words that run the command after them, so the program is the word that follows.
+const WRAPPERS = new Set(['sudo', 'env', 'time', 'command', 'exec', 'nohup'])
+
+// 'NAME=value', which sets a variable instead of running anything. One anchored run.
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+// Splits a shell command into its single commands at '&&', '||', ';', '|' and newlines, in one
+// walk over the characters. Breaks inside quotes or after a backslash don't count, so
+// `export MSG="a; b"` stays one command. A lone '&' doesn't split either, which keeps '2>&1' whole.
+function commandsIn(text) {
+  const pieces = []
+  let start = 0
+  let quote = ''
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (quote) {
+      if (ch === quote) quote = ''
+      else if (ch === '\\' && quote === '"') i++
+      continue
+    }
+    if (ch === '\\') {
+      i++
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      continue
+    }
+    const width = ch === ';' || ch === '|' || ch === '\n' ? 1 : ch === '&' && text[i + 1] === '&' ? 2 : 0
+    if (width === 0) continue
+    pieces.push(text.slice(start, i))
+    i += width - 1
+    start = i + 1
+  }
+  pieces.push(text.slice(start))
+  return pieces
+}
+
+function isOpener(code) {
+  return code === 0x28 || code === 0x7b || code === 0x21 // ( { !
+}
+
+function isCloser(code) {
+  return code === 0x29 || code === 0x7d || code === 0x3b // ) } ;
+}
+
+// A word as the shell would see it for deciding what runs: no quotes, and none of the brackets
+// of a subshell or group around it, so '(cd' is 'cd' and 'ls)' is 'ls'.
+function bareWord(word) {
+  const w = unquoted(word)
+  let start = 0
+  let end = w.length
+  while (start < end && isOpener(w.charCodeAt(start))) start++
+  while (end > start && isCloser(w.charCodeAt(end - 1))) end--
+  return w.slice(start, end)
+}
+
+// True for a letter, digit or '+', the characters a program name ends on ('g++' keeps its pluses).
+function isNameChar(ch) {
+  return ch === '+' || /[\p{L}\p{N}]/u.test(ch)
+}
+
+// A program's name for the board: the last part of its path, with any punctuation trimmed from
+// both ends and clipped to its limit. Null when nothing is left.
+function programName(word) {
+  const name = lastSegment(word)
+  let start = 0
+  let end = name.length
+  while (start < end && !isNameChar(name[start])) start++
+  while (end > start && !isNameChar(name[end - 1])) end--
+  return nameOf(name.slice(start, end), PROGRAM_NAME_MAX)
+}
+
+// Finds the program one command runs: the first word that isn't an assignment, a wrapper like
+// sudo, or an option given to a wrapper. Returns its bare form and the words from it on, or
+// 'setup' when the command only sets up the shell, or null when it holds no word at all.
+function programOf(piece) {
+  const words = piece.trim().split(/\s+/)
+  let seen = false
+  let wrapped = false
+  for (let i = 0; i < words.length; i++) {
+    const word = bareWord(words[i])
+    if (word === '') continue
+    seen = true
+    if (ASSIGNMENT.test(word)) continue
+    if (WRAPPERS.has(word)) {
+      wrapped = true
+      continue
+    }
+    if (wrapped && word.startsWith('-')) continue
+    if (SETUP_COMMANDS.has(word)) return 'setup'
+    return { word, line: [word, ...words.slice(i + 1)].join(' ') }
+  }
+  return seen ? 'setup' : null
+}
+
+// What one shell command is doing. Only its first 400 characters are read, and every step below
+// is a single walk over them, so a huge or hostile command costs no more than a short one.
+// The program is found after any leading 'cd', 'export', assignments or wrappers; a command
+// that is nothing but those is 'in the shell'.
 function commandActivity(fullCommand) {
   const raw = fullCommand.slice(0, ACTIVITY_COMMAND_LIMIT)
-  const command = raw.replace(UNDRAWABLE, ' ')
-  if (TEST_RUNS.some((run) => command.includes(run))) return 'running tests'
+  let setup = false
   // Split before scrubbing, since a newline ends a command just as ';' does.
-  if (raw.split(COMMAND_BREAK).some((piece) => runsTestScript(piece.replace(UNDRAWABLE, ' ')))) {
-    return 'running tests'
+  for (const piece of commandsIn(raw)) {
+    const found = programOf(piece.replace(UNDRAWABLE, ' '))
+    if (found === null) continue
+    if (found === 'setup') {
+      setup = true
+      continue
+    }
+    if (TEST_RUNS.some((run) => found.line.includes(run)) || runsTestScript(found.line)) return 'running tests'
+    const program = programName(found.word)
+    if (program === 'git') return 'running git'
+    return program ? `running ${program}` : null
   }
-  const first = command.trim().split(/\s+/, 1)[0]
-  const word = unquoted(first ?? '')
-  if (word === 'git') return 'running git'
-  const program = nameOf(word, PROGRAM_NAME_MAX)
-  return program ? `running ${program}` : null
+  return setup ? 'in the shell' : null
 }
 
 // What one tool call looks like to a person watching, in two or three words, or null when it

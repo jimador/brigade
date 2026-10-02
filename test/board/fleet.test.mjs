@@ -393,6 +393,35 @@ describe('what a tool call looks like to someone watching', () => {
     assert.equal(activityOf({ tool: 'Bash', command: 'token-bucket-benchmark --all' }), 'running token-bucket-ben')
   })
 
+  test('a shell command is named by its program, not by the cd in front of it', () => {
+    const bash = (command) => activityOf({ tool: 'Bash', command })
+    assert.equal(bash('cd /path/to/repo && npm run build'), 'running npm')
+    assert.equal(bash('cd /path/to/repo && node --test test/a.test.mjs'), 'running tests')
+    assert.equal(bash('cd board-pane; ls -la'), 'running ls')
+    assert.equal(bash('export A=1; git status'), 'running git')
+    assert.equal(bash('pushd /path/to/repo >/dev/null\nsource env.sh\nmake all'), 'running make')
+    assert.equal(bash('A=1; . ./env.sh || set -e; popd; cargo build'), 'running cargo')
+  })
+
+  test('assignments and wrapper words in front of a program are skipped', () => {
+    const bash = (command) => activityOf({ tool: 'Bash', command })
+    assert.equal(bash('FOO=1 BAR=2 python3 x.py'), 'running python3')
+    assert.equal(bash('sudo env X=1 /usr/bin/make all'), 'running make')
+    assert.equal(bash('time nohup command exec ./build.sh'), 'running build.sh')
+  })
+
+  test('a shell command that only changes folder or settings is in the shell', () => {
+    assert.equal(activityOf({ tool: 'Bash', command: 'cd /path/to/repo' }), 'in the shell')
+    assert.equal(activityOf({ tool: 'Bash', command: 'export A=1 && B=2; cd -' }), 'in the shell')
+  })
+
+  test('a program name never carries punctuation from around it', () => {
+    const sub = activityOf({ tool: 'Bash', command: '(cd a && ls);' })
+    assert.ok(sub && !sub.includes(';') && !sub.includes(')'), JSON.stringify(sub))
+    assert.equal(sub, 'running ls')
+    assert.equal(activityOf({ tool: 'Bash', command: '"/opt/acme/bin/rate-check"; echo done' }), 'running rate-check')
+  })
+
   test('only the first 400 characters of a command are looked at', () => {
     assert.equal(activityOf({ tool: 'Bash', command: `echo ${'x'.repeat(400)} && npm test` }), 'running echo')
   })
@@ -508,6 +537,11 @@ describe('working out an activity is quick and short for hostile input', () => {
     'double quotes only': '"',
     'a path of a/ over and over': 'a/',
     'escape characters only': '\u001b',
+    'cd a && over and over': 'cd a && ',
+    'assignments only': 'A=1 ',
+    'sudo, over and over': 'sudo ',
+    'semicolons only': ';',
+    'ampersand pairs only': '&&',
   }
 
   for (const [name, piece] of Object.entries(HOSTILE)) {
@@ -532,6 +566,11 @@ describe('working out an activity is quick and short for hostile input', () => {
     assert.equal(activityOf({ tool: 'Bash', command: grow('/', 100_000) }), null)
     assert.equal(activityOf({ tool: 'Bash', command: grow(' ', 100_000) }), null)
     assert.equal(activityOf({ tool: 'Bash', command: grow('"', 100_000) }), null)
+    assert.equal(activityOf({ tool: 'Bash', command: grow('cd a && ', 100_000) }), 'in the shell')
+    assert.equal(activityOf({ tool: 'Bash', command: grow('A=1 ', 100_000) }), 'in the shell')
+    assert.equal(activityOf({ tool: 'Bash', command: grow('sudo ', 100_000) }), 'in the shell')
+    assert.equal(activityOf({ tool: 'Bash', command: grow(';', 100_000) }), null)
+    assert.equal(activityOf({ tool: 'Bash', command: grow('&&', 100_000) }), null)
     assert.equal(activityOf({ tool: 'Edit', filePath: grow('a/', 100_000) }), 'editing a')
     assert.equal(activityOf({ tool: 'Edit', filePath: grow('b', 100_000) }), `editing ${'b'.repeat(24)}`)
   })

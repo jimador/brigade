@@ -224,6 +224,20 @@ function attemptOf(env) {
   return wholeNumber(env.attempt ?? env.attempt_reviewed) ?? 1
 }
 
+// The longest note summary, message text and learning line. All three come from files agents
+// wrote, so without a cap one runaway line could fill the board.
+const TEXT_MAX = 240
+
+// Cuts text longer than `max` characters to `max`, the last one an ellipsis. A character made of
+// two halves is never cut in two.
+function capped(text, max) {
+  if (text.length <= max) return text
+  let cut = text.slice(0, Math.max(0, max - 1))
+  const last = cut.charCodeAt(cut.length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1)
+  return cut + '…'
+}
+
 // One board note for an artifact, or null when the file doesn't say what kind of doc it is.
 // `file` is where the artifact sits, relative to the dish folder, so a message can point at it.
 // For a plan check `findings` is its blocking count, or null when it doesn't list one.
@@ -244,7 +258,7 @@ export function noteFrom(text, mtimeMs, file = null) {
     kind,
     gist: gistFor(kind, env),
     findings: kind === 'plan_check' ? blockingIn(lines) : found.length,
-    summary,
+    summary: capped(summary, TEXT_MAX),
     attempt: attemptOf(env),
     file,
   }
@@ -295,7 +309,10 @@ function messageFor(note, agents) {
     from = nameFor(agents, INSPECTOR_ROLES, item, 'inspector')
     to = nameFor(agents, COOK_ROLES, item, 'cook')
     const more = count !== null && count > 1 ? ` (+${count - 1} more)` : ''
-    said = summary ? `${label} sent back: ${summary}${more}` : `${label} sent back`
+    // A long summary is cut short so the count of other findings still fits on the end.
+    const lead = `${label} sent back: `
+    const room = TEXT_MAX - lead.length - more.length
+    said = summary ? lead + capped(summary, Math.max(1, room)) + more : `${label} sent back`
   } else if (kind === 'verdict' && gist === 'PASS') {
     from = nameFor(agents, INSPECTOR_ROLES, item, 'inspector')
     to = 'planner'
@@ -321,7 +338,7 @@ function messageFor(note, agents) {
     from,
     to,
     item,
-    text: said,
+    text: capped(said, TEXT_MAX),
     file,
   }
 }
@@ -351,14 +368,14 @@ export function learningsFrom(text, limit = 5) {
     if (line.startsWith('## ')) {
       const heading = line.slice(3).trim()
       dated = DATED.test(heading)
-      if (!dated && heading) all.push(heading)
+      if (!dated && heading) all.push(capped(heading, TEXT_MAX))
       continue
     }
     if (!dated || !line.startsWith('- ')) continue
     const bullet = line.slice(2)
     const stop = bullet.indexOf('. ')
     const learning = (stop === -1 ? bullet : bullet.slice(0, stop)).trim()
-    if (learning) all.push(learning)
+    if (learning) all.push(capped(learning, TEXT_MAX))
   }
   const cap = capOf(limit, 5)
   return { total: all.length, lines: cap === 0 ? [] : all.slice(-cap).reverse() }

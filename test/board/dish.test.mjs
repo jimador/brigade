@@ -431,6 +431,26 @@ test('learningsFrom on an empty file', () => {
   assert.deepEqual(learningsFrom('# Only a title\n\nSome words.\n'), { total: 0, lines: [] })
 })
 
+test('summaries, message text and learnings from files are capped at 240 characters', () => {
+  const long = 'the bucket refills too early '.repeat(200).slice(0, 5_000)
+  const failing = ['---', 'doc: verdict', 'dish: acme-limits', 'item: token-bucket', 'verdict: FAIL', 'findings:',
+    `  - { id: F1, severity: high, summary: "${long}" }`, '  - { id: F2, severity: low, summary: short }', '---'].join('\n')
+  const fail = noteFrom(failing, 1)
+  assert.ok(fail.summary.length <= 240 && fail.summary.endsWith('…'), fail.summary.length)
+  const [sent] = messagesFrom([fail], [])
+  assert.ok(sent.text.length <= 240, sent.text.length)
+  assert.ok(sent.text.startsWith('token-bucket sent back: the bucket'))
+  assert.ok(sent.text.endsWith('… (+1 more)'), sent.text.slice(-20))
+  const asked = noteFrom(['---', 'doc: brief', `question: ${long}`, '---'].join('\n'), 1)
+  assert.ok(asked.summary.length <= 240)
+  assert.ok(messagesFrom([asked], [])[0].text.length <= 240)
+  const raw = messagesFrom([note({ kind: 'verdict', gist: 'FAIL', item: 'x'.repeat(5_000), summary: long })], [])[0]
+  assert.ok(raw.text.length <= 240 && raw.text.endsWith('…'), raw.text.length)
+  const learned = learningsFrom(`## ${long}\n## 2026-01-01 retro\n- ${long}`, 5)
+  assert.equal(learned.lines.length, 2)
+  for (const line of learned.lines) assert.ok(line.length <= 240 && line.endsWith('…'), line.length)
+})
+
 test('hostile input is read in one pass, well under 100 ms', () => {
   const size = 200_000
   const fill = (piece) => piece.repeat(Math.ceil(size / piece.length)).slice(0, size)
