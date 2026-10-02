@@ -3,6 +3,7 @@
 // happens elsewhere.
 
 import { SIZES, sizeOf, ROLES } from './sprites.mjs'
+import { cellWidth } from './canvas.mjs'
 
 // How many cells wide a ticket chip is.
 export const CHIP_W = 14
@@ -23,16 +24,16 @@ function tagOf(agent) {
   return `${role.mark} ${agent.name}`
 }
 
-// Counts what a person would call characters, so a mark outside the basic plane still counts once.
-function cellWidth(text) {
-  return [...text].length
-}
-
-// Lays out ticket chips row by row from x = 1, and says how many tickets didn't fit.
-function placeChips(lane, top, columns) {
+// Lays out ticket chips row by row from x = 1, and says how many tickets didn't fit. Tickets
+// someone is working go first, in their own order, and the lane grows past its usual row cap
+// when that's what it takes to show every one of them.
+function placeChips(lane, top, columns, worked) {
   const perRow = Math.max(1, Math.floor((columns - 1) / (CHIP_W + 1)))
-  const maxRows = lane.key === 'done' ? 1 : 2
-  const tickets = lane.tickets ?? []
+  const cap = lane.key === 'done' ? 1 : 2
+  const all = lane.tickets ?? []
+  const busy = all.filter((t) => worked.has(t.id))
+  const tickets = [...busy, ...all.filter((t) => !worked.has(t.id))]
+  const maxRows = Math.max(cap, Math.ceil(busy.length / perRow))
   const shown = Math.min(tickets.length, perRow * maxRows)
   const chips = []
   for (let i = 0; i < shown; i++) {
@@ -103,6 +104,7 @@ export function layout(snapshot, columns) {
   const sourceLanes = snapshot?.lanes ?? []
   const agents = snapshot?.agents ?? []
   const order = new Map(agents.map((a, i) => [a, i]))
+  const worked = new Set(agents.map((a) => a.ticket).filter((t) => t != null))
 
   // Agents whose lane is missing, 'bench', or unknown wait on a bench lane at the top.
   const known = new Set(sourceLanes.map((l) => l.key).filter((k) => k !== 'bench'))
@@ -119,7 +121,7 @@ export function layout(snapshot, columns) {
   let y = FIRST_LANE_Y
   for (const lane of lanes) {
     const header = y
-    const chips = placeChips(lane, header + 1, width)
+    const chips = placeChips(lane, header + 1, width, worked)
     y = header + 1 + chips.rowCount
     // Only the added bench takes bench agents, never a snapshot lane that happens to be keyed 'bench'.
     const here = lane.key === BENCH.key && lane !== BENCH ? [] : standing.get(lane.key) ?? []
@@ -128,7 +130,9 @@ export function layout(snapshot, columns) {
       Object.assign(homes, sprites.homes)
       y += sprites.rowCount
     }
-    out.push({ key: lane.key, title: lane.title, total: lane.total, y: header, chips: chips.chips, more: chips.more })
+    // The bench holds agents, not tickets, so it has no ticket count to show.
+    const total = lane === BENCH ? null : lane.total
+    out.push({ key: lane.key, title: lane.title, total, y: header, chips: chips.chips, more: chips.more })
     // One blank row before the next lane.
     y += 1
   }

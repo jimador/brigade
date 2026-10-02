@@ -134,3 +134,73 @@ test('a pane narrower than 24 columns is laid out at 24', () => {
   for (const c of out.lanes.flatMap((l) => l.chips)) assert.ok(c.x + c.w <= 24)
   for (const h of Object.values(out.homes)) assert.ok(h.x >= 1)
 })
+
+// A board whose `key` lane holds 12 tickets, the last five of them worked by five agents. Those
+// five sit past the lane's usual cap, so they only show if worked tickets go first.
+function workedBoard(key) {
+  const lanes = ['todo', 'in_progress', 'done'].map((k) => lane(k, k === key ? 12 : 3))
+  const ids = Array.from({ length: 5 }, (_, i) => `${key}-${i + 8}`)
+  const agents = ids.map((ticket, i) => ({
+    id: `w${i}`, name: `Cook${i}`, role: 'cook', model: 'claude-sonnet', lane: key, ticket,
+  }))
+  return { snapshot: { lanes, agents }, ids }
+}
+
+for (const key of ['todo', 'done']) {
+  for (const columns of [24, 40, 60]) {
+    test(`every worked ${key} ticket gets a chip at ${columns} columns`, () => {
+      const { snapshot, ids } = workedBoard(key)
+      const out = layout(snapshot, columns)
+      const byKey = Object.fromEntries(out.lanes.map((l) => [l.key, l]))
+      const worked = byKey[key]
+      const shown = worked.chips.map((c) => c.id)
+      for (const id of ids) assert.ok(shown.includes(id), `${id} missing from ${shown.join(',')}`)
+      // Worked tickets come first, in their own order.
+      assert.deepEqual(shown.slice(0, ids.length), ids)
+      assert.equal(worked.more, worked.total - worked.chips.length)
+
+      // No chip overlaps another or leaves the board.
+      const chips = out.lanes.flatMap((l) => l.chips)
+      for (const c of chips) {
+        assert.ok(c.x >= 1 && c.x + c.w <= columns, `chip ${c.id} at ${c.x}`)
+        assert.ok(c.y >= 0 && c.y < out.rows, `chip ${c.id} row ${c.y}`)
+      }
+      const boxes = chips.map((c) => ({ ...c, h: 1 }))
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) assert.ok(!overlaps(boxes[i], boxes[j]), `${chips[i].id} vs ${chips[j].id}`)
+      }
+
+      // The lane grew by just the rows the worked tickets need.
+      const perRow = Math.max(1, Math.floor((columns - 1) / (CHIP_W + 1)))
+      const cap = key === 'done' ? 1 : 2
+      assert.equal(rowsOf(worked.chips), Math.max(cap, Math.ceil(ids.length / perRow)))
+
+      // A sprite still stands under its ticket's chip, below the chip rows.
+      const first = snapshot.agents[0]
+      const chip = worked.chips.find((c) => c.id === first.ticket)
+      assert.ok(out.homes[first.id].x >= chip.x)
+      assert.ok(out.homes[first.id].y > Math.max(...worked.chips.map((c) => c.y)))
+      if (columns >= 40) {
+        const second = snapshot.agents[1]
+        assert.ok(out.homes[second.id].x >= worked.chips.find((c) => c.id === second.ticket).x)
+      }
+
+      // Lanes nobody works keep their old cap.
+      for (const other of out.lanes.filter((l) => l.key !== key)) {
+        assert.ok(rowsOf(other.chips) <= (other.key === 'done' ? 1 : 2))
+      }
+    })
+  }
+}
+
+test('a lane with no worked ticket keeps its old cap', () => {
+  const lanes = [lane('todo', 12), lane('done', 12)]
+  for (const columns of [24, 40, 60]) {
+    const out = layout({ lanes, agents: [] }, columns)
+    const perRow = Math.max(1, Math.floor((columns - 1) / (CHIP_W + 1)))
+    const byKey = Object.fromEntries(out.lanes.map((l) => [l.key, l]))
+    assert.equal(byKey.todo.chips.length, perRow * 2)
+    assert.equal(byKey.done.chips.length, perRow)
+    assert.equal(byKey.todo.more, 12 - perRow * 2)
+  }
+})

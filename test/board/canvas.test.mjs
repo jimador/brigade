@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createCanvas, putText, putSprite, toRuns } from '../../hooks/board/lib/canvas.mjs'
+import { createCanvas, putText, putSprite, toRuns, safeText, cellWidth, clip } from '../../hooks/board/lib/canvas.mjs'
 
 const BG = '#000000'
 
@@ -117,4 +117,64 @@ test('adjacent cells merge only when their colours match', () => {
   const runs = toRuns(diff)[0]
   assert.equal(runs.length, 2)
   assert.deepEqual(runs.map((r) => r.text), ['a', 'b'])
+})
+
+// Any C0 or C1 control character; a frame must never carry one to the terminal.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+
+test('safeText turns control characters into spaces', () => {
+  const out = safeText('a\nb\u001b[31m')
+  assert.ok(!CONTROL.test(out), JSON.stringify(out))
+  assert.equal(out, 'a b [31m')
+})
+
+test('safeText drops zero-width and combining marks', () => {
+  assert.equal(safeText('e\u0301'), 'e')
+  assert.equal(safeText('a\u200bb\ufeffc\u2060d\ufe0f'), 'abcd')
+})
+
+test('cellWidth counts wide characters as two cells', () => {
+  assert.equal(cellWidth('日本'), 4)
+  assert.equal(cellWidth('e\u0301'), 1)
+  assert.equal(cellWidth('ab'), 2)
+  assert.equal(cellWidth('한'), 2)
+  assert.equal(cellWidth('\u{1F600}'), 2)
+  assert.equal(cellWidth(''), 0)
+})
+
+test('clip keeps the longest prefix that fits', () => {
+  assert.equal(clip('日本語', 5), '日本')
+  assert.equal(clip('日本語', 6), '日本語')
+  assert.equal(clip('abc', 2), 'ab')
+  assert.equal(clip('a\nb', 3), 'a b')
+  assert.equal(clip('abc', 0), '')
+})
+
+test('a wide character that would straddle the right edge is not drawn', () => {
+  const c = createCanvas(10, 1, BG)
+  putText(c, 7, 0, '日本語')
+  const row = toRuns(c)[0].map((r) => r.text).join('')
+  assert.equal(cellWidth(row), 10)
+  assert.equal(row, '       日 ')
+})
+
+test('control characters never reach a run', () => {
+  const c = createCanvas(12, 1, BG)
+  putText(c, 0, 0, 'x\u001b[2J\r\n\u0085y')
+  const row = toRuns(c)[0].map((r) => r.text).join('')
+  assert.ok(!CONTROL.test(row), JSON.stringify(row))
+  assert.equal(cellWidth(row), 12)
+})
+
+test('writing over half of a wide character blanks the other half', () => {
+  const c = createCanvas(6, 1, BG)
+  putText(c, 0, 0, '日本語')
+  putText(c, 1, 0, 'a')
+  putText(c, 4, 0, 'b')
+  const row = toRuns(c)[0].map((r) => r.text).join('')
+  assert.equal(row, ' a本b ')
+  assert.equal(cellWidth(row), 6)
+  putSprite(c, 3, 0, ['#'], 'green')
+  const after = toRuns(c)[0].map((r) => r.text).join('')
+  assert.equal(cellWidth(after), 6)
 })

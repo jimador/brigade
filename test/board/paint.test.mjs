@@ -4,6 +4,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { paint } from '../../hooks/board/lib/paint.mjs'
+import { cellWidth, clip } from '../../hooks/board/lib/canvas.mjs'
+import { cardLines } from '../../hooks/board/lib/stage.mjs'
+import { ROLES } from '../../hooks/board/lib/sprites.mjs'
 
 function tickets(prefix, n, kind = 'feature') {
   return Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i + 1}`, title: `${prefix} ${i + 1}`, status: prefix, kind }))
@@ -150,4 +153,93 @@ test('an empty board still draws the heads-up rows', () => {
   assert.equal(out.height, out.rows.length)
   assert.deepEqual(out.regions, [])
   for (const row of out.rows) assert.equal(Array.from(rowText(row)).length, 60)
+})
+
+// How many cells a painted row really takes on screen.
+function rowCells(row) {
+  return cellWidth(rowText(row))
+}
+
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+
+const MODELS = ['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-5', 'claude-fable']
+const ROLE_KEYS = ['cook', 'scout', 'heavy', 'inspector']
+
+function crowd(n, laneKey) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `c${i}`, name: `Cook${i}`, role: ROLE_KEYS[i % ROLE_KEYS.length], model: MODELS[i % MODELS.length],
+    state: 'working', lane: laneKey, ticket: null, item: `item-${i}`, tokens: 1000 * i, startedAt: 0,
+  }))
+}
+
+const BOARDS = {
+  'zero lanes': { ...SNAPSHOT, lanes: [] },
+  'six lanes': SNAPSHOT,
+  'twelve agents in one lane': { ...SNAPSHOT, agents: crowd(12, 'in_progress') },
+}
+
+for (const [name, board] of Object.entries(BOARDS)) {
+  for (const columns of [24, 40, 60, 120]) {
+    test(`the hover card is whole for every agent on ${name} at ${columns} columns`, () => {
+      const plain = paint(board, VIEW, columns)
+      for (const agent of board.agents) {
+        const out = paint(board, { ...VIEW, hovered: agent.id }, columns)
+        assert.equal(out.height, plain.height, `hovering ${agent.id} changed the row count`)
+        assert.equal(out.rows.length, plain.rows.length)
+        for (const row of out.rows) assert.equal(rowCells(row), columns)
+
+        const role = Object.hasOwn(ROLES, agent.role) ? ROLES[agent.role] : ROLES.agent
+        const lines = cardLines(agent, role.label, board.now)
+        const cardW = Math.max(...lines.map(cellWidth)) + 2
+        // A card wider than the pane shows as much of each line as fits after its leading space.
+        const want = lines.map((line) => ` ${columns >= cardW ? line : clip(line, columns - 1)}`)
+        const texts = out.rows.map(rowText)
+        const y0 = texts.findIndex((t, y) => t.includes(want[0]) && texts[y + 1]?.includes(want[1]))
+        assert.ok(y0 >= 0, `card for ${agent.id} not found at ${columns} columns`)
+        const at = cellWidth(texts[y0].slice(0, texts[y0].indexOf(want[0])))
+        want.forEach((w, i) => {
+          const t = texts[y0 + i] ?? ''
+          const idx = t.indexOf(w)
+          assert.ok(idx >= 0, `line ${i} of ${agent.id}'s card missing: ${JSON.stringify(w)}`)
+          assert.equal(cellWidth(t.slice(0, idx)), at, `line ${i} of ${agent.id}'s card is out of line`)
+        })
+      }
+    })
+  }
+}
+
+test('odd ticket ids never break a row', () => {
+  const ids = ['a\nb', 'x\u001b[2J', '日本語チケット番号', 'z'.repeat(60)]
+  const todo = { key: 'todo', title: 'TODO', total: ids.length, tickets: ids.map((id) => ({ id, title: id, status: 'todo', kind: 'bug' })) }
+  const agents = ids.map((ticket, i) => ({
+    id: `o${i}`, name: `Odd${i}`, role: 'cook', model: COOK_MODEL, state: 'working',
+    lane: 'todo', ticket, item: ticket, tokens: 10, startedAt: 0,
+  }))
+  const board = { ...SNAPSHOT, lanes: [todo, ...SNAPSHOT.lanes.slice(1)], agents }
+  for (const columns of [24, 40, 60, 120]) {
+    for (const hovered of [null, ...agents.map((a) => a.id)]) {
+      const out = paint(board, { ...VIEW, hovered }, columns)
+      for (const row of out.rows) {
+        const text = rowText(row)
+        assert.ok(!CONTROL.test(text), `control character in ${JSON.stringify(text)}`)
+        assert.equal(rowCells(row), columns, `row ${JSON.stringify(text)} at ${columns} columns`)
+      }
+    }
+  }
+})
+
+test('a chip is exactly its width in cells, whatever its id holds', () => {
+  const ids = ['日本語チケット番号', 'a\u0301b\u0301c', 'z'.repeat(60)]
+  const todo = { key: 'todo', title: 'TODO', total: ids.length, tickets: ids.map((id) => ({ id, title: id, status: 'todo', kind: 'bug' })) }
+  const out = paint({ ...SNAPSHOT, lanes: [todo], agents: [] }, VIEW, 60)
+  const labels = out.rows.flat().filter((r) => r.backgroundColor === '#e8e6d9' && r.text !== '▌')
+  assert.deepEqual(labels.map((r) => r.text.trimEnd()), ['日本語チケッ', 'abc', 'z'.repeat(13)])
+  for (const r of labels) assert.equal(cellWidth(r.text), 13, JSON.stringify(r.text))
+})
+
+test('the bench header carries no count', () => {
+  const out = paint(SNAPSHOT, VIEW, 60)
+  const bench = out.rows.map(rowText).find((t) => t.startsWith('▌BENCH'))
+  assert.ok(bench, 'bench header found')
+  assert.ok(/^▌BENCH\s*$/.test(bench), JSON.stringify(bench))
 })

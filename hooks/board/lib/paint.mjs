@@ -2,21 +2,16 @@
 // the agent sprites with their name tags, and the hover card on top. The result is rows of
 // coloured text runs that a pane can print as they are.
 
-import { createCanvas, putText, putSprite, toRuns } from './canvas.mjs'
+import { createCanvas, putText, putSprite, toRuns, cellWidth, clip } from './canvas.mjs'
 import { layout } from './layout.mjs'
 import { SPRITES, PALETTE, ROLES, sizeOf, colorOf } from './sprites.mjs'
 import { gauge } from './weather.mjs'
 import { cardLines } from './stage.mjs'
 
-// Counts characters the way the canvas does, one cell per code point.
-function width(text) {
-  return Array.from(String(text)).length
-}
-
 // Where text starts so that it ends one cell short of the right edge, the same margin the
 // title keeps on the left.
 function rightX(columns, text) {
-  return Math.max(0, columns - 1 - width(text))
+  return Math.max(0, columns - 1 - cellWidth(text))
 }
 
 function hasReading(weather) {
@@ -44,8 +39,8 @@ function paintChip(canvas, chip, busy) {
   const stripe = Object.hasOwn(kinds, chip.kind) ? kinds[chip.kind] : PALETTE.dim
   putText(canvas, chip.x, chip.y, '▌', { color: stripe, backgroundColor: PALETTE.chip })
   const room = Math.max(0, chip.w - 1)
-  const label = Array.from(String(chip.id ?? '')).slice(0, room).join('')
-  const text = label + ' '.repeat(room - width(label))
+  const label = clip(chip.id ?? '', room)
+  const text = label + ' '.repeat(room - cellWidth(label))
   putText(canvas, chip.x + 1, chip.y, text, {
     color: PALETTE.chipInk,
     backgroundColor: PALETTE.chip,
@@ -55,26 +50,42 @@ function paintChip(canvas, chip, busy) {
 
 // A lane's header row, its overflow count, and its chips.
 function paintLane(canvas, lane, busy) {
-  const header = `▌${lane.title} ${lane.total}`
+  // A lane with no ticket count, like the bench, shows just its title.
+  const header = lane.total == null ? `▌${lane.title}` : `▌${lane.title} ${lane.total}`
   const alert = lane.key === 'blocked' && lane.total > 0
   putText(canvas, 0, lane.y, header, { color: alert ? PALETTE.alert : PALETTE.header })
   if (lane.more > 0) {
-    putText(canvas, width(header) + 1, lane.y, `+${lane.more}`, { color: PALETTE.dim })
+    putText(canvas, cellWidth(header) + 1, lane.y, `+${lane.more}`, { color: PALETTE.dim })
   }
   for (const chip of lane.chips) paintChip(canvas, chip, busy)
 }
 
-// The hover card: four lines on a light block, above the sprite when there's room, else
-// below its name tag, and nudged left so it never hangs off the right edge.
+// Where the hover card's top-left corner goes. Above the sprite when there's room, else below
+// its name tag when every line fits, else beside the sprite (right if it fits, otherwise left)
+// with its top pulled in so no line falls off the canvas. The canvas never grows for a card.
+function cardSpot(canvas, region, cardW, cardH) {
+  const across = Math.max(0, Math.min(region.x, canvas.columns - cardW))
+  if (region.y - cardH >= 0) return { x: across, y: region.y - cardH }
+  const below = region.y + region.h + 1
+  if (below + cardH <= canvas.rows) return { x: across, y: below }
+  const right = region.x + region.w + 1
+  const x = right + cardW <= canvas.columns ? right : Math.max(0, region.x - 1 - cardW)
+  const y = Math.max(0, Math.min(region.y, canvas.rows - cardH))
+  return { x, y }
+}
+
+// The hover card: four lines on a light block. Every line is padded in cells to the same width,
+// so the card is a clean rectangle, and cut short at the right edge when the pane is narrower.
 function paintCard(canvas, agent, region, now) {
   const role = Object.hasOwn(ROLES, agent.role) ? ROLES[agent.role] : ROLES.agent
   const lines = cardLines(agent, role.label, now).map((line) => String(line ?? ''))
-  const cardW = Math.max(...lines.map(width)) + 2
-  const x = Math.max(0, Math.min(region.x, canvas.columns - cardW))
-  const top = region.y - lines.length >= 0 ? region.y - lines.length : region.y + region.h + 1
+  const cardW = Math.max(...lines.map(cellWidth)) + 2
+  const spot = cardSpot(canvas, region, cardW, lines.length)
+  const room = Math.min(cardW, canvas.columns - spot.x)
   lines.forEach((line, i) => {
-    const text = ` ${line}` + ' '.repeat(cardW - 1 - width(line))
-    putText(canvas, x, top + i, text, { color: PALETTE.field, backgroundColor: PALETTE.ink })
+    const shown = clip(` ${line}`, room)
+    const text = shown + ' '.repeat(room - cellWidth(shown))
+    putText(canvas, spot.x, spot.y + i, text, { color: PALETTE.field, backgroundColor: PALETTE.ink })
   })
 }
 
