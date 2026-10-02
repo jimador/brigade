@@ -90,3 +90,16 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   was run once on gpt-5.5, as the planner reading the skill's files, and the packet it wrote
   passed the case's three pattern graders and its self-contained grader; the record is
   `.brigade/evals/writing-rules/neutrality/result.json`, local, never committed.
+  The three eval cases for the writing rules (`evals/packet-follows-writing-preset`,
+  `evals/writing-rules-reach-ticket-comment`, `evals/packet-is-model-neutral`) were run with
+  `claude plugin eval` after the last change to the graders and the preset, on sonnet with a haiku
+  judge, three runs with the plugin and three without. Score with against score without, and runs
+  that passed every grader: preset case 0.89 against 0.33, 2 of 3 against 0 of 3; ticket comment
+  case 1.00 against 0.67, 3 of 3 against 1 of 3; neutrality case 1.00 against 0.92, 3 of 3 against
+  2 of 3. The neutrality case is a guard: a careful model passes it without the plugin. The one miss
+  with the plugin was a step sentence of more than 20 words. One run without the plugin read the
+  repository's config file and followed the comment rules by itself. An earlier run, before two
+  graders and rules S1, C1 and C3 of the preset were corrected, scored 0.78 against 0.56 on the
+  preset case and 0.89 against 0.44 on the ticket comment case. Three runs an arm is a direction,
+  not a rate. The records are `.brigade/evals/writing-rules/cases-2/` and `cases-3/`, local, never
+  committed.
