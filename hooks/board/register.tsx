@@ -856,7 +856,11 @@ async function openStage($: EngineInterface) {
   if (walker !== null) return
   const at = await $.clock.now()
   await update($, stage, current => ({ ...current, open: true, openedAt: at, plain: false }))
-  // Another open may have started the clock while this one was writing.
+  // A close that came in while this was writing has nothing to cancel yet, and leaves the stage
+  // saying closed. Starting the clock then would keep it running for a pane that isn't there.
+  const now = await read($, stage)
+  if (!now.open) return
+  // Another open may have started the clock while this one was writing or reading.
   if (walker !== null) return
   walker = $.clock.every(STEP_MS, () => {
     void step($)
@@ -1093,18 +1097,29 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const snapshot = await snapshotOf($)
-    const shown = await read($, stage)
     const elements = $.ui.resolve(e)
     const { Box, Client, Svg, Text } = elements
-    if (e.surface === 'terminal' && !shown.plain) {
-      drawnAs = 'region'
-      return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
+    // An empty board, drawn as plain lines when the board itself can't be read.
+    let snapshot: Snapshot = {
+      project: projectOf({ mode: 'tickets', repo: '', count: 0 }) as Project,
+      lanes: toWorkLanes([]) as WorkLane[],
+      agents: [],
+      weather: null,
+      messages: [],
+      learnings: { total: 0, lines: [] },
+      detail: null,
+      now: 0,
     }
-    // The terminal whose region never reported in gets the painted board as rows; desktop can't
-    // load a region at all and gets it as a picture. Either way the detail box, when it is up, is
-    // already drawn in, and the buttons that open it sit underneath.
     try {
+      snapshot = await snapshotOf($)
+      const shown = await read($, stage)
+      if (e.surface === 'terminal' && !shown.plain) {
+        drawnAs = 'region'
+        return <Client key="stage" module="./screen.tsx" width="100%" props={snapshot} />
+      }
+      // The terminal whose region never reported in gets the painted board as rows; desktop can't
+      // load a region at all and gets it as a picture. Either way the detail box, when it is up, is
+      // already drawn in, and the buttons that open it sit underneath.
       if (e.surface === 'terminal') {
         const rows = (
           <Box flexDirection="column">
@@ -1140,7 +1155,8 @@ export const register: Register = on => {
         return drawn
       }
     } catch {
-      // Not drawn this time; the plain lines below still show the board.
+      // Not drawn this time; the plain lines below still show the board, or an empty one when
+      // the board itself couldn't be read.
     }
     drawnAs = 'lines'
     // Surfaces without a region get the same board as plain lines. Text from files only ever

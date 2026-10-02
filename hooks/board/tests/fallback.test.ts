@@ -482,3 +482,90 @@ test('only an exact { ready: true } counts, and a late one brings the region bac
   expect((await b.render('terminal')).type).toBe('Client')
   await b.close()
 })
+
+test('a state read that fails while the pane draws gives the plain lines, never a throw', async () => {
+  const b = bench()
+  // The kit's runtime refuses a plain assignment over a built-in method, so the store's own
+  // methods are swapped with defineProperty. A read goes through reads.push and then kept.get, so
+  // the push marks the next get as a read and a write's own lookup is left alone.
+  const swap = (target: object, name: string, value: unknown) => Object.defineProperty(target, name, { value, configurable: true })
+  let failing = ''
+  let reading = false
+  swap(b.reads, 'push', (...keys: string[]) => {
+    reading = true
+    return Array.prototype.push.apply(b.reads, keys)
+  })
+  swap(b.kept, 'get', (key: string) => {
+    const read = reading
+    reading = false
+    if (read && key === failing) throw new Error(`no ${key} today`)
+    return Map.prototype.get.call(b.kept, key)
+  })
+  const lines = (tree: Node) => nodes(tree, 'Text').map(text => (text.children ?? []).join(''))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    // The stage can't be read: the board itself still shows, as plain lines.
+    failing = 'stage'
+    const board = await b.render(surface)
+    expect(nodes(board, 'Client')).toHaveLength(0)
+    expect(nodes(board, 'Svg')).toHaveLength(0)
+    expect(lines(board)).toContain('To do 2: acme-12, acme-13')
+    expect(lines(board).some(line => line.startsWith('Basil'))).toBe(true)
+    // The board itself can't be read: an empty board, as plain lines.
+    failing = 'fleet'
+    const empty = await b.render(surface)
+    expect(nodes(empty, 'Svg')).toHaveLength(0)
+    expect(lines(empty)).toContain('To do 0')
+    expect(lines(empty)).toContain('Done 0')
+    expect(lines(empty).some(line => line.includes('acme') || line.includes('Basil'))).toBe(false)
+  }
+})
+
+test('a close that lands while the open is writing the stage leaves no clock', async () => {
+  const b = bench()
+  // Swapped with defineProperty, as above. Every stage read made after the open's write is held
+  // and answered with the stage as it stands when it is let go.
+  const swap = (target: object, name: string, value: unknown) => Object.defineProperty(target, name, { value, configurable: true })
+  const held: (() => void)[] = []
+  let holding = false
+  let reading = false
+  let closing: Promise<unknown> | null = null
+  swap(b.reads, 'push', (...keys: string[]) => {
+    reading = true
+    return Array.prototype.push.apply(b.reads, keys)
+  })
+  swap(b.kept, 'get', (key: string) => {
+    const read = reading
+    reading = false
+    if (!read || !holding || key !== 'stage') return Map.prototype.get.call(b.kept, key)
+    return new Promise(resolve => held.push(() => resolve(Map.prototype.get.call(b.kept, key))))
+  })
+  swap(b.kept, 'set', (key: string, value: { value?: { open?: unknown } }) => {
+    Map.prototype.set.call(b.kept, key, value)
+    if (key === 'stage' && value.value?.open === true && closing === null) {
+      // The pane closes the moment the open's write lands, before the open goes on.
+      holding = true
+      closing = b.close()
+    }
+    return b.kept
+  })
+  // Drawn once as a picture, so a step that does run reads the stage and walks.
+  await b.render('desktop')
+  let opened = false
+  const opening = b.open().then(() => {
+    opened = true
+  })
+  // The close came in first, so the first held read is the close's; a second one is the open
+  // looking at the stage again after its write.
+  for (let i = 0; i < 50 && !opened && held.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 1))
+  holding = false
+  held.shift()?.()
+  await closing
+  for (const go of held.splice(0)) go()
+  await opening
+  expect(b.kept.get('stage')?.value).toMatchObject({ open: false })
+  expect(b.live()).toHaveLength(0)
+  b.reads.length = 0
+  await b.advance(5000)
+  // No step ran: nothing read the stage, and arrange was never called.
+  expect(b.reads).toEqual([])
+})

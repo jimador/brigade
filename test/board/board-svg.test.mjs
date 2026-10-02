@@ -8,7 +8,7 @@ import { pictureOf, CELL_W, CELL_H, SVG_MAX } from '../../hooks/board/lib/board-
 import { draw } from '../../hooks/board/lib/board-paint.mjs'
 import { PALETTE, ART } from '../../hooks/board/lib/sprites.mjs'
 
-const ALLOWED = new Set(['svg', 'style', 'rect', 'g', 'text', 'title', 'animate', 'path'])
+const ALLOWED = new Set(['svg', 'style', 'rect', 'text', 'path'])
 const SHAPES = new Set(['█', '▀', '▄', '▌', '▐', '▰', '▱'])
 const HOSTILE = [
   '</text></svg><script>alert(1)</script>',
@@ -144,8 +144,7 @@ function grid(rows) {
   })
 }
 
-// Every drawn character as { col, row, ch, fill, bold }, read from the picture's text elements.
-// Inside an animated group the row comes from the y alone, so frames are kept apart by `within`.
+// Every drawn character as { col, row, ch, fill, bold }, read from the text elements under `within`.
 function placedChars(within) {
   const out = []
   for (const t of elements(within, 'text')) {
@@ -364,80 +363,6 @@ test('bold runs use one class, and the font is set once in the style block', () 
   for (const t of elements(root, 'text')) assert.equal(t.attrs.style, undefined)
 })
 
-// --- the two-frame walk --------------------------------------------------------------------------
-
-test('only rows that differ between the frames are animated, each drawn once per frame', () => {
-  const rows = [[run('same top')], [run('frame zero')], [run('same end')]]
-  const altRows = [[run('same top')], [run('frame one!')], [run('same end')]]
-  const root = parseXml(pictureOf({ rows, altRows, columns: 10 }).source)
-  const anims = elements(root, 'animate')
-  assert.equal(anims.length, 2)
-  for (const a of anims) {
-    assert.equal(a.attrs.attributeName, 'visibility')
-    assert.equal(a.attrs.calcMode, 'discrete')
-    assert.equal(a.attrs.repeatCount, 'indefinite')
-    assert.equal(a.attrs.dur, '1s')
-  }
-  const groups = elements(root, 'g').filter((g) => kids(g).some((k) => k.name === 'animate'))
-  assert.equal(groups.length, 2)
-  const [zero, one] = groups
-  // Frame 0 shows first and frame 1 waits hidden, so a picture with no animation shows frame 0.
-  assert.equal(kids(zero).find((k) => k.name === 'animate').attrs.values, 'visible;hidden')
-  assert.equal(kids(one).find((k) => k.name === 'animate').attrs.values, 'hidden;visible')
-  assert.equal(one.attrs.visibility, 'hidden')
-  assert.deepEqual(elements(zero, 'text').map(textOf), ['frame zero'])
-  assert.deepEqual(elements(one, 'text').map(textOf), ['frame one!'])
-  const all = elements(root, 'text').map(textOf)
-  assert.equal(all.filter((t) => t === 'same top').length, 1)
-  assert.equal(all.filter((t) => t === 'same end').length, 1)
-})
-
-test('no animation without altRows, or when both frames are the same', () => {
-  const rows = [[run('one')], [run('two')]]
-  for (const altRows of [null, undefined, rows.map((r) => r.map((x) => ({ ...x })))]) {
-    const pic = pictureOf({ rows, altRows, columns: 3 })
-    assert.ok(!pic.source.includes('<animate'), String(altRows))
-    assert.equal(elements(parseXml(pic.source), 'text').length, 2)
-  }
-})
-
-test('a real board walking: the sprite rows bob, the rest are drawn once', () => {
-  const zero = walked(124, 0)
-  const one = walked(124, 1)
-  const differ = zero.rows.filter((r, y) => JSON.stringify(r) !== JSON.stringify(one.rows[y])).length
-  assert.ok(differ > 0 && differ < zero.rows.length, `some rows differ (${differ} of ${zero.rows.length})`)
-  const pic = pictureOf({ rows: zero.rows, altRows: one.rows, columns: 124 })
-  const root = parseXml(pic.source)
-  assert.equal(elements(root, 'animate').length, 2)
-  const [g0, g1] = elements(root, 'g').filter((g) => kids(g).some((k) => k.name === 'animate'))
-  const rowsIn = (g) => new Set([...walk(g)].filter((n) => n.attrs.y !== undefined && n.name !== 'animate')
-    .map((n) => Math.floor(Number(n.attrs.y) / CELL_H)))
-  assert.ok(rowsIn(g0).size <= differ && rowsIn(g1).size <= differ)
-})
-
-// --- titles --------------------------------------------------------------------------------------
-
-test('each title box is a transparent rectangle with a title, drawn last', () => {
-  const titles = [{ x: 2, y: 1, w: 5, h: 3, text: 'Token bucket per key' }, { x: 0, y: 0, w: 1, h: 1, text: 'a < b & "c"' }]
-  const pic = pictureOf({ rows: [[run('abc')], [run('def')], [run('ghi')], [run('jkl')]], columns: 8, titles })
-  const root = parseXml(pic.source)
-  const tail = kids(root).slice(-2)
-  assert.deepEqual(tail.map((r) => r.name), ['rect', 'rect'])
-  assert.deepEqual(tail.map((r) => [r.attrs.x, r.attrs.y, r.attrs.width, r.attrs.height, r.attrs['fill-opacity']]), [
-    ['18', '18', '45', '54', '0'],
-    ['0', '0', '9', '18', '0'],
-  ])
-  assert.deepEqual(tail.map((r) => kids(r).map((k) => k.name)), [['title'], ['title']])
-  assert.deepEqual(tail.map((r) => textOf(r)), ['Token bucket per key', 'a < b & "c"'])
-  assert.ok(pic.source.includes('a &lt; b &amp; &quot;c&quot;'))
-})
-
-test('a title box with no size or a broken shape is left out', () => {
-  const titles = [{ x: 0, y: 0, w: 0, h: 1, text: 'empty' }, null, { x: 'a', y: 0, w: 1, h: 1, text: 'nan' }, { x: 0, y: 0, w: 1, h: 1, text: 'kept' }]
-  const root = parseXml(pictureOf({ rows: [[run('a')]], columns: 1, titles }).source)
-  assert.deepEqual(elements(root, 'title').map(textOf), ['kept'])
-})
-
 // --- outside text --------------------------------------------------------------------------------
 
 // What a hostile string looks like once the characters XML forbids are gone.
@@ -478,23 +403,16 @@ test('hostile text in runs cannot add markup and reads back intact', () => {
   assert.ok(!pic.source.includes('￾'))
 })
 
-test('hostile text in titles cannot add markup and reads back intact', () => {
-  const titles = HOSTILE.map((text, i) => ({ x: i, y: 0, w: 1, h: 1, text }))
-  const root = assertSafe(pictureOf({ rows: [[run('board')]], columns: 10, titles }).source)
-  assert.deepEqual(elements(root, 'title').map(textOf), HOSTILE.map(cleaned))
-})
-
-test('control characters in runs and titles never reach the source', () => {
+test('control characters in runs never reach the source', () => {
   const nasty = 'a\u0000b\u0008c\u000bd\u000ce\u001ff￿g'
-  const pic = pictureOf({ rows: [[run(nasty)]], columns: 13, titles: [{ x: 0, y: 0, w: 1, h: 1, text: nasty }] })
+  const pic = pictureOf({ rows: [[run(nasty)]], columns: 13 })
   const root = assertSafe(pic.source)
   assert.equal(rowShown(root, 0, 13), 'a b c d e f g')
-  assert.equal(textOf(elements(root, 'title')[0]), 'abcdefg')
 })
 
 test('a hostile board from draw is safe, and its hostile card title reads back', () => {
   const out = drawn(160, 0)
-  const pic = pictureOf({ rows: out.rows, altRows: drawn(160, 1).rows, columns: 160, titles: [{ x: 0, y: 0, w: 4, h: 1, text: HOSTILE[0] }] })
+  const pic = pictureOf({ rows: out.rows, columns: 160 })
   const root = assertSafe(pic.source)
   const shown = out.rows.map((_, y) => rowShown(root, y, 160)).join('\n')
   assert.ok(shown.includes('</text></svg>'), 'the hostile title shows as text')
@@ -519,7 +437,7 @@ test('broken input still gives a well-formed picture', () => {
     { rows: [null, 'row', [null, 5, { text: 7 }]], columns: 4 },
     { rows: [[run('abc')]], columns: -3 },
     { rows: [[run('abc')]], columns: NaN },
-    { rows: [[run('abc')]], columns: 2.7, altRows: 'nope', titles: 'nope' },
+    { rows: [[run('abc')]], columns: 2.7 },
   ]) {
     const pic = pictureOf(input)
     assertSafe(pic.source)
@@ -532,13 +450,11 @@ test('broken input still gives a well-formed picture', () => {
 
 // --- the size cap --------------------------------------------------------------------------------
 
-test('a crowded real board at 160 columns fits with its walk and its titles', () => {
-  const out = walked(160, 0)
-  const titles = out.regions.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h, text: `${r.kind} ${r.id}` }))
-  const pic = pictureOf({ rows: out.rows, altRows: walked(160, 1).rows, columns: 160, titles })
+test('a crowded real board at 160 columns is drawn in full under the cap', () => {
+  const pic = pictureOf({ rows: walked(160, 0).rows, columns: 160 })
   assert.ok(pic.source.length <= SVG_MAX, `${pic.source.length}`)
-  assert.ok(pic.source.includes('<animate'))
-  assert.equal(elements(parseXml(pic.source), 'title').length, titles.length)
+  assertSafe(pic.source)
+  assert.ok(pic.source.includes('>Rate limit the public API<'))
 })
 
 // The crowded board stacked `times` over: real rows, as many as it takes to reach a size. Pass
@@ -548,43 +464,23 @@ function stacked(times, frame, board = drawn) {
   return Array.from({ length: times }, () => rows).flat()
 }
 
-// How many copies of the crowded board fit with and without the walk, so each test can pick a size
-// that lands exactly on the step it checks.
-function sizes(board = drawn) {
-  const one = pictureOf({ rows: stacked(1, 0, board), columns: 160 }).source.length
-  const both = pictureOf({ rows: stacked(1, 0, board), altRows: stacked(1, 1, board), columns: 160 }).source.length
-  return { one, both }
+// How long one copy of the crowded board's picture is, so a test can pick a size near the cap.
+function sizeOf(board = drawn) {
+  return pictureOf({ rows: stacked(1, 0, board), columns: 160 }).source.length
 }
 
-test('step one: over the cap with the walk, the walk is dropped and the titles kept', () => {
-  const { one, both } = sizes(walked)
-  // Enough copies that the walk tips it over, few enough that the still picture fits.
-  const times = Math.floor((SVG_MAX - 4000) / one)
-  assert.ok(times >= 1 && times * both > SVG_MAX, `the walk must tip ${times} copies over`)
-  const titles = [{ x: 0, y: 0, w: 2, h: 1, text: 'Token bucket' }]
-  const pic = pictureOf({ rows: stacked(times, 0, walked), altRows: stacked(times, 1, walked), columns: 160, titles })
+test('a board just under the cap is drawn in full, at its own size', () => {
+  const times = Math.floor((SVG_MAX - 4000) / sizeOf(walked))
+  assert.ok(times >= 1)
+  const pic = pictureOf({ rows: stacked(times, 0, walked), columns: 160 })
   assert.ok(pic.source.length <= SVG_MAX)
-  assert.ok(!pic.source.includes('<animate'))
-  const root = parseXml(pic.source)
-  assert.deepEqual(elements(root, 'title').map(textOf), ['Token bucket'])
+  assert.ok(!pic.source.includes('Board too large to draw'))
   assert.equal(pic.height, times * drawn(160, 0).rows.length * CELL_H)
 })
 
-test('step two: still over without the walk, the titles are dropped and the board kept', () => {
-  const { one } = sizes()
-  const titles = Array.from({ length: 200 }, (_, i) => ({ x: i % 160, y: 0, w: 1, h: 1, text: `title ${i} `.padEnd(1000, 'x') }))
-  const rows = stacked(1, 0)
-  const pic = pictureOf({ rows, altRows: stacked(1, 1), columns: 160, titles })
-  assert.ok(pic.source.length <= SVG_MAX)
-  assert.ok(!pic.source.includes('<animate'))
-  assert.ok(!pic.source.includes('<title'))
-  assert.ok(pic.source.length >= one - 100, 'the board itself is still drawn')
-  assert.ok(pic.source.includes('>Rate limit the public API<'))
-})
-
-test('step three: a board too large even alone becomes a one-line picture of the same size', () => {
+test('a board too large to draw becomes a one-line picture of the same size', () => {
   const rows = generated(400, 200)
-  const pic = pictureOf({ rows, altRows: generated(400, 200, 1), columns: 200, titles: [{ x: 0, y: 0, w: 1, h: 1, text: 'gone' }] })
+  const pic = pictureOf({ rows, columns: 200 })
   assert.equal(pic.width, 200 * CELL_W)
   assert.equal(pic.height, 400 * CELL_H)
   assert.ok(pic.source.length <= SVG_MAX)
@@ -593,12 +489,10 @@ test('step three: a board too large even alone becomes a one-line picture of the
   assert.equal(root.attrs.width, String(pic.width))
   assert.equal(root.attrs.height, String(pic.height))
   assert.deepEqual(elements(root, 'text').map(textOf), ['Board too large to draw'])
-  assert.equal(elements(root, 'title').length, 0)
-  assert.equal(elements(root, 'animate').length, 0)
 })
 
 test('the cap holds for a huge stack of the real board too', () => {
-  const pic = pictureOf({ rows: stacked(12, 0), altRows: stacked(12, 1), columns: 160 })
+  const pic = pictureOf({ rows: stacked(12, 0), columns: 160 })
   assert.ok(pic.source.length <= SVG_MAX)
   assert.deepEqual(elements(parseXml(pic.source), 'text').map(textOf), ['Board too large to draw'])
 })
@@ -627,7 +521,7 @@ test('cost grows in step with the cells: 240 rows take at most 12 times as long 
 
 test('the same input gives the same picture, with tidy numbers', () => {
   const out = drawn(124, 0)
-  const input = { rows: out.rows, altRows: drawn(124, 1).rows, columns: 124, titles: [{ x: 1, y: 2, w: 3, h: 4, text: 'x' }] }
+  const input = { rows: out.rows, columns: 124, sprites: [{ x: 1, y: 2, w: 3, h: 1, size: 'xl', color: '#06d6a0', frame: 1 }] }
   const a = pictureOf(input).source
   const b = pictureOf(structuredClone(input)).source
   assert.equal(a, b)
@@ -784,32 +678,24 @@ test('a sprite box that does not touch the board draws nothing', () => {
   }
 })
 
-test('a sprite adds exactly one path and no animation, after the rows and before the title boxes', () => {
+test('a sprite adds exactly one path and no animation, after the rows', () => {
   const rows = [[run('same top')], [run('frame zero')], [run('same end')]]
-  const altRows = [[run('same top')], [run('frame one!')], [run('same end')]]
-  const titles = [{ x: 0, y: 0, w: 2, h: 1, text: 'Token bucket' }]
   const still = pictureOf({ rows, columns: 10, sprites: [{ ...SPRITE, x: 0, y: 2 }] })
   assert.equal(still.source.split('<path').length - 1, 1)
   assert.ok(!still.source.includes('<animate'))
   const sprites = [{ ...SPRITE, x: 0, y: 2 }, { ...SPRITE, x: 5, y: 0, color: '#ff7ab6', size: 's' }]
-  const pic = pictureOf({ rows, altRows, columns: 10, titles, sprites })
-  const root = parseXml(pic.source)
-  assert.equal(elements(root, 'animate').length, 2, 'the rows still walk')
+  const root = parseXml(pictureOf({ rows, columns: 10, sprites }).source)
   const names = kids(root).map((k) => k.name)
-  assert.deepEqual(names.slice(-3), ['path', 'path', 'rect'])
-  assert.ok(names.lastIndexOf('g') < names.indexOf('path'), 'paths after every row')
+  assert.deepEqual(names.slice(-2), ['path', 'path'])
+  assert.ok(names.lastIndexOf('text') < names.indexOf('path'), 'paths after every row')
   assert.deepEqual(elements(root, 'path').map((p) => p.attrs.fill), ['#06d6a0', '#ff7ab6'])
-  for (const g of elements(root, 'g')) assert.equal(elements(g, 'path').length, 0, 'no sprite inside a walking group')
 })
 
-test('cells are cleared in both frames before the rows are compared, so a row that only differs under a sprite is still', () => {
+test('blocks under a sprite are cleared before the row is drawn', () => {
   const rows = [[run('ab▀▀ef')]]
-  const altRows = [[run('ab▄▄ef')]]
-  const walkingPic = pictureOf({ rows, altRows, columns: 6 })
-  assert.ok(walkingPic.source.includes('<animate'))
-  const pic = pictureOf({ rows, altRows, columns: 6, sprites: [{ ...SPRITE, x: 2, y: 0, w: 2, h: 1 }] })
-  assert.ok(!pic.source.includes('<animate'), 'the row is still once the blocks are cleared')
+  const pic = pictureOf({ rows, columns: 6, sprites: [{ ...SPRITE, x: 2, y: 0, w: 2, h: 1 }] })
   assert.equal(rowShown(parseXml(pic.source), 0, 6), 'ab  ef')
+  assert.equal(elements(parseXml(pic.source), 'rect').length, 1, 'no block left but the field')
 })
 
 test('a colour in capitals is written in lower case', () => {
@@ -846,7 +732,7 @@ test('every hostile sprite value is skipped and leaves no trace in the source', 
 test('every path carries only fill and d', () => {
   const out = drawn(160, 0)
   const sprites = Array.from({ length: 12 }, (_, i) => ({ x: i * 12, y: i, w: 3, h: 1, size: ['s', 'm', 'l', 'xl'][i % 4], color: INKS[i % INKS.length], frame: i % 2 }))
-  const root = assertSafe(pictureOf({ rows: out.rows, altRows: drawn(160, 1).rows, columns: 160, sprites }).source)
+  const root = assertSafe(pictureOf({ rows: out.rows, columns: 160, sprites }).source)
   const paths = elements(root, 'path')
   assert.equal(paths.length, 12)
   for (const p of paths) {
@@ -860,30 +746,36 @@ test('every path carries only fill and d', () => {
 test('with no sprites the picture is exactly what it was before sprites existed', () => {
   const r = (text, extra = {}) => run(text, extra)
   const rows = [[r('Ab', { backgroundColor: '#1a1c2e', bold: true }), r('█▀', { color: '#06d6a0' })], [r('cd'), r('▰▱', { color: '#ffd166' })]]
-  const altRows = [rows[0], [r('ce'), r('▰▱', { color: '#ffd166' })]]
-  const titles = [{ x: 1, y: 0, w: 2, h: 1, text: 'a & b' }]
   // Written down from the picture code as it stood before sprites were added.
-  const pinned = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><rect width="36" height="36" fill="#0f1020"/><style>text{font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.b{font-weight:700}</style><rect x="0" y="0" width="18" height="18" fill="#1a1c2e"/><rect x="18" y="0" width="9" height="18" fill="#06d6a0"/><rect x="27" y="0" width="9" height="9" fill="#06d6a0"/><text x="0 9" y="13" fill="#e8e6d9" class="b">Ab</text><g><animate attributeName="visibility" values="visible;hidden" dur="1s" calcMode="discrete" repeatCount="indefinite"/><rect x="19" y="19" width="7" height="16" fill="#ffd166"/><rect x="28.5" y="19.5" width="6" height="15" fill="none" stroke="#ffd166"/><text x="0 9" y="31" fill="#e8e6d9">cd</text></g><g visibility="hidden"><animate attributeName="visibility" values="hidden;visible" dur="1s" calcMode="discrete" repeatCount="indefinite"/><rect x="19" y="19" width="7" height="16" fill="#ffd166"/><rect x="28.5" y="19.5" width="6" height="15" fill="none" stroke="#ffd166"/><text x="0 9" y="31" fill="#e8e6d9">ce</text></g><rect x="9" y="0" width="18" height="18" fill="#000" fill-opacity="0"><title>a &amp; b</title></rect></svg>'
-  assert.equal(pictureOf({ rows, altRows, columns: 4, titles }).source, pinned)
-  assert.equal(pictureOf({ rows, altRows, columns: 4, titles, sprites: [] }).source, pinned)
+  const pinned = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><rect width="36" height="36" fill="#0f1020"/><style>text{font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.b{font-weight:700}</style><rect x="0" y="0" width="18" height="18" fill="#1a1c2e"/><rect x="18" y="0" width="9" height="18" fill="#06d6a0"/><rect x="27" y="0" width="9" height="9" fill="#06d6a0"/><text x="0 9" y="13" fill="#e8e6d9" class="b">Ab</text><rect x="19" y="19" width="7" height="16" fill="#ffd166"/><rect x="28.5" y="19.5" width="6" height="15" fill="none" stroke="#ffd166"/><text x="0 9" y="31" fill="#e8e6d9">cd</text></svg>'
+  assert.equal(pictureOf({ rows, columns: 4 }).source, pinned)
+  assert.equal(pictureOf({ rows, columns: 4, sprites: [] }).source, pinned)
   // A sprite on this board changes it, so the pin is not passing by accident.
-  assert.notEqual(pictureOf({ rows, altRows, columns: 4, titles, sprites: [{ ...SPRITE, x: 0, y: 1 }] }).source, pinned)
+  assert.notEqual(pictureOf({ rows, columns: 4, sprites: [{ ...SPRITE, x: 0, y: 1 }] }).source, pinned)
 })
 
-test('sprites outlast the walk and the titles under the size cap, and only the stub drops them', () => {
-  const { one, both } = sizes(walked)
+test('a small board with two sprites comes out exactly as pinned', () => {
+  const rows = [
+    [run('Ab', { backgroundColor: '#1a1c2e', bold: true }), run('█▀', { color: '#06d6a0' }), run('a<b&  ')],
+    [run('cd'), run('▰▱', { color: '#ffd166' }), run('In review')],
+  ]
+  const sprites = [
+    { x: 7, y: 0, w: 3, h: 1, size: 's', color: '#06d6a0', frame: 0 },
+    { x: 0, y: 1, w: 2, h: 1, size: 'm', color: '#FF7AB6', frame: 1 },
+  ]
+  // Written down from the picture code as it stood with every input it ever took, so taking
+  // inputs away can't change what today's caller gets.
+  const pinned = '<svg xmlns="http://www.w3.org/2000/svg" width="90" height="36" viewBox="0 0 90 36"><rect width="90" height="36" fill="#0f1020"/><style>text{font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.b{font-weight:700}</style><rect x="0" y="0" width="18" height="18" fill="#1a1c2e"/><rect x="18" y="0" width="9" height="18" fill="#06d6a0"/><rect x="27" y="0" width="9" height="9" fill="#06d6a0"/><text x="0 9" y="13" fill="#e8e6d9" class="b">Ab</text><text x="36 45 54" y="13" fill="#e8e6d9">a&lt;b</text><rect x="19" y="19" width="7" height="16" fill="#ffd166"/><rect x="28.5" y="19.5" width="6" height="15" fill="none" stroke="#ffd166"/><text x="36 45 54 63 72 81" y="31" fill="#e8e6d9">In rev</text><path fill="#06d6a0" d="M68.33 1h2.67v2.67h-2.67zM73.67 1h2.67v2.67h-2.67zM65.67 3.67h13.33v2.67h-13.33zM63 6.33h5.33v2.67h-5.33zM71 6.33h2.67v2.67h-2.67zM76.33 6.33h5.33v2.67h-5.33zM63 9h18.67v2.67h-18.67zM65.67 11.67h2.67v2.67h-2.67zM71 11.67h2.67v2.67h-2.67zM76.33 11.67h2.67v2.67h-2.67zM63 14.33h2.67v2.67h-2.67zM79 14.33h2.67v2.67h-2.67z"/><path fill="#ff7ab6" d="M4 19h2v2h-2zM12 19h2v2h-2zM0 21h2v2h-2zM6 21h2v2h-2zM10 21h2v2h-2zM16 21h2v2h-2zM0 23h2v2h-2zM4 23h10v2h-10zM16 23h2v2h-2zM0 25h6v2h-6zM8 25h2v2h-2zM12 25h6v2h-6zM0 27h18v2h-18zM2 29h14v2h-14zM2 31h2v2h-2zM14 31h2v2h-2zM0 33h2v2h-2zM16 33h2v2h-2z"/></svg>'
+  assert.equal(pictureOf({ rows, columns: 10, sprites }).source, pinned)
+})
+
+test('sprites are drawn right up to the size cap, and only the stand-in drops them', () => {
   const sprites = [{ ...SPRITE, x: 0, y: 0 }]
-  const times = Math.floor((SVG_MAX - 4000) / one)
-  assert.ok(times >= 1 && times * both > SVG_MAX)
-  const stepOne = pictureOf({ rows: stacked(times, 0, walked), altRows: stacked(times, 1, walked), columns: 160, sprites })
-  assert.ok(stepOne.source.length <= SVG_MAX)
-  assert.ok(!stepOne.source.includes('<animate'))
-  assert.equal(pathsIn(stepOne.source).length, 1)
-  const titles = Array.from({ length: 200 }, (_, i) => ({ x: i % 160, y: 0, w: 1, h: 1, text: `title ${i} `.padEnd(1000, 'x') }))
-  const stepTwo = pictureOf({ rows: stacked(1, 0), altRows: stacked(1, 1), columns: 160, titles, sprites })
-  assert.ok(stepTwo.source.length <= SVG_MAX)
-  assert.ok(!stepTwo.source.includes('<title'))
-  assert.equal(pathsIn(stepTwo.source).length, 1)
+  const times = Math.floor((SVG_MAX - 4000) / sizeOf(walked))
+  assert.ok(times >= 1)
+  const near = pictureOf({ rows: stacked(times, 0, walked), columns: 160, sprites })
+  assert.ok(near.source.length <= SVG_MAX)
+  assert.equal(pathsIn(near.source).length, 1)
   const stub = pictureOf({ rows: generated(400, 200), columns: 200, sprites })
   assert.ok(stub.source.length < 2000)
   assert.equal(pathsIn(stub.source).length, 0)

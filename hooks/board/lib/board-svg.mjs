@@ -4,9 +4,9 @@
 // grid lines up whatever font the reader has.
 //
 // Card titles, agent names and messages come from files and tool calls, and the picture ends up
-// in a browser frame, so every piece of text is escaped, characters XML refuses are dropped, and
-// colours are only used when they are plain hex. The markup uses only svg, style, rect, g, text,
-// title, animate and path; nothing here ever writes a script, an event handler, a link or a url().
+// in a browser frame, so every piece of text is escaped, characters XML refuses are drawn as
+// blanks, and colours are only used when they are plain hex. The markup uses only svg, rect,
+// style, text and path; nothing here ever writes a script, an event handler, a link or a url().
 
 import { PALETTE, ART } from './sprites.mjs'
 import { cellWidth } from './canvas.mjs'
@@ -32,12 +32,9 @@ const BLOCKS = {
 const GAUGE = new Set(['▰', '▱'])
 
 const COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
-// Characters XML 1.0 refuses outright: most C0 controls, U+FFFE, U+FFFF, and half of a surrogate
-// pair with no other half. Without the u flag this works on UTF-16 units, which is what finds a
-// lone surrogate.
-const FORBIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g
 // A character that takes a cell but must not be drawn as text: every control character (as the
-// canvas treats them) plus everything XML refuses.
+// canvas treats them) plus everything XML refuses, which includes U+FFFE, U+FFFF and half of a
+// surrogate pair.
 const BLANK = /^(?:[\u0000-\u001f\u007f-\u009f￾￿]|[\ud800-\udfff])$/
 
 // Numbers print as whole numbers or with one decimal, so output never depends on float noise.
@@ -190,23 +187,6 @@ function rowSvg(cells, top) {
   return out.join('')
 }
 
-// A tooltip box: a see-through rectangle over the cells, holding the text as its title. Boxes
-// are pulled inside the picture; one with no area left, or with a size that isn't a number, is
-// dropped.
-function titleSvg(box, columns, height) {
-  if (box === null || typeof box !== 'object') return ''
-  const nums = [box.x, box.y, box.w, box.h].map(Number)
-  if (!nums.every(Number.isFinite)) return ''
-  const [bx, by, bw, bh] = nums.map(Math.floor)
-  const x = Math.min(Math.max(bx, 0), columns)
-  const y = Math.min(Math.max(by, 0), height)
-  const w = Math.min(bx + bw, columns) - x
-  const h = Math.min(by + bh, height) - y
-  if (w <= 0 || h <= 0) return ''
-  const text = String(box.text ?? '').replace(FORBIDDEN, '')
-  return `<rect x="${num(x * CELL_W)}" y="${num(y * CELL_H)}" width="${num(w * CELL_W)}" height="${num(h * CELL_H)}" fill="#000" fill-opacity="0"><title>${esc(text)}</title></rect>`
-}
-
 const SPRITE_COLOR = /^#[0-9a-f]{6}$/i
 
 // A sprite the caller placed, checked and pulled onto the board. Every value comes from outside,
@@ -270,13 +250,6 @@ function head(width, height) {
     `<style>text{font:14px ${FONT};white-space:pre}.b{font-weight:700}</style>`
 }
 
-// Two groups that take turns: frame 0 shows for half a second, then frame 1, forever. Frame 1
-// starts hidden, so a reader with no animation still sees a whole board.
-function walking(zero, one) {
-  const swap = (values) => `<animate attributeName="visibility" values="${values}" dur="1s" calcMode="discrete" repeatCount="indefinite"/>`
-  return `<g>${swap('visible;hidden')}${zero.join('')}</g><g visibility="hidden">${swap('hidden;visible')}${one.join('')}</g>`
-}
-
 // The stand-in when even the plain board is too long: same size, one line of text.
 function tooLarge(width, height) {
   const xs = Array.from(TOO_LARGE, (_, i) => num((i + 1) * CELL_W)).join(' ')
@@ -284,27 +257,24 @@ function tooLarge(width, height) {
 }
 
 /**
- * Draws one board frame as an SVG picture.
- * @param rows the painter's rows for walking frame 0, each a list of { text, color, backgroundColor, bold }
- * @param altRows the rows for walking frame 1, or null for a still picture
+ * Draws one board as a still SVG picture.
+ * @param rows the painter's rows, each a list of { text, color, backgroundColor, bold }
  * @param columns how many cells across
- * @param titles boxes in cells, { x, y, w, h, text }, that show `text` as a tooltip on hover
  * @param sprites agents to draw in real pixels, { x, y, w, h, size, color, frame }: a box in
  *   cells, an ART size, a '#rrggbb' colour and frame 0 or 1. Each is a still drawing of the frame
  *   it was given, over its box's cells with their characters cleared; the caller redraws the
  *   picture with the other frame when a sprite walks. A sprite with a bad value is skipped.
  * @return { source, width, height }: the SVG document and its size in CSS pixels. The source is
- *   never longer than SVG_MAX: the walk goes first, then the titles, then the board itself. The
- *   sprites stay to the end; only the one-line stand-in drops them along with the board.
+ *   never longer than SVG_MAX: a board too long for that becomes a one-line stand-in of the same
+ *   size, which drops the sprites along with everything else.
  */
-export function pictureOf({ rows, altRows = null, columns, titles = [], sprites = [] } = {}) {
+export function pictureOf({ rows, columns, sprites = [] } = {}) {
   const cols = count(columns)
   const list = Array.isArray(rows) ? rows : []
-  const alt = Array.isArray(altRows) ? altRows : null
   const width = cols * CELL_W
   const height = list.length * CELL_H
 
-  // The columns each row loses to sprites, so both frames are cleared before they're compared.
+  // The columns each row loses to sprites, so their cells are cleared before the row is drawn.
   const placed = (Array.isArray(sprites) ? sprites : []).map((s) => spriteOf(s, cols, list.length)).filter((s) => s !== null)
   const spans = new Map()
   for (const s of placed) {
@@ -314,34 +284,9 @@ export function pictureOf({ rows, altRows = null, columns, titles = [], sprites 
     }
   }
   const art = placed.map(spritePath).join('')
+  const body = list.map((runs, y) => rowSvg(clear(cellsOf(runs, cols), spans.get(y)), y * CELL_H)).join('')
 
-  // Each row is drawn once per frame. A row that comes out the same in both frames is still.
-  const still = []
-  const zero = []
-  const one = []
-  const flat = []
-  list.forEach((runs, y) => {
-    const a = rowSvg(clear(cellsOf(runs, cols), spans.get(y)), y * CELL_H)
-    flat.push(a)
-    if (alt !== null && Array.isArray(alt[y])) {
-      const b = rowSvg(clear(cellsOf(alt[y], cols), spans.get(y)), y * CELL_H)
-      if (b !== a) {
-        zero.push(a)
-        one.push(b)
-        return
-      }
-    }
-    still.push(a)
-  })
-  const boxes = (Array.isArray(titles) ? titles : []).map((box) => titleSvg(box, cols, list.length)).join('')
-
-  const build = (animate, withTitles) => {
-    const body = animate && zero.length > 0 ? still.join('') + walking(zero, one) : flat.join('')
-    return `${head(width, height)}${body}${art}${withTitles ? boxes : ''}</svg>`
-  }
-  let source = build(true, true)
-  if (source.length > SVG_MAX && zero.length > 0) source = build(false, true)
-  if (source.length > SVG_MAX && boxes !== '') source = build(false, false)
+  let source = `${head(width, height)}${body}${art}</svg>`
   if (source.length > SVG_MAX) source = tooLarge(width, height)
   return { source, width, height }
 }

@@ -17,15 +17,16 @@ wording with the care you would give production code.
 - Scripts stay dependency-free and BSD/macOS compatible: no `jq` requirement in a code path that
   must work without it, no GNU-only flags; Node scripts use only the standard library.
 - Board code lives under `hooks/board/`. Rules go in pure `lib/*.mjs` modules with no imports
-  outside that folder, covered by `node --test test/board/*.test.mjs`: `fleet.mjs` keeps the
-  roster, `work.mjs` puts work items and tickets in lanes, `dish.mjs` reads a dish's notes into
-  messages and `LEARNINGS.md` into learnings, `detail.mjs` words the header and the detail box,
-  `board-layout.mjs` places everything in cells, `board-paint.mjs` draws it, `board-svg.mjs`
-  turns a drawn board into the desktop app's picture, `stage.mjs` walks the sprites, and `sprites.mjs`, `canvas.mjs`, `board.mjs` and `weather.mjs` hold the sprites
-  and palette, the cell grid, the ticket folder and the context reading. `register.tsx` holds
-  the hooks, the board's state, the folder reads and the detail box requests; `screen.tsx` draws
-  the animated region and takes the pointer. Both are covered by `claude plugin test .`. Change
-  state shapes in `types/index.d.ts` first.
+  outside that folder, covered by `node --test test/board/*.test.mjs`: `fleet.mjs` keeps the roster,
+  `work.mjs` puts work items and tickets in lanes, `dish.mjs` reads a dish's notes into messages and
+  `LEARNINGS.md` into learnings, `detail.mjs` words the header and the detail box,
+  `board-layout.mjs` places everything in cells, `board-paint.mjs` draws it, `board-svg.mjs` turns a
+  drawn board into the desktop app's picture, `stage.mjs` walks the sprites, and `sprites.mjs`,
+  `canvas.mjs`, `board.mjs` and `weather.mjs` hold the sprites and palette, the cell grid, the
+  ticket folder and the context reading. `register.tsx` holds the hooks, the board's state, the
+  folder reads and the detail box requests; `screen.tsx` draws the animated region and takes the
+  pointer. Both are covered by `claude plugin test .`. Change state shapes in `types/index.d.ts`
+  first.
 
 ## Verification
 
