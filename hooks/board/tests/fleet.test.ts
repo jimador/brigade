@@ -30,8 +30,8 @@ async function step($: Parameters<Parameters<typeof test>[1]>[0], agentId: strin
 }
 
 // Lets the sprites walk in and stand still, then moves the pointer onto the sprite whose name
-// tag matches. On a card the tag sits on the row under the sprite, from its left edge; in the
-// crew it sits beside the sprite, one cell to its right, level with its lower rows.
+// tag matches. The tag sits beside the sprite, one cell to its right, level with its lower rows,
+// unless the name is too long for that and goes on the row under the sprite, from its left edge.
 async function hover(ui: Ui, tag: RegExp) {
   await ui.advance(250 * 60)
   const rows = (await ui.findAll({ type: 'Text', in: 'stage' })).filter(t => t.children.some(c => typeof c === 'object'))
@@ -242,14 +242,16 @@ test('what an agent is doing shows on its card within a tick, for its whole life
   await $.tool.call({ agentId: 'c1', tool: 'Read', file_path: `${DISH}/packets/token-bucket.md` } as never)
   await $.tool.call({ agentId: 'c1', tool: 'Edit', file_path: '/repo/.brigade/worktrees/limits--token-bucket/src/bucket.ts' } as never)
   await clock.advance(2000)
-  expect(await ui.find({ type: 'Text', text: /│♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /│editing bucket\.ts +│/, in: 'stage' })).toBeDefined()
+  // The haiku sprite takes the card's first 5 cells; its lines start one cell right of it, with
+  // 22 - 5 - 1 = 16 cells to fill, so 'editing bucket.ts' loses its last letter and fills the row.
+  expect(await ui.find({ type: 'Text', text: /│.{5} ♨ Basil · cook +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /│.{5} editing bucket\.t│/, in: 'stage' })).toBeDefined()
   // Long past the calls that work out who an agent is, what it is doing still reaches its card.
   for (let i = 0; i < 400; i++) await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'ls' } as never)
   await $.tool.call({ agentId: 'c1', tool: 'Bash', command: 'node --test test/bucket.test.mjs' } as never)
   await clock.advance(2000)
-  expect(await ui.find({ type: 'Text', text: /│running tests +│/, in: 'stage' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /editing bucket\.ts/, in: 'stage' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /│.{5} running tests +│/, in: 'stage' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /editing bucket\.t/, in: 'stage' })).toBeUndefined()
   await ui.unmount()
   // Surfaces without a region say the same in a line per agent.
   const text = await $.ui.mount({ plugin: 'brigade', surface: 'mobile', component: 'Pane', requestId: 'brigade-board', props: PANE, viewport: { columns: 80, rows: 30 } })

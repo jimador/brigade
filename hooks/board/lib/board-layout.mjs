@@ -33,8 +33,7 @@ const MAX_LEARNINGS = 5
 const MODAL_MAX_W = 72
 // A board showing the detail box is never shorter than this, so the box has room to say something.
 const MODAL_MIN_ROWS = 12
-// Cells between slots on a card, and between slots in the crew, which has the whole width to use.
-const CARD_SLOT_GAP = 1
+// Cells between slots side by side in the crew, which has the whole width to use.
 const CREW_SLOT_GAP = 2
 // Blank rows between one row of crew slots and the next, so sprites in different rows never touch.
 const CREW_ROW_GAP = 1
@@ -180,28 +179,26 @@ function intoRows(items, room, gap) {
 }
 
 // The agents standing on one card, placed inside its border from (left, top) with `room` cells
-// across. Sprites in a row stand on the same line, so their name lines line up underneath.
+// across, one agent to a row. The name and activity go to the right of the sprite when the whole
+// name fits there, else under it, so a name is never cut just to sit beside its sprite.
 function cardSlots(agents, left, top, room) {
-  const items = agents.map(({ id, agent }) => {
-    const size = SIZES[sizeOf(agent.model)]
-    const name = clip(nameLine(agent), room)
-    const activity = clip(activityLine(agent), room)
-    const w = Math.min(room, Math.max(size.w, cellWidth(name), cellWidth(activity)))
-    return { id, size, name, activity, w }
-  })
   const slots = []
   let y = top
-  for (const row of intoRows(items, room, CARD_SLOT_GAP)) {
-    const tallest = Math.max(...row.items.map((item) => item.size.h))
-    for (const item of row.items) {
-      const x = left + item.dx
-      slots.push({
-        agentId: item.id, x, y: y + tallest - item.size.h, w: item.size.w, h: item.size.h,
-        name: { x, y: y + tallest, text: item.name },
-        activity: { x, y: y + tallest + 1, text: item.activity },
-      })
-    }
-    y += tallest + 2
+  for (const { id, agent } of agents) {
+    const size = SIZES[sizeOf(agent.model)]
+    const fullName = nameLine(agent)
+    const beside = size.w + 1 + cellWidth(fullName) <= room
+    const textRoom = beside ? room - size.w - 1 : room
+    // Beside, the two lines sit level with the sprite's last two rows; under it, they follow it.
+    const h = beside ? Math.max(size.h, 2) : size.h + 2
+    const textX = beside ? left + size.w + 1 : left
+    const textY = beside ? y + h - 2 : y + size.h
+    slots.push({
+      agentId: id, x: left, y: beside ? y + h - size.h : y, w: size.w, h: size.h,
+      name: { x: textX, y: textY, text: clip(fullName, textRoom) },
+      activity: { x: textX, y: textY + 1, text: clip(activityLine(agent), textRoom) },
+    })
+    y += h
   }
   return { slots, height: y - top }
 }

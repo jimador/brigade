@@ -293,7 +293,9 @@ test('each slot shows its name in ink and its activity in dim; a hovered agent\'
   assert.deepEqual(find(g, slot.name.text), { x: slot.name.x, y: slot.name.y })
   assert.deepEqual([g[slot.name.y][slot.name.x].color, g[slot.name.y][slot.name.x].bold], [PALETTE.ink, false])
   assert.equal(g[slot.name.y][slot.name.x].bg, PALETTE.card)
-  assert.deepEqual(find(g, 'editing src/limit.ts'), { x: slot.activity.x, y: slot.activity.y })
+  // Beside the 7-cell sprite on a 24-cell card the text has 22 - 7 - 1 = 14 cells.
+  assert.equal(slot.activity.text, 'editing src/li')
+  assert.deepEqual(find(g, slot.activity.text), { x: slot.activity.x, y: slot.activity.y })
   assert.equal(g[slot.activity.y][slot.activity.x].color, PALETTE.dim)
   const hovered = grid(frame(snapshot(), { hovered: 'cook-1' }))
   assert.equal(hovered[slot.name.y][slot.name.x].bold, true)

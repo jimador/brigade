@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { arrange } from '../../hooks/board/lib/board-layout.mjs'
 import { SIZES, sizeOf } from '../../hooks/board/lib/sprites.mjs'
 import { cellWidth, safeText } from '../../hooks/board/lib/canvas.mjs'
+import { advance, settled } from '../../hooks/board/lib/stage.mjs'
 
 const PHASES = [['todo', 'To do'], ['cooking', 'Cooking'], ['review', 'In review'], ['rework', 'Rework'], ['done', 'Done']]
 const WIDTHS = [24, 40, 60, 80, 100, 124, 160]
@@ -462,7 +463,7 @@ test('a word too long for the card is cut to the card, not left to spill over', 
   assert.equal(c.tag, 'z'.repeat(22))
 })
 
-test('a cook\'s slot: sprite box, then its name line and activity line under it', () => {
+test('a cook\'s slot: sprite box, then its name line and activity line beside it', () => {
   const lanes = lanesOf([1, 0, 0, 0, 0], () => card('token-bucket', 'Add a token bucket', { tag: 'heavy' }))
   const agents = [agent('a1', { name: 'Miso', role: 'cook', model: 'claude-sonnet-4', card: 'token-bucket', activity: 'running tests' })]
   const L = arrange(snapshot({ lanes, agents }), 80)
@@ -471,13 +472,83 @@ test('a cook\'s slot: sprite box, then its name line and activity line under it'
   assert.equal(s.agentId, 'a1')
   assert.equal(s.name.text, '♨ Miso · cook')
   assert.equal(s.activity.text, 'running tests')
-  // Inside the border, below the id, one title line and the tag.
-  assert.deepEqual({ x: s.x, y: s.y, w: s.w, h: s.h }, { x: c.x + 1, y: c.y + 4, w: 9, h: 4 })
-  assert.deepEqual(s.name, { x: s.x, y: s.y + s.h, text: '♨ Miso · cook' })
-  assert.deepEqual(s.activity, { x: s.x, y: s.y + s.h + 1, text: 'running tests' })
-  assert.equal(c.h, 1 + 3 + 4 + 2 + 1)
-  assert.deepEqual(L.homes.a1, { x: s.x, y: s.y, w: 9, h: 4 })
-  assert.deepEqual(L.obstacles, [{ x: s.x, y: s.y + 4, w: 13, h: 1 }, { x: s.x, y: s.y + 5, w: 13, h: 1 }])
+  // Inside the border, below the id, one title line and the tag. A 26-cell lane leaves 24 cells,
+  // and the 7-cell sprite, a space and the 13-cell name take 21, so the text sits beside it.
+  assert.deepEqual({ x: s.x, y: s.y, w: s.w, h: s.h }, { x: c.x + 1, y: c.y + 4, w: 7, h: 3 })
+  assert.deepEqual(s.name, { x: s.x + 7 + 1, y: s.y + 1, text: '♨ Miso · cook' })
+  assert.deepEqual(s.activity, { x: s.x + 7 + 1, y: s.y + 2, text: 'running tests' })
+  assert.equal(c.h, 1 + 3 + 3 + 1)
+  assert.deepEqual(L.homes.a1, { x: s.x, y: s.y, w: 7, h: 3 })
+  assert.deepEqual(L.obstacles, [{ x: s.x + 8, y: s.y + 1, w: 13, h: 1 }, { x: s.x + 8, y: s.y + 2, w: 13, h: 1 }])
+})
+
+test('two agents whose names fit beside take a row each, the card 2 + above + h1 + h2 tall', () => {
+  const lanes = lanesOf([1, 0, 0, 0, 0], () => card('c'))
+  const agents = [
+    agent('a', { name: 'Rye', role: 'cook', model: 'claude-haiku-4', card: 'c', activity: 'reading' }),
+    // '♨ Olive · cook' is 14 cells: with the 9-cell sprite and a space it fills the 24 cells exactly.
+    agent('b', { name: 'Olive', role: 'cook', model: 'claude-opus-4', card: 'c', activity: 'testing' }),
+  ]
+  const snap = snapshot({ lanes, agents })
+  const L = arrange(snap, 80)
+  const c = L.lanes[0].cards[0]
+  assert.equal(c.w - 2, 24)
+  const above = 1 + c.titleLines.length + (c.tag === null ? 0 : 1)
+  assert.equal(above, 2)
+  const [a, b] = c.slots
+  assert.deepEqual([a.w, a.h, b.w, b.h], [5, 2, 9, 3])
+  assert.equal(c.h, 2 + above + a.h + b.h)
+  assert.equal(a.y, c.y + 1 + above)
+  assert.equal(b.y, a.y + a.h)
+  for (const s of [a, b]) {
+    assert.equal(s.x, c.x + 1)
+    // The two lines sit on the sprite's last two rows, one cell to its right.
+    assert.deepEqual([s.name.x, s.name.y], [s.x + s.w + 1, s.y + s.h - 2])
+    assert.deepEqual([s.activity.x, s.activity.y], [s.x + s.w + 1, s.y + s.h - 1])
+  }
+  assert.deepEqual([a.name.text, b.name.text], ['♨ Rye · cook', '♨ Olive · cook'])
+  check(L, snap, 80)
+})
+
+test('a name too wide to sit beside goes under the sprite, whole, and its slot takes h + 2 rows', () => {
+  const lanes = lanesOf([1, 0, 0, 0, 0], () => card('c'))
+  const agents = [
+    // 5 + 1 + 17 = 23 cells, more than the 20 inside a 22-cell card.
+    agent('a', { name: 'Tamarind', role: 'cook', model: 'claude-haiku-4', card: 'c', activity: 'reading' }),
+    agent('b', { name: 'Rye', role: 'cook', model: 'claude-haiku-4', card: 'c', activity: 'testing' }),
+  ]
+  const snap = snapshot({ lanes, agents })
+  const L = arrange(snap, 45)
+  const c = L.lanes[0].cards[0]
+  assert.equal(c.w - 2, 20)
+  const above = 1 + c.titleLines.length
+  const [a, b] = c.slots
+  assert.equal(a.name.text, '♨ Tamarind · cook')
+  assert.deepEqual([a.name.x, a.name.y], [a.x, a.y + a.h])
+  assert.deepEqual([a.activity.x, a.activity.y], [a.x, a.y + a.h + 1])
+  assert.equal(b.y, a.y + a.h + 2)
+  assert.deepEqual([b.name.x, b.name.y], [b.x + b.w + 1, b.y + b.h - 2])
+  assert.equal(c.h, 2 + above + (a.h + 2) + b.h)
+  check(L, snap, 45)
+})
+
+test('three sprites on one card all walk home and settle within 40 steps', () => {
+  const agents = [
+    agent('a', { name: 'Rye', role: 'cook', model: 'claude-haiku-4', card: 'review-1', activity: 'reading' }),
+    agent('b', { name: 'Tamarind', role: 'inspector', model: 'claude-fable-1', card: 'review-1', activity: 'checking' }),
+    agent('c', { name: 'Olive', role: 'heavy', model: 'claude-opus-4', card: 'review-1', activity: 'testing' }),
+  ]
+  for (const columns of [24, 80, 160]) {
+    const L = arrange(snapshot({ agents }), columns)
+    assert.equal(L.lanes[2].cards[0].slots.length, 3)
+    let pos = {}
+    let steps = 0
+    while (!settled(pos, L.homes) && steps < 40) {
+      pos = advance(pos, L.homes, L.obstacles)
+      steps++
+    }
+    assert.ok(settled(pos, L.homes), `${columns} columns: not home after ${steps} steps`)
+  }
 })
 
 test('the activity line falls back to finished, failed or blank', () => {
@@ -495,8 +566,8 @@ test('the largest sprite with ✦ Basil · planner fits a 24-cell lane uncut', (
   const agents = [agent('p', { name: 'Basil', role: 'planner', model: 'claude-fable-1', card: 'c' })]
   const L = arrange(snapshot({ lanes, agents }), 24)
   const s = L.lanes[0].cards[0].slots[0]
-  assert.equal(s.w, 13)
-  assert.equal(s.h, 6)
+  assert.equal(s.w, 11)
+  assert.equal(s.h, 4)
   assert.equal(s.name.text, '✦ Basil · planner')
   check(L, snapshot({ lanes, agents }), 24)
 })
@@ -520,13 +591,14 @@ test('two agents with 17-cell names on one 22-cell card stack, neither name cut'
   check(L, snapshot({ lanes, agents }), 45)
 })
 
-test('narrow slots sit side by side with one cell between them', () => {
+test('narrow slots still take a row each, one under the other', () => {
   const lanes = lanesOf([1, 0, 0, 0, 0], () => card('c'))
   const agents = [agent('a', { name: 'Rye', role: 'cook', model: 'claude-haiku-4', card: 'c' }), agent('b', { name: 'Rye', role: 'cook', model: 'claude-haiku-4', card: 'c' })]
   const [a, b] = arrange(snapshot({ lanes, agents }), 160).lanes[0].cards[0].slots
-  // Each name line is 12 cells: '♨ Rye · cook'.
-  assert.equal(a.y, b.y)
-  assert.equal(b.x, a.x + 12 + 1)
+  // Each name line is 12 cells: '♨ Rye · cook'. Two would fit across a 28-cell card, but a column
+  // of slots keeps every label in one place and every sprite's way home clear.
+  assert.equal(b.y, a.y + 2)
+  assert.equal(b.x, a.x)
 })
 
 test('an agent goes on the first card with its id; a duplicate card gets nobody', () => {
@@ -695,7 +767,7 @@ test('ids come back in their safe form, and agents still find their cards', () =
 })
 
 test('crew rows of text-beside slots keep a blank row between them', () => {
-  // Each slot is 20 cells (a 7-cell sprite, a space, '♨ Rye · cook'), so at 24 columns one fits a row.
+  // Each slot is 18 cells (a 5-cell sprite, a space, '♨ Rye · cook'), so at 24 columns one fits a row.
   const agents = ['a', 'b', 'c'].map((id) => agent(id, { name: 'Rye', model: 'claude-haiku-4' }))
   const snap = snapshot({ agents })
   const L = arrange(snap, 24)
