@@ -171,11 +171,14 @@ turns one off):
 - `terms` — a banned word used as a whole word (any case), once per banned word per line:
   `packet <slug> line <n>: says "<banned>", the approved term is "<term>"`.
 
-A packet runs from its `## Packet:` line to the next `## ` line outside fenced code. Fenced code and text in
-backticks are never checked. A sentence ends at `.`, `!` or `?` followed by a space or the
-end of the line, and carries on across a wrapped line. A word is a space-separated token with
-a letter or digit in it; list markers (`- `, `1. `, `- [ ] `) and bold markers are not words,
-and a backtick span counts as one. A sentence is reported on the line where it starts.
+A packet runs from its `## Packet:` line to the next `## Packet:` line, or to the first other
+`## ` line, outside fenced code, that comes after one of the packet's `### ` headings. A `## `
+line before the packet's first `### ` heading is its title line: the packet stays open and the
+line is not checked. Fenced code and text in backticks are never checked. A sentence ends at
+`.`, `!` or `?` followed by a space or the end of the line, and carries on across a wrapped
+line. A word is a space-separated token with a letter or digit in it; list markers (`- `,
+`1. `, `- [ ] `) and bold markers are not words, and a backtick span counts as one. A sentence
+is reported on the line where it starts.
 
 ### `brief` — scout research answer (`briefs/<n>-<topic>.md`)
 

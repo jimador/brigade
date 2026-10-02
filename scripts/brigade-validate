@@ -264,6 +264,7 @@ function checkPackets(body, firstLine, checks, warnings) {
   let fence = null // the open fence's marker while inside fenced code
   let slug = null // the packet we are in, if any
   let section = '' // its current `### ` heading, lower-cased
+  let hasSection = false // whether the packet has had a `### ` heading yet
   let block = null // the prose block being read for the sentence checks
 
   const warn = (n, message) => warnings.push(`packet ${slug} line ${n}: ${message}`)
@@ -352,9 +353,13 @@ function checkPackets(body, firstLine, checks, warnings) {
     }
 
     if (line.startsWith('## ')) {
+      // A `## ` line right under `## Packet:`, before any `### ` section, is the packet's
+      // title line from the template. It keeps the packet open and is not checked itself.
+      if (slug !== null && !hasSection && !line.startsWith('## Packet:')) continue
       endBlock()
       slug = line.startsWith('## Packet:') ? line.slice('## Packet:'.length).trim() : null
       section = ''
+      hasSection = false
     }
     if (slug === null) continue
 
@@ -378,7 +383,10 @@ function checkPackets(body, firstLine, checks, warnings) {
 
     if (/^#{1,6}\s/.test(line)) {
       endBlock()
-      if (line.startsWith('### ')) section = line.slice(4).trim().toLowerCase()
+      if (line.startsWith('### ')) {
+        section = line.slice(4).trim().toLowerCase()
+        hasSection = true
+      }
       continue
     }
     if (line.trim() === '') {

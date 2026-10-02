@@ -2149,6 +2149,58 @@ EOF
   [ ! -e "$calls" ] || fail "the validator called brigade-config for a plan without writing:"
 }
 
+test_validate_writing_title_line() {
+  # The packet template puts a title line, `## <slug> — <title>`, right under
+  # `## Packet: <slug>`. The writing checks once ended the packet at that line and went
+  # silent on everything below it. A `## ` line ends a packet only after the packet has
+  # had a `### ` section; before that, it is the packet's title and is not checked.
+  fixture="$TMP_ROOT/validate-writing-title"
+  mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  rel=".brigade/dishes/sample/PLAN.md"
+  title_validate() { CLAUDE_PROJECT_DIR="$fixture" BRIGADE_HOME="$fixture/home" "$ROOT/scripts/brigade-validate" "$plan" 2>&1; }
+  # Writes a ste-80 plan whose body is the packet text given on stdin.
+  title_plan() {
+    {
+      printf '%s\n' '---' 'doc: plan' 'schema: 1' 'dish: sample' 'role: planner' 'model: haiku' \
+        'created: 2026-10-01T00:00:00Z' 'ticket: TEST-1' 'source: local' 'writing: ste-80' 'items:' \
+        '  - { slug: alpha, status: todo, depends_on: [], heavy: false, files: [src/alpha.ts], attempts: [] }' \
+        '---' '' '## Dish' 'Fixture for the packet title line.' ''
+      cat
+    } >"$plan"
+  }
+  long_step='Write the greeting as one line of text that each visitor to the acme site reads first when the banner page opens in a browser.'
+  long_note='1. Alex wants the greeting to read as one line of text that each visitor to the acme site sees first when the banner page opens.'
+
+  # With the title line: the long step is still found, and `## Notes` after the packet's
+  # sections still ends the packet.
+  printf '%s\n' '## Packet: alpha' '' '## alpha — a title' '' '### Steps' '' "1. $long_step" '' \
+    '## Notes' '' "$long_note" | title_plan
+  n="$(grep -n 'Write the greeting' "$plan" | cut -d: -f1)"
+  got="$(title_validate | grep '^warn ' || true)"
+  [ "$got" = "warn  $rel: packet alpha line $n: step sentence has 25 words (limit 20)" ] ||
+    fail "a packet with a title line did not get exactly the long-step warning on line $n: $got"
+
+  # The same packet without the title line gets the same warning.
+  printf '%s\n' '## Packet: alpha' '' '### Steps' '' "1. $long_step" | title_plan
+  n="$(grep -n 'Write the greeting' "$plan" | cut -d: -f1)"
+  got="$(title_validate | grep '^warn ' || true)"
+  [ "$got" = "warn  $rel: packet alpha line $n: step sentence has 25 words (limit 20)" ] ||
+    fail "a packet without a title line did not get exactly the long-step warning on line $n: $got"
+
+  # A `## ` heading after the packet's sections ends it: the long line under it is not checked.
+  printf '%s\n' '## Packet: alpha' '' '### Steps' '' '1. Read the banner file.' '' \
+    '## Notes' '' "$long_note" | title_plan
+  got="$(title_validate | grep '^warn ' || true)"
+  [ -z "$got" ] || fail "a line under ## Notes after the packet's sections was checked: $got"
+
+  # A title line of more than 25 words is not checked as prose.
+  printf '%s\n' '## Packet: alpha' '' "## alpha — $long_step" '' '### Steps' '' '1. Read the banner file.' |
+    title_plan
+  got="$(title_validate | grep '^warn ' || true)"
+  [ -z "$got" ] || fail "a long packet title line was checked as prose: $got"
+}
+
 test_validate_writing_cost() {
   # A model-written plan can be huge and hostile. 5,000 lines, with one 100,000-character
   # step made of ", then " joins and one made of "<", must validate in under 2 seconds.
@@ -4511,6 +4563,7 @@ test_validate_design_ledger
 test_validate_retro_readiness
 test_validate_analyst_modes
 test_validate_writing_checks
+test_validate_writing_title_line
 test_validate_writing_cost
 test_writing_long_step_grader
 test_writing_sentence_count_grader
