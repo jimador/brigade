@@ -410,6 +410,29 @@ describe('what a tool call looks like to someone watching', () => {
     assert.equal(bash('time nohup command exec ./build.sh'), 'running build.sh')
   })
 
+  test('a test run anywhere in a chain of commands is running tests', () => {
+    const bash = (command) => activityOf({ tool: 'Bash', command })
+    assert.equal(bash('npm run build && npm test'), 'running tests')
+    assert.equal(bash('npm test && git push'), 'running tests')
+    assert.equal(bash('git status; node --test test/a.test.mjs'), 'running tests')
+  })
+
+  test('exit, return, true, false and : are never named as the program', () => {
+    const bash = (command) => activityOf({ tool: 'Bash', command })
+    assert.equal(bash('cd a || exit 1; make'), 'running make')
+    assert.equal(bash('cd a || exit 1'), 'in the shell')
+    assert.equal(bash('true && ls'), 'running ls')
+    assert.equal(bash('false || return 2; : ; make all'), 'running make')
+  })
+
+  test('options after a wrapper, and the user or variable they name, are skipped', () => {
+    const bash = (command) => activityOf({ tool: 'Bash', command })
+    assert.equal(bash('sudo -u root make all'), 'running make')
+    assert.equal(bash('sudo -g staff make all'), 'running make')
+    assert.equal(bash('sudo -E env -u FOO X=1 make'), 'running make')
+    assert.equal(bash('env -i ls'), 'running ls')
+  })
+
   test('a shell command that only changes folder or settings is in the shell', () => {
     assert.equal(activityOf({ tool: 'Bash', command: 'cd /path/to/repo' }), 'in the shell')
     assert.equal(activityOf({ tool: 'Bash', command: 'export A=1 && B=2; cd -' }), 'in the shell')
@@ -574,6 +597,29 @@ describe('working out an activity is quick and short for hostile input', () => {
     assert.equal(activityOf({ tool: 'Edit', filePath: grow('a/', 100_000) }), 'editing a')
     assert.equal(activityOf({ tool: 'Edit', filePath: grow('b', 100_000) }), `editing ${'b'.repeat(24)}`)
   })
+
+  // Wrapper options, words that are not programs, and a long chain that is read to its end
+  // when looking for a test run.
+  const CHAINS = {
+    'sudo -u a, over and over': ['sudo -u a ', 'in the shell'],
+    'exit 1;, over and over': ['exit 1; ', 'in the shell'],
+    'npm run x &&, over and over': ['npm run x && ', 'running npm'],
+  }
+
+  for (const [name, [piece, answer]] of Object.entries(CHAINS)) {
+    test(`${name}`, () => {
+      for (const size of SIZES) {
+        const command = grow(piece, size)
+        assert.ok(command.length >= size)
+        const start = performance.now()
+        const result = activityOf({ tool: 'Bash', command })
+        const took = performance.now() - start
+        assert.ok(took < LIMIT_MS, `Bash at ${size} took ${took.toFixed(1)} ms`)
+        drawable(result)
+        assert.equal(result, answer)
+      }
+    })
+  }
 
   test('a file name of wide characters is never cut in half', () => {
     const result = activityOf({ tool: 'Read', filePath: `/path/to/repo/${'\u{1F600}'.repeat(30)}` })

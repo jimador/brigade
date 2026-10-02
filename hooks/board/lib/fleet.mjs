@@ -237,10 +237,16 @@ function runsTestScript(piece) {
 
 // Commands that only set up the shell (change folder, set a variable, read a settings file).
 // They say nothing about the work, so the activity names the command after them instead.
-const SETUP_COMMANDS = new Set(['cd', 'export', 'set', 'source', '.', 'pushd', 'popd'])
+// Words that leave the shell or just give back a status, as in 'cd a || exit 1', are skipped the
+// same way, since naming them would read as if the agent were running a program called 'exit'.
+const SETUP_COMMANDS = new Set(['cd', 'export', 'set', 'source', '.', 'pushd', 'popd', 'exit', 'return', 'true', 'false', ':'])
 
 // Words that run the command after them, so the program is the word that follows.
 const WRAPPERS = new Set(['sudo', 'env', 'time', 'command', 'exec', 'nohup'])
+
+// Wrapper options that take the next word as their value, like the user in 'sudo -u root make',
+// so that word is skipped too instead of being read as the program.
+const OPTIONS_WITH_VALUE = { sudo: new Set(['-u', '-g']), env: new Set(['-u']) }
 
 // 'NAME=value', which sets a variable instead of running anything. One anchored run.
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
@@ -313,22 +319,26 @@ function programName(word) {
 }
 
 // Finds the program one command runs: the first word that isn't an assignment, a wrapper like
-// sudo, or an option given to a wrapper. Returns its bare form and the words from it on, or
-// 'setup' when the command only sets up the shell, or null when it holds no word at all.
+// sudo, or an option given to a wrapper (with its value, for the few that take one). Returns its
+// bare form and the words from it on, or 'setup' when the command only sets up the shell, or
+// null when it holds no word at all.
 function programOf(piece) {
   const words = piece.trim().split(/\s+/)
   let seen = false
-  let wrapped = false
+  let wrapper = ''
   for (let i = 0; i < words.length; i++) {
     const word = bareWord(words[i])
     if (word === '') continue
     seen = true
     if (ASSIGNMENT.test(word)) continue
     if (WRAPPERS.has(word)) {
-      wrapped = true
+      wrapper = word
       continue
     }
-    if (wrapped && word.startsWith('-')) continue
+    if (wrapper && word.startsWith('-')) {
+      if (OPTIONS_WITH_VALUE[wrapper]?.has(word)) i++
+      continue
+    }
     if (SETUP_COMMANDS.has(word)) return 'setup'
     return { word, line: [word, ...words.slice(i + 1)].join(' ') }
   }
@@ -337,11 +347,13 @@ function programOf(piece) {
 
 // What one shell command is doing. Only its first 400 characters are read, and every step below
 // is a single walk over them, so a huge or hostile command costs no more than a short one.
-// The program is found after any leading 'cd', 'export', assignments or wrappers; a command
-// that is nothing but those is 'in the shell'.
+// A test run anywhere in those characters wins, so 'npm run build && npm test' is running tests.
+// Otherwise the first program found after any leading 'cd', 'export', assignments or wrappers
+// names the activity, and a command that is nothing but those is 'in the shell'.
 function commandActivity(fullCommand) {
   const raw = fullCommand.slice(0, ACTIVITY_COMMAND_LIMIT)
   let setup = false
+  let first
   // Split before scrubbing, since a newline ends a command just as ';' does.
   for (const piece of commandsIn(raw)) {
     const found = programOf(piece.replace(UNDRAWABLE, ' '))
@@ -351,11 +363,12 @@ function commandActivity(fullCommand) {
       continue
     }
     if (TEST_RUNS.some((run) => found.line.includes(run)) || runsTestScript(found.line)) return 'running tests'
-    const program = programName(found.word)
-    if (program === 'git') return 'running git'
-    return program ? `running ${program}` : null
+    first ??= found
   }
-  return setup ? 'in the shell' : null
+  if (!first) return setup ? 'in the shell' : null
+  const program = programName(first.word)
+  if (program === 'git') return 'running git'
+  return program ? `running ${program}` : null
 }
 
 // What one tool call looks like to a person watching, in two or three words, or null when it
