@@ -2316,6 +2316,43 @@ test_guard_quoted_substitution() {
   assert_guard_blocks "echo \"\$(git add '.')\""
 }
 
+test_steward_model() {
+  # The steward is the one role whose agent has no model in its own frontmatter, so an
+  # unpinned dispatch inherits the caller's model and runs git plumbing on whatever the
+  # planner is running on. Pin both halves: the policy value, and the fact that every
+  # generated dispatch site actually passes it.
+  ROOT="$ROOT" node <<'NODE' || fail "steward model pin failed"
+const fs = require('fs')
+const assert = require('assert')
+const src = fs.readFileSync(process.env.ROOT + '/workflows/config.js', 'utf8')
+const { STEWARD, resolvePolicy } = new Function(src + '; return { STEWARD, resolvePolicy }')()
+
+assert.ok(STEWARD.model, 'STEWARD carries no model — the steward would inherit the caller\'s')
+assert.notStrictEqual(STEWARD.agentType, undefined, 'STEWARD carries no agentType')
+
+const shipped = resolvePolicy('two-star', {})
+assert.strictEqual(shipped.stewardModel, STEWARD.model,
+  `default policy stewardModel: expected ${STEWARD.model}, got ${shipped.stewardModel}`)
+
+// A config layer that swaps in its own steward agent has chosen a model in that agent's
+// frontmatter; the pin must step aside rather than override it.
+const swapped = resolvePolicy('two-star', { config: { models: { steward: 'acme:acme-steward' } } })
+assert.strictEqual(swapped.agents.steward, 'acme:acme-steward')
+assert.strictEqual(swapped.stewardModel, undefined,
+  `custom steward agent should drop the model pin, got ${swapped.stewardModel}`)
+
+for (const name of ['brigade-execute.js', 'brigade-review.js', 'brigade-research.js']) {
+  const text = fs.readFileSync(`${process.env.ROOT}/workflows/${name}`, 'utf8')
+  const dispatches = (text.match(/agentType: POLICY\.agents\.steward/g) || []).length
+  const pinned = (text.match(/model: POLICY\.stewardModel/g) || []).length
+  assert.strictEqual(pinned, dispatches,
+    `${name}: ${dispatches} steward dispatch(es) but ${pinned} carry a model`)
+}
+
+console.log('STEWARD MODEL PIN OK')
+NODE
+}
+
 test_review_config() {
   # Pin REVIEW_DIMENSIONS/REVIEW_POLICY straight out of workflows/config.js, the same
   # extraction pattern as test_config_override_consumer_path and the MD_SCHEMA_BLOCKS.ledger
@@ -4575,6 +4612,7 @@ test_execute_prompt_overrides_normalize
 test_execute_writing_rules
 test_workflow_scripts_parse
 test_schema_examples_validate
+test_steward_model
 test_review_config
 test_review_policy_binding
 test_review_verify_tally
