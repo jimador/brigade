@@ -242,6 +242,33 @@ assert_guard_blocks_with_exact_message() {
     fail "guard gave wrong message for: $command, expected 'brigade guard: $expected_message', got: $(cat "$stderr_file")"
 }
 
+test_guard_worktree_paths() {
+  mkdir -p "$TMP_ROOT/guard-repo/.brigade"
+
+  # An item worktree lives under .brigade/worktrees/, so its own source is
+  # ordinary content and must be committable — however the path is spelled.
+  # Judging the path as written blocked a cook from saving 400 lines of work.
+  assert_guard_allows "git add .brigade/worktrees/dish--item/src/main/kotlin/X.kt"
+  assert_guard_allows "git commit /abs/repo/.brigade/worktrees/dish--item/src/main/kotlin/X.kt -m msg"
+  assert_guard_allows "git add /abs/repo/.brigade/worktrees/dish--item/src/test/kotlin/XTest.kt"
+
+  # Brigade's own state stays off limits, including inside a worktree.
+  assert_guard_blocks "git add .brigade/dishes/sample/PLAN.md"
+  assert_guard_blocks "git add /abs/repo/.brigade/LEARNINGS.md"
+  assert_guard_blocks "git add .brigade/worktrees/dish--item/.brigade/dishes/sample/PLAN.md"
+
+  # The bare worktree root is brigade state: staging it records a gitlink to the
+  # worktree itself. An inspector caught this exemption live — git add of the root
+  # staged the embedded repo with exit 0 — so it is pinned here.
+  assert_guard_blocks "git add .brigade/worktrees/dish--item"
+  assert_guard_blocks "git commit /abs/repo/.brigade/worktrees/dish--item -m msg"
+
+  # A DIFFERENT item's worktree content is exempted identically: the guard is a
+  # static inspector with no knowledge of which worktree a command runs in, so
+  # per-item scoping is not possible lexically. Deliberate, not an oversight.
+  assert_guard_allows "git add .brigade/worktrees/other-item/src/main/kotlin/Y.kt"
+}
+
 test_guard_staging_policy() {
   mkdir -p "$TMP_ROOT/guard-repo/.brigade"
 
@@ -1484,17 +1511,26 @@ assert.ok(
   'reconstructed report body missing the literal reconstruction attribution',
 )
 
-// The steward-land prompt itself: with both reconstructions in hand it must instruct
-// a self-heal write (not a refusal) and must embed the reconstructed text verbatim —
-// this is the actual write-if-missing instruction the steward acts on.
+// The steward-land prompt: the REPORT half self-heals (recovered, and marked as
+// recovered); the VERDICT half must refuse — a verdict the steward wrote itself
+// would authorize its own bypass.
 const healingPrompt = stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportBlock, verdictBlock)
-assert.ok(healingPrompt.includes(`write the block below verbatim to ${verdictPath}`), 'steward-land prompt missing the verdict write-if-missing instruction')
-assert.ok(healingPrompt.includes(`write the block below verbatim to ${reportPath}`), 'steward-land prompt missing the report write-if-missing instruction')
-assert.ok(healingPrompt.includes('id: "F1"'), 'steward-land prompt did not embed the synthetic finding id from the verdict reconstruction')
-assert.ok(
-  flatten(healingPrompt).includes('the inspector returned this verdict without writing the file'),
-  'steward-land prompt missing the literal reconstruction attribution line',
-)
+// A REPORT records what happened, so recovering one is safe — but it must announce that
+// it was recovered rather than written by the cook.
+assert.ok(healingPrompt.includes(`write the block below to ${reportPath}`), 'steward-land prompt missing the report write-if-missing instruction')
+assert.ok(healingPrompt.includes('reconstructed_by: steward'), 'recovered report is not marked as recovered')
+// A VERDICT is the authorization to merge. The steward must never write one: a verdict
+// it wrote itself would only ever say what it wanted to hear, and the gate would be
+// authorizing its own bypass. Missing verdict => refuse and let the Inspector re-run.
+assert.ok(!healingPrompt.includes(`write the block below verbatim to ${verdictPath}`), 'steward-land prompt still instructs writing a verdict it was not given')
+assert.ok(!healingPrompt.includes('id: "F1"'), 'steward-land prompt embedded verdict findings it must not write')
+assert.ok(healingPrompt.includes('do NOT land, and do NOT write a verdict'), 'steward-land prompt lost the verdict-fabrication refusal')
+
+// The landing steps must prove there is something to land before touching anything:
+// on a branch with no commits every later check passes vacuously and cleanup then
+// removes a worktree whose only copy of the work was never committed.
+assert.ok(healingPrompt.includes(`log --oneline ${'main'}..${branch}`), 'steward-land prompt lost the has-commits precondition')
+assert.ok(flatten(healingPrompt).includes('carries no commits'), 'steward-land prompt lost the no-commits refusal wording')
 
 // Absent-data path at the prompt level: null reconstructions -> the steward is told to
 // refuse exactly as before, never told to write anything.
@@ -4542,6 +4578,7 @@ test_helpers_share_project_root
 test_status_inline_items
 test_status_block_items
 test_guard_staging_policy
+test_guard_worktree_paths
 test_guard_arithmetic
 test_guard_quoted_substitution
 test_config_layer_precedence

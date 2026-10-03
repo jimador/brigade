@@ -550,16 +550,35 @@ order and stop at the first failure.
    frontmatter must start doc: verdict. Then run: head -3 ${reportPath} — it must
    exist and its frontmatter must start doc: report. Handle each independently, self-
    healing instead of refusing when the workflow has handed you a reconstruction:
-   - Verdict missing or wrong doc type: ${verdictReconstruction
-       ? `write the block below verbatim to ${verdictPath} — the inspector returned this verdict but never wrote the file — then continue.\n\nVERDICT RECONSTRUCTION (write this exact text if the check above failed):\n${verdictReconstruction}`
-       : `no structured verdict data was handed to you for self-healing — treat that as the artifact-missing outcome: do NOT land, return ok: false with detail naming the missing artifact (never treat the failing head as a shell error to retry).`}
+   - Verdict missing or wrong doc type: do NOT land, and do NOT write a verdict.
+     The verdict IS the authorization to merge, so writing one here would be
+     manufacturing your own permission — the gate would then only ever say what
+     this step wrote. A verdict that no inspector wrote is not a verdict.
+     Return ok: false naming ${verdictPath} as missing, so the planner can re-run
+     the Inspector against the real diff.${verdictReconstruction
+       ? ` Structured verdict data was handed to you; record it in your returned detail as UNVERIFIED context, but it does not authorize landing and must not be written to ${verdictPath}.`
+       : ``}
    - Report missing or wrong doc type: ${reportReconstruction
-       ? `write the block below verbatim to ${reportPath} — the cook returned this report but never wrote the file — then continue.\n\nREPORT RECONSTRUCTION (write this exact text if the check above failed):\n${reportReconstruction}`
+       ? `write the block below to ${reportPath} — the cook returned this report but never wrote the file — prefixing it with the line \`reconstructed_by: steward\` inside its frontmatter so a later reader can tell it was recovered from a return value rather than written by the cook itself. A report records what happened; it does not authorize anything, which is why recovering one is safe where recovering a verdict is not. Then continue.\n\nREPORT RECONSTRUCTION:\n${reportReconstruction}`
        : `no structured cook data was handed to you for self-healing — treat that as the artifact-missing outcome: do NOT land, return ok: false with detail naming the missing artifact.`}
    If either check already passed (file present, correct doc type), skip its write —
    never overwrite a real artifact with a reconstruction. If you wrote either
    reconstruction this run, name the path(s) you wrote in reconstructed (an array)
    in your return; otherwise return reconstructed: [] or omit it.
+
+1c. Prove there is something to land, BEFORE touching anything.
+   Every later check passes vacuously when the item branch carries no commits:
+   the rebase says "up to date", \`merge --ff-only\` is a no-op, and step 6's
+   ancestor check exits 0 because the branch tip IS the delivery tip. Cleanup then
+   removes a worktree whose only copy of the work was never committed. That has
+   already happened once, to 400 staged lines.
+     git -C ${worktreePath} log --oneline ${A.deliveryBranch}..${branch}
+   If that prints nothing, the item produced no commits. Do NOT rebase, land, or
+   clean up. Check whether the work merely went uncommitted:
+     git -C ${worktreePath} status --porcelain
+   Return ok: false, naming the branch, stating it carries no commits, and saying
+   explicitly whether the worktree holds uncommitted changes that must be preserved.
+   Leave the branch and worktree exactly as they are.
 
 2. Rebase the item branch onto the delivery branch:
      git -C ${worktreePath} rebase ${A.deliveryBranch}
