@@ -23,7 +23,7 @@ configured default (★★ out of the box), **brigade light** for ★.
 | planning (difficult) | frontier | frontier — `fable`, else `opus` at max effort | `opus` |
 | scouts | haiku, ≤ 6/dish; planner may read pivotal files itself | haiku, ≤ 4/dish | haiku, ≤ 2/dish, merge questions |
 | first-attempt cook | brigade-cook-heavy (sonnet) | brigade-cook (haiku) | brigade-cook (haiku) |
-| escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
+| escalation ladder | heavy retry → planner | cook → cookRetry → heavy → planner | cook → cookRetry → heavy → planner |
 | plan check | always | on triggers | never (self-check list only) |
 | analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish or on request |
 | code review depth | 8 dimensions, verify blocking+high ×2 | 4 groups (+product with source), verify blocking ×1 | 1 merged pass, no verify |
@@ -63,10 +63,14 @@ to it, or proceed degraded and say so.
 `brigade-cook` elsewhere.
 
 **Escalation ladder** is the rework path after an inspector FAIL — each arrow is the next
-attempt, ending at the planner. Two floors override the row. Config-resolution and
-ORM/schema packets start at sonnet even when they clear the haiku bar — the cheap model went
-0/4 across two bar-compliant packets of exactly that shape (enum-on-array semantics, tsconfig
-`exclude` scoping) while sonnet fixed both first try. And when a FAIL is about *framework
+attempt, ending at the planner. At ★★ and ★ the three rungs resolve through
+`models.cook`, `models.cookRetry` and `models.cookHeavy`; `cookRetry` defaults to the
+same agent as `cook`, so the retry rung runs on the first model until a config layer points
+it at a stronger one. The ★★★ ladder is heavy attempts only. Two floors override the row.
+Config-resolution and ORM/schema packets start at sonnet even when they clear the haiku bar
+— the cheap model went 0/4 across two bar-compliant packets of exactly that shape
+(enum-on-array semantics, tsconfig `exclude` scoping) while sonnet fixed both first try.
+And when a FAIL is about *framework
 semantics* rather than a slip, skip the same-model retry rung and escalate immediately;
 retrying the model that misunderstood the framework yielded 0/2.
 
@@ -125,7 +129,7 @@ except a repo where the inspector should be your strongest model:
 {
   "tier": "one-star",
   "policy": { "planCheck": "always", "scoutCap": 4 },
-  "models": { "inspector": "your-strong-reviewer-agent" }
+  "models": { "inspector": "your-strong-reviewer-agent", "cookRetry": "your-mid-tier-cook-agent" }
 }
 ```
 

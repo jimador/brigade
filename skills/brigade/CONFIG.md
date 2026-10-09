@@ -33,6 +33,19 @@ as `promptOverrides` (Phases 1 and 3–5). `overrides` is the `config` object fr
 agent types, `scoutCap`, `maxParallel`, and the circuit-breaker thresholds are all
 overridable without editing any script.
 
+`models.<role>` points a role at a different agent type; `null` keeps the shipped agent.
+The cook ladder has three slots:
+
+| key | rung | default |
+| --- | --- | --- |
+| `cook` | first attempt at ★★ and ★ | `brigade:brigade-cook` |
+| `cookRetry` | retry after an inspector FAIL at ★★ and ★ | the same agent as `cook` |
+| `cookHeavy` | heavy rung everywhere; every ★★★ attempt | `brigade:brigade-cook-heavy` |
+
+Set `cookRetry` to a stronger agent when the retry should escalate instead of rerunning
+the first model. The `cook` prompt override stack applies to every cheap rung, retry
+included.
+
 A `doctor` failure is a readiness failure: fix it, or tell the user exactly which file and
 key, before dispatching. The SessionStart hook already ran `layers` + `doctor`.
 

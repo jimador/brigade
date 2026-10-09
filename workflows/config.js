@@ -26,6 +26,9 @@ const STEWARD = { agentType: 'general-purpose', effort: 'low', model: 'sonnet' }
 const DEFAULT_AGENTS = {
   scout: 'brigade:brigade-scout',
   cook: 'brigade:brigade-cook',
+  // The retry rung after an inspector FAIL. It is the same agent as `cook` until a
+  // config layer points it elsewhere, so a plain install retries on the same model.
+  cookRetry: 'brigade:brigade-cook',
   cookHeavy: 'brigade:brigade-cook-heavy',
   inspector: 'brigade:brigade-inspector',
   analyst: 'brigade:brigade-analyst',
@@ -41,9 +44,18 @@ function resolvePolicy(tier, overrides) {
   const o = overrides && overrides.config ? overrides.config : overrides || {}
   const models = o.models || {}
   const agentFor = (role) => models[role] || DEFAULT_AGENTS[role]
+  // The retry rung follows the resolved first-attempt agent, not the shipped one, so a
+  // config that overrides `cook` and says nothing about `cookRetry` still retries on the
+  // same agent it cooked with.
+  const retryAgent = models.cookRetry || agentFor('cook')
+  // Each rung of the ladder resolves through its role: the first cheap rung is the
+  // first attempt (`cook`), every later cheap rung is a retry (`cookRetry`), and the
+  // heavy rung is `cookHeavy`. The three-star ladder has no cheap rungs, so it is
+  // untouched by `cook` and `cookRetry`.
+  let cheapRungs = 0
   const attempts = (base.attempts || []).map((agentType) => {
     if (agentType === DEFAULT_AGENTS.cookHeavy) return agentFor('cookHeavy')
-    if (agentType === DEFAULT_AGENTS.cook) return agentFor('cook')
+    if (agentType === DEFAULT_AGENTS.cook) return cheapRungs++ === 0 ? agentFor('cook') : retryAgent
     return agentType
   })
   const heavyAttempts = HEAVY_ATTEMPTS.map(() => agentFor('cookHeavy'))
