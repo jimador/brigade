@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "asking retryAfterMs for an unknown key starts its window",
+  "edits": [{ "find": "      const current = liveWindow(key, time)\n      if (!current || current.count < limit) return 0", "replace": "      let current = liveWindow(key, time)\n      if (!current) { current = { start: time, count: 0 }; windows.set(key, current) }\n      if (current.count < limit) return 0" }] }

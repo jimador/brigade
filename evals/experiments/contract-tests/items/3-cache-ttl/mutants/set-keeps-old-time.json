@@ -1,0 +1,2 @@
+{ "file": "src/cache.js", "why": "setting a key again keeps the first set time",
+  "edits": [{ "find": "      entries.delete(key)\n      entries.set(key, { value, setAt: now() })", "replace": "      const before = entries.get(key)\n      entries.delete(key)\n      entries.set(key, { value, setAt: before ? before.setAt : now() })" }] }

@@ -1,0 +1,2 @@
+{ "file": "src/tasks.js", "why": "sorts the caller's array instead of a copy",
+  "edits": [{ "find": "return [...tasks].sort(", "replace": "return tasks.sort(" }] }

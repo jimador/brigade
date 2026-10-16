@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "reports one millisecond more than the real wait",
+  "edits": [{ "find": "return current.start + lengthMs - time", "replace": "return current.start + lengthMs - time + 1" }] }

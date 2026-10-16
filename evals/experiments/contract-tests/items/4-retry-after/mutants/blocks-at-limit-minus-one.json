@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "reports a wait while one call is still left",
+  "edits": [{ "find": "if (!current || current.count < limit) return 0", "replace": "if (!current || current.count < limit - 1) return 0" }] }

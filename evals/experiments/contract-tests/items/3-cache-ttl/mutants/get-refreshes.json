@@ -1,0 +1,2 @@
+{ "file": "src/cache.js", "why": "a read restarts the entry's time to live",
+  "edits": [{ "find": "      entries.set(key, entry)\n      return entry.value", "replace": "      entry.setAt = now()\n      entries.set(key, entry)\n      return entry.value" }] }

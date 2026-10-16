@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "accepts both window and windowMs together",
+  "edits": [{ "find": "if ((window === undefined) === (windowMs === undefined)) {", "replace": "if (window === undefined && windowMs === undefined) {" }] }

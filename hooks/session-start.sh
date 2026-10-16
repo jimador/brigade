@@ -87,6 +87,7 @@ if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-onboard
   ONBOARD_STATUS="$(CLAUDE_PROJECT_DIR="$ROOT" "$SELF_DIR/../scripts/brigade-onboard" status --json 2>/dev/null || true)"
   ONBOARD_DRIFT=0
   ONBOARD_BOARD_PENDING=0
+  ONBOARD_WORK_PENDING="-"
   if [ -n "$ONBOARD_STATUS" ]; then
     ONBOARD_PARSED="$(node -e '
       let s = "";
@@ -96,14 +97,16 @@ if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-onboard
           const doc = JSON.parse(s);
           const steps = Array.isArray(doc.steps) ? doc.steps : [];
           const boardPending = steps.some((st) => st.id === "board-config" && st.state === "pending");
-          console.log((doc.drift ? "1" : "0") + " " + (boardPending ? "1" : "0"));
+          const workPending = Array.isArray(doc.work_upgrades_pending) ? doc.work_upgrades_pending.join(",") : "";
+          console.log((doc.drift ? "1" : "0") + " " + (boardPending ? "1" : "0") + " " + (doc.work_drift ? workPending : "-"));
         } catch {
-          console.log("0 0");
+          console.log("0 0 -");
         }
       });
     ' <<<"$ONBOARD_STATUS" 2>/dev/null || true)"
     ONBOARD_DRIFT="$(printf '%s' "$ONBOARD_PARSED" | cut -d' ' -f1)"
     ONBOARD_BOARD_PENDING="$(printf '%s' "$ONBOARD_PARSED" | cut -d' ' -f2)"
+    ONBOARD_WORK_PENDING="$(printf '%s' "$ONBOARD_PARSED" | cut -d' ' -f3)"
   fi
 
   if [ "$ONBOARD_DRIFT" = "1" ]; then
@@ -118,6 +121,11 @@ if command -v node >/dev/null 2>&1 && [ -x "$SELF_DIR/../scripts/brigade-onboard
   if [ "$ONBOARD_BOARD_PENDING" = "1" ]; then
     echo
     echo "Setup incomplete — run /brigade:onboard to finish board wiring."
+  fi
+
+  if [ -n "$ONBOARD_WORK_PENDING" ] && [ "$ONBOARD_WORK_PENDING" != "-" ]; then
+    echo
+    echo "Open work predates brigade $ONBOARD_WORK_PENDING: run /brigade:upgrade (or say \"upgrade my open work\") to bring open tickets and dishes up to the new rules."
   fi
 fi
 

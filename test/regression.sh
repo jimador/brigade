@@ -866,6 +866,105 @@ if states.get("git-exclude") != "na":
 PY
 }
 
+test_onboard_work_drift() {
+  fixture="$TMP_ROOT/onboard-work"
+  plugroot="$TMP_ROOT/onboard-work-plugroot"
+  mkdir -p "$fixture/.brigade" "$plugroot/.claude-plugin" "$plugroot/skills/onboard"
+  (cd "$fixture" && git init -q)
+  cat >"$plugroot/.claude-plugin/plugin.json" <<'EOF'
+{ "version": "2.0.0" }
+EOF
+  cat >"$plugroot/skills/onboard/UPGRADES.md" <<'EOF'
+## Ledger
+
+### 2.0.0
+
+- touches: tickets, dishes
+
+### 1.5.0
+
+- touches: none
+
+### 1.2.0
+
+- touches: dishes
+EOF
+
+  # (a) no board and no dish: nothing to upgrade, whatever the ledger says.
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY2' || fail "onboard status reported work drift for a repo with no work"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["work_drift"] is not False or doc["work_upgrades_pending"] != []:
+    raise SystemExit(f"expected no work drift, got {doc['work_drift']!r} {doc['work_upgrades_pending']!r}")
+PY2
+
+  # (b) a dish and no upgrade record: every touching entry is pending, oldest first,
+  # and an entry with touches: none is never listed.
+  mkdir -p "$fixture/.brigade/dishes/sample"
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY2' || fail "onboard status did not list pending work upgrades"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["work_drift"] is not True:
+    raise SystemExit(f"expected work_drift true, got {doc['work_drift']!r}")
+if doc["work_upgrades_pending"] != ["1.2.0", "2.0.0"]:
+    raise SystemExit(f"expected ['1.2.0', '2.0.0'], got {doc['work_upgrades_pending']!r}")
+if doc["work_version"] is not None:
+    raise SystemExit(f"expected work_version null, got {doc['work_version']!r}")
+PY2
+
+  # (c) a record at 1.2.0: only the newer touching entry is pending.
+  printf '{ "schema": 1, "work_version": "1.2.0" }\n' >"$fixture/.brigade/upgrade.json"
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY2' || fail "onboard status did not start pending work upgrades after the record"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["work_upgrades_pending"] != ["2.0.0"]:
+    raise SystemExit(f"expected ['2.0.0'], got {doc['work_upgrades_pending']!r}")
+PY2
+
+  # (d) work-record writes the installed version, and drift clears.
+  onboard_run "$fixture" "$plugroot" work-record >/dev/null || fail "onboard work-record failed"
+  json="$(onboard_run "$fixture" "$plugroot" status --json)"
+  python3 - "$json" <<'PY2' || fail "onboard work-record did not clear work drift"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["work_version"] != "2.0.0" or doc["work_drift"] is not False:
+    raise SystemExit(f"expected work_version 2.0.0 and no drift, got {doc['work_version']!r} {doc['work_drift']!r}")
+PY2
+
+  # (e) apply rewrites onboard.json but must leave the upgrade record alone, and a
+  # corrupt upgrade record reads as never upgraded instead of crashing.
+  onboard_run "$fixture" "$plugroot" apply >/dev/null || fail "onboard apply failed in the work fixture"
+  grep -Fq '"work_version": "2.0.0"' "$fixture/.brigade/upgrade.json" ||
+    fail "onboard apply changed .brigade/upgrade.json"
+  printf '{not json' >"$fixture/.brigade/upgrade.json"
+  json="$(onboard_run "$fixture" "$plugroot" status --json)" || fail "onboard status crashed on a corrupt upgrade.json"
+  python3 - "$json" <<'PY2' || fail "onboard status did not treat a corrupt upgrade.json as never upgraded"
+import json, sys
+doc = json.loads(sys.argv[1])
+if doc["work_version"] is not None or doc["work_upgrades_pending"] != ["1.2.0", "2.0.0"]:
+    raise SystemExit(f"unexpected {doc['work_version']!r} {doc['work_upgrades_pending']!r}")
+PY2
+
+  # (f) the shipped ledger parses, and its newest entry is the shipped plugin version.
+  python3 - "$ROOT/skills/onboard/UPGRADES.md" "$ROOT/.claude-plugin/plugin.json" <<'PY2' || fail "skills/onboard/UPGRADES.md is out of step with plugin.json"
+import json, re, sys
+text = open(sys.argv[1]).read()
+version = json.load(open(sys.argv[2]))["version"]
+entries = re.findall(r"^### (\d+\.\d+\.\d+)\s*\n\n- touches: (.+)$", text, re.M)
+if not entries:
+    raise SystemExit("no ledger entries found")
+for v, touches in entries:
+    parts = [t.strip() for t in touches.split(",")]
+    if parts != ["none"] and not set(parts) <= {"tickets", "dishes"}:
+        raise SystemExit(f"{v}: bad touches line {touches!r}")
+if entries[0][0] != version:
+    raise SystemExit(f"newest ledger entry {entries[0][0]} is not plugin version {version}")
+PY2
+}
+
 test_onboard_apply() {
   fixture="$TMP_ROOT/onboard-apply"
   plugroot="$TMP_ROOT/onboard-apply-plugroot"
@@ -1088,6 +1187,19 @@ EOF
   rc=$?
   [ "$rc" -eq 0 ] || fail "hook exited $rc on a non-brigade fixture"
   [ -z "$out3" ] || fail "hook produced output in a non-brigade repo: $out3"
+
+  # (d) open work behind a ledger entry that touches dishes: the hook says to upgrade it,
+  # and stops saying so once the upgrade pass records the version.
+  mkdir -p "$plugroot/skills/onboard" "$fixture/.brigade/dishes/sample"
+  printf '## Ledger\n\n### 9.9.9\n\n- touches: dishes\n' >"$plugroot/skills/onboard/UPGRADES.md"
+  out4="$(CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  printf '%s\n' "$out4" | grep -Fq "Open work predates brigade 9.9.9" ||
+    fail "hook did not point at /brigade:upgrade for open work behind the ledger: $out4"
+  onboard_run "$fixture" "$plugroot" work-record >/dev/null || fail "onboard work-record failed in the hook fixture"
+  out5="$(CLAUDE_PROJECT_DIR="$fixture" BRIGADE_PLUGIN_ROOT="$plugroot" bash "$ROOT/hooks/session-start.sh")"
+  if printf '%s\n' "$out5" | grep -Fq "Open work predates"; then
+    fail "hook still asked for an upgrade after work-record: $out5"
+  fi
 }
 
 # The Planner writes plans, packets, the ticket comment and the PR body itself, so the
@@ -4555,6 +4667,7 @@ test_config_doctor_catches_problems
 test_config_override_consumer_path
 test_onboard_status
 test_onboard_apply
+test_onboard_work_drift
 test_onboard_detect
 test_hook_onboard_drift
 test_hook_writing_rules

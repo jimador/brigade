@@ -53,7 +53,10 @@ output path.
      contract change. Out-of-scope edits are findings even when they're improvements.
    - **Test honesty** — do the tests test the behavior, or restate the implementation?
      Would they fail if the code were broken? Is the required adversarial case present and
-     genuine? For bug-fix items, falsification is required PASS evidence: the bug
+     genuine? When the packet numbers its contract clauses (`R1`, `E1`, `I1`, `L1`), every
+     clause id names a test, and on a heavy or data-correctness item the report carries each
+     `E`, `I` and `L` clause's red run and green run; a missing one is a High finding.
+     For bug-fix items, falsification is required PASS evidence: the bug
      reintroduced → red, restored → green (run it yourself if the report lacks it). For
      guarantee-class claims (CAS/exactly-one-winner/mutual exclusion; path traversal,
      injection, authz), code-reading is insufficient — a live concurrent or adversarial

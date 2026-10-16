@@ -1,0 +1,2 @@
+{ "file": "src/duration.js", "why": "rejects surrounding spaces",
+  "edits": [{ "find": "const trimmed = String(text).trim()", "replace": "const trimmed = String(text)" }] }

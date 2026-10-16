@@ -1,0 +1,2 @@
+{ "file": "src/duration.js", "why": "returns 0 for an empty string instead of throwing",
+  "edits": [{ "find": "if (!match || trimmed === '')", "replace": "if (!match)" }] }

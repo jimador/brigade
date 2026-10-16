@@ -5,12 +5,16 @@
 // repo, and a board config file the onboarding skill walks a human through. `status`
 // reports state; `apply` converges the automatic steps and records the result;
 // `detect` reads repo signals (read-only) so the onboarding skill only has to ask
-// the operator what it can't infer.
+// the operator what it can't infer. It also tracks how far open work (tickets and
+// dishes) has been upgraded: `status` compares .brigade/upgrade.json with the ledger in
+// skills/onboard/UPGRADES.md, and `work-record` marks open work as upgraded once the
+// onboarding skill's upgrade pass has run.
 //
 // Usage:
-//   brigade-onboard status [--json]
-//   brigade-onboard apply  [--json]
-//   brigade-onboard detect [--json]
+//   brigade-onboard status      [--json]
+//   brigade-onboard apply       [--json]
+//   brigade-onboard detect      [--json]
+//   brigade-onboard work-record [--json]
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -48,6 +52,82 @@ function readOnboardRecord(root) {
   } catch {
     return null
   }
+}
+
+function workRecordPath(root) {
+  return path.join(root, '.brigade', 'upgrade.json')
+}
+
+// The version open work was last upgraded to, or null when no upgrade pass has ever
+// recorded one (or the record is unreadable). It lives apart from onboard.json because
+// apply rewrites that file on every version bump, which would erase the starting point.
+function readWorkVersion(root) {
+  try {
+    const record = JSON.parse(fs.readFileSync(workRecordPath(root), 'utf8'))
+    return typeof record.work_version === 'string' ? record.work_version : null
+  } catch {
+    return null
+  }
+}
+
+// Compares two x.y.z version strings numerically: negative, zero or positive.
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+// Reads the upgrade ledger: every "### x.y.z" heading with the "- touches:" line under
+// it. A missing ledger reads as no entries, so an old plugin root never reports drift.
+function readUpgradeLedger(pluginRootDir) {
+  let text
+  try {
+    text = fs.readFileSync(path.join(pluginRootDir, 'skills', 'onboard', 'UPGRADES.md'), 'utf8')
+  } catch {
+    return []
+  }
+  const entries = []
+  let current = null
+  for (const line of text.split('\n')) {
+    const heading = /^### (\d+\.\d+\.\d+)\s*$/.exec(line)
+    if (heading) {
+      current = { version: heading[1], touches: null }
+      entries.push(current)
+      continue
+    }
+    const touches = /^- touches: (.+)$/.exec(line)
+    if (current && current.touches === null && touches) {
+      current.touches = touches[1].split(',').map((t) => t.trim()).filter((t) => t && t !== 'none')
+    }
+  }
+  return entries
+}
+
+// Whether the repo has any work an upgrade pass could touch: a board config or a dish.
+function hasWork(root) {
+  if (fs.existsSync(path.join(root, '.brigade', 'config.md'))) return true
+  try {
+    return fs.readdirSync(path.join(root, '.brigade', 'dishes')).length > 0
+  } catch {
+    return false
+  }
+}
+
+// The ledger versions above the recorded work version, up to the installed one, whose
+// entry touches tickets or dishes. Oldest first, the order the upgrade pass applies them.
+function pendingWorkUpgrades(root, pluginRootDir, installed) {
+  if (!hasWork(root)) return []
+  const from = readWorkVersion(root)
+  return readUpgradeLedger(pluginRootDir)
+    .filter((e) => e.touches && e.touches.length > 0)
+    .filter((e) => from === null || compareVersions(e.version, from) > 0)
+    .filter((e) => compareVersions(e.version, installed) <= 0)
+    .sort((a, b) => compareVersions(a.version, b.version))
+    .map((e) => e.version)
 }
 
 function hasGitDir(root) {
@@ -150,6 +230,8 @@ function runStatus(json) {
   const versionDrift = recordedVersion === null || recordedVersion !== installed
   const anyAutoPending = results.some((r) => r.step.kind === 'auto' && r.state === 'pending')
   const drift = versionDrift || anyAutoPending
+  const workVersion = readWorkVersion(root)
+  const workPending = pendingWorkUpgrades(root, plugRoot, installed)
 
   if (json) {
     console.log(JSON.stringify({
@@ -158,6 +240,9 @@ function runStatus(json) {
       recorded_version: recordedVersion,
       drift,
       steps: results.map((r) => ({ id: r.step.id, kind: r.step.kind, state: r.state })),
+      work_version: workVersion,
+      work_drift: workPending.length > 0,
+      work_upgrades_pending: workPending,
     }))
   } else {
     for (const r of results) {
@@ -166,6 +251,29 @@ function runStatus(json) {
     console.log(`plugin_version: ${installed}`)
     console.log(`recorded_version: ${recordedVersion ?? '(none)'}`)
     console.log(`drift: ${drift ? 'yes' : 'no'}`)
+    console.log(`work_version: ${workVersion ?? '(none)'}`)
+    console.log(`work_drift: ${workPending.length > 0 ? `yes (${workPending.join(', ')})` : 'no'}`)
+  }
+  return 0
+}
+
+// Records that open work now follows the installed plugin's rules. The onboarding
+// skill's upgrade pass runs this as its last step, after every change verified.
+function runWorkRecord(json) {
+  const root = repoRoot()
+  const installed = installedVersion(pluginRoot())
+  try {
+    fs.mkdirSync(path.join(root, '.brigade'), { recursive: true })
+    const record = { schema: 1, work_version: installed, updated_at: nowIso() }
+    fs.writeFileSync(workRecordPath(root), `${JSON.stringify(record, null, 2)}\n`)
+  } catch (err) {
+    console.error(`error writing upgrade.json: ${err.message}`)
+    return 1
+  }
+  if (json) {
+    console.log(JSON.stringify({ work_version: installed }))
+  } else {
+    console.log(`recorded work_version ${installed}`)
   }
   return 0
 }
@@ -393,8 +501,10 @@ function main() {
       return runApply(json)
     case 'detect':
       return runDetect(json)
+    case 'work-record':
+      return runWorkRecord(json)
     default:
-      console.error('usage: brigade-onboard <status|apply|detect> [--json]')
+      console.error('usage: brigade-onboard <status|apply|detect|work-record> [--json]')
       return 2
   }
 }

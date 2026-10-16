@@ -15,6 +15,25 @@ text calls it green, prove the commands that ran cover every claimed kind at ful
 A non-zero exit means a claimed kind was covered only by a targeted run. Never upgrade a
 targeted check into repo green — fix coverage or say, per kind, what was and was not proven.
 
+**A red gate is bisected, not guessed.** When the full gate fails and more than one item has
+landed, find the first red commit mechanically, in a scratch worktree so the delivery
+worktree keeps its checkout:
+
+```bash
+git worktree add --detach <scratch> <delivery-tip>
+cd <scratch>
+git bisect start <delivery-tip> <integration-base>
+git bisect run <the failing gate command>
+git bisect reset
+```
+
+`<integration-base>` is the delivery branch's fork point, `git merge-base <main_branch>
+<delivery-tip>`. Map the first bad commit to its item through `landedRange` in PLAN.md (or
+the item slug the landing commit names), send that item to
+rework with the bisect log as its finding, and remove the scratch worktree. Never blame the
+last item to touch the failing file: a later item that only reshapes the code there is the
+usual wrong answer, and bisect costs log₂(N) gate runs.
+
 Also run a whole-feature adversarial review of the assembled behavior when the dish built
 one feature incrementally across items, contains a heavy data-correctness item, or —
 regardless of tier — has one item write a config or data value another consumes: per-item

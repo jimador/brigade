@@ -32,6 +32,7 @@ permission to break a lease.
 | `swag this ticket` / `flesh out the design` / `revisit the design` | Design pass; first run writes a decision ledger, each revisit resolves one open question; ticket stays in `design` |
 | `design the UI for <ticket>` / `ui loop` | Designer loop in your session: stand up the app or a canvas, iterate live, capture states as UI samples, ticket becomes implementer-ready |
 | `continue the dish` | Resumes from `PLAN.md` in any session, any time |
+| `upgrade my open work` | After a plugin update: brings open tickets and dishes up to the new rules, with one confirmation |
 | `brigade heavy` | Run this one dish at ★★★ |
 | `brigade light` | Run this one dish at ★ |
 
@@ -51,6 +52,7 @@ set `tier` in config or run `/brigade:tier`.
 | `/brigade:ui [ticket-id] [state-name]` | UI design loop for a front-end ticket — live browser iteration, screenshots into the board, `## UI samples` spec; never claims or cooks |
 | `/brigade:review` | Advisory, tier-scaled code review of a branch, PR, or commit range |
 | `/brigade:review-dispatch` | Dispatch selected findings from a completed review report into a cooked mini-dish |
+| `/brigade:upgrade` | Upgrade open tickets and dishes to the installed version's rules (`skills/onboard/UPGRADES.md`) |
 
 ## Shell commands
 
@@ -164,6 +166,17 @@ Retros compound in three layers:
    never re-proposed.
 
 The fleet never edits its own installed brain. Upgrades go source → your review → rollout.
+
+## Upgrading
+
+Update the plugin with `claude plugin update brigade@brigade`, then start a new session.
+SessionStart heals config drift by itself. When the new version changes what open work
+should contain, it also says so; then say `upgrade my open work` or run `/brigade:upgrade`.
+The pass lists open tickets and dishes, shows one table of the changes the new version's
+ledger entries call for, applies them after your yes, validates every touched dish, and
+records the version in `.brigade/upgrade.json`. It never claims, cooks, or moves a ticket,
+never touches done work, and only changes the frontmatter of an item a cook is working on.
+A second pass over the same work changes nothing.
 
 ## Cost control
 

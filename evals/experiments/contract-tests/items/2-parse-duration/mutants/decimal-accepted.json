@@ -1,0 +1,2 @@
+{ "file": "src/duration.js", "why": "accepts a decimal number such as 1.5h",
+  "edits": [{ "find": "const PATTERN = /^(?:(\\d+)d)?(?:(\\d+)h)?(?:(\\d+)m)?(?:(\\d+)s)?$/", "replace": "const PATTERN = /^(?:([\\d.]+)d)?(?:([\\d.]+)h)?(?:([\\d.]+)m)?(?:([\\d.]+)s)?$/" }] }

@@ -1,0 +1,2 @@
+{ "file": "src/duration.js", "why": "accepts the parts in any order, such as 30m1h",
+  "edits": [{ "find": "  const match = PATTERN.exec(trimmed)", "replace": "  const parts = [...trimmed.matchAll(/(\\d+)([dhms])/g)]\n  const ok = parts.map((p) => p[0]).join('') === trimmed && new Set(parts.map((p) => p[2])).size === parts.length\n  const found = Object.fromEntries(parts.map((p) => [p[2], p[1]]))\n  const match = ok ? [trimmed, found.d, found.h, found.m, found.s] : null" }] }

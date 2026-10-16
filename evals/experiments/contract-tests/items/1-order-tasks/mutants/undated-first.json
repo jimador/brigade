@@ -1,0 +1,2 @@
+{ "file": "src/tasks.js", "why": "puts undated tasks before dated ones",
+  "edits": [{ "find": "return (a.due === undefined ? 1 : 0) - (b.due === undefined ? 1 : 0)", "replace": "return (b.due === undefined ? 1 : 0) - (a.due === undefined ? 1 : 0)" }] }

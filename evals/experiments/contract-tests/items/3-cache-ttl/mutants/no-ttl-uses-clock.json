@@ -1,0 +1,2 @@
+{ "file": "src/cache.js", "why": "without ttlMs, entries expire after one minute",
+  "edits": [{ "find": "function createCache({ maxEntries, ttlMs, now = Date.now }) {", "replace": "function createCache({ maxEntries, ttlMs = 60000, now = Date.now }) {" }] }

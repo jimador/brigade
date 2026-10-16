@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: "Sets up brigade in a repo, or repairs and upgrades an existing setup: scans repo signals, writes .brigade/config.md and the git exclusion, records the plugin version, and reconciles drift after a plugin update, asking only for values it cannot detect. Use when the user says set up brigade, onboard this repo, repair brigade setup, finish board wiring, or when SessionStart reports setup incomplete or drift. Not for working tickets or grooming a board."
+description: "Sets up brigade in a repo, or repairs and upgrades an existing setup: scans repo signals, writes .brigade/config.md and the git exclusion, records the plugin version, and reconciles drift after a plugin update, including upgrading open tickets and dishes to the new rules, asking only for values it cannot detect. Use when the user says set up brigade, onboard this repo, repair brigade setup, finish board wiring, upgrade my open work, upgrade the tickets after an update, or when SessionStart reports setup incomplete, drift or open work to upgrade. Not for working tickets or grooming a board."
 ---
 
 # Onboard
@@ -113,3 +113,8 @@ SessionStart; this skill is the handler for the one step that can't run unattend
 (`board-config`, since it needs operator answers). Re-run this skill any time — on a repo
 that's already fully wired it's a no-op scan followed by a Plan with every piece marked
 skip; on a repo with drift it repairs exactly the pieces that need it.
+
+Open work is the other half. When status reports `work_drift: true`, or the operator asks
+to upgrade open tickets or dishes, run the pass in `UPGRADES.md`: it brings open tickets
+and dishes up to the installed rules, with one confirmation, and records
+`.brigade/upgrade.json` when done. Run it after the config repair, never instead of it.

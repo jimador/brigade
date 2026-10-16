@@ -103,6 +103,15 @@ Only when they apply — omit the section if neither does:
   path), state the derivation rule in the packet and, where the platform allows it, add a
   build-time uniqueness check. A derived-identity collision is invisible to per-item review
   because no single item owns the derivation.
+- **Guarantee clauses.** When the contract promises a property a hasty test misses —
+  ordering, stability, a pure query, idempotence, a round-trip, an exact boundary, inputs left
+  unchanged — state each one as a numbered clause (`R1` requires, `E1` ensures, `I1` invariant,
+  `L1` law) with the input domain it holds over, and require one test per clause, named with
+  its id. On a `heavy: true` or data-correctness item, the Verify also falsifies each `E`, `I`
+  and `L` clause: break the clause in the code, paste the red run of its test, restore, paste
+  the green run. A clause test that never went red is not proven to see the clause. State a
+  `requires` for every input an `exactly when` or `never` clause ranges over; a guarantee
+  without its domain fails at the boundary nobody wrote down.
 - **Externally mutable state.** A packet reading state that can change under it (git HEAD, a
   cursor, a high-water mark) resolves it ONCE and threads the captured value through every
   use, and the falsification step proves the resolve-once property: inject a change between
@@ -227,6 +236,9 @@ adjacent bugs to leave alone (report them instead).
   tagged with a primary source? Dry-run every self-check/grep gate on the base branch —
   confirm it fails for the right reason and cannot force a code change just to satisfy the
   grep.
+- Does every guarantee a hasty test would miss carry a numbered clause, its input domain,
+  and a test named with its id — and, on a heavy or data-correctness item, a red-then-green
+  falsification per `E`, `I` and `L` clause in the Verify?
 - Is every named hazard paired with a matching acceptance-criterion test? Guidance without a
   test leaves the regression path open.
 - Does any step interpolate repo-external or review-subject text into an agent prompt? Then
