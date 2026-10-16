@@ -18,6 +18,7 @@
     "_comment": "Point a role at a different agent type. Absent or null keeps the shipped brigade agent.",
     "scout": null,
     "cook": null,
+    "cookRetry": null,
     "cookHeavy": null,
     "inspector": null,
     "analyst": null,

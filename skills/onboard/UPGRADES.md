@@ -49,6 +49,16 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.45.0
+
+- touches: none
+- what: three landed changes, none of which edits open work. The steward refuses to land
+  an item branch with no commits unless its worktree is clean, and never writes its own
+  verdict (#22). The steward is pinned to a mid-tier model unless a config layer swaps in
+  its own agent (#23). `models.cookRetry` names the agent for the retry rung of the cook
+  ladder, defaulting to the resolved `cook` agent, so existing configs behave as before
+  (#24).
+
 ### 0.44.1
 
 - touches: none

@@ -91,6 +91,7 @@ const DEFAULTS = {
   models: {
     scout: null,
     cook: null,
+    cookRetry: null, // null = the same agent as cook, so the retry rung runs on the same model
     cookHeavy: null,
     inspector: null,
     analyst: null,

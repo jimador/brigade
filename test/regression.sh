@@ -782,7 +782,7 @@ test_config_override_consumer_path() {
   "maxParallel": 2,
   "workingMemory": false,
   "policy": { "scoutCap": 5, "planCheck": "always", "retro": "every-dish" },
-  "models": { "cook": "custom:my-cook", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector" },
+  "models": { "cook": "custom:my-cook", "cookRetry": "custom:my-retry", "cookHeavy": "custom:my-heavy", "inspector": "custom:my-inspector" },
   "circuitBreaker": { "maxTotalFails": 9 } }
 EOF
 
@@ -810,9 +810,39 @@ assert.strictEqual(p.circuitBreaker.maxTotalFails, 9, 'circuitBreaker override l
 assert.strictEqual(p.agents.inspector, 'custom:my-inspector', 'models.inspector override lost')
 assert.ok(p.attempts.includes('custom:my-cook'), 'models.cook override missing from attempt ladder')
 assert.ok(p.heavyAttempts.every((a) => a === 'custom:my-heavy'), 'models.cookHeavy override missing from heavy ladder')
+// The three ladder slots resolve by rung: first attempt, retry, heavy. Each one is its
+// own key, so a config can put the retry on a different model from the first attempt.
+assert.deepStrictEqual(p.attempts, ['custom:my-cook', 'custom:my-retry', 'custom:my-heavy'],
+  'cook ladder should resolve cook -> cookRetry -> cookHeavy by rung')
+assert.strictEqual(envelope.config.models.cookRetry, 'custom:my-retry', 'models.cookRetry lost in resolve --json')
+// The three-star ladder is heavy attempts only: cook and cookRetry never reach it.
+assert.deepStrictEqual(resolvePolicy('three-star', envelope).attempts, ['custom:my-heavy', 'custom:my-heavy'],
+  'three-star ladder should ignore models.cook and models.cookRetry')
+// A config that never sets cookRetry retries on the same agent as cook, exactly as before
+// the key existed; and with no models at all the shipped ladder is unchanged.
+const noRetry = resolvePolicy('two-star', { models: { cook: 'custom:my-cook', cookHeavy: 'custom:my-heavy' } })
+assert.deepStrictEqual(noRetry.attempts, ['custom:my-cook', 'custom:my-cook', 'custom:my-heavy'],
+  'cookRetry should default to the cook agent when unset')
+assert.deepStrictEqual(resolvePolicy('one-star', {}).attempts,
+  ['brigade:brigade-cook', 'brigade:brigade-cook', 'brigade:brigade-cook-heavy'],
+  'shipped one-star ladder changed with no overrides')
 // No layer here sets models.designer, so this pins the DEFAULTS entry itself: without it,
 // the key is missing (undefined) rather than present-and-null.
 assert.strictEqual(envelope.config.models.designer, null, 'models.designer should default to null when no layer sets it')
+NODE
+
+  # cookRetry absent from every layer: present-and-null in the resolved config, and
+  # doctor accepts a layer that sets it.
+  fixture2="$TMP_ROOT/config-consumer-path-no-retry"
+  mkdir -p "$fixture2/home" "$fixture2/.brigade"
+  echo '{ "models": { "cook": "custom:my-cook" } }' >"$fixture2/brigade.config.json"
+  json2="$(config_run "$fixture2" resolve --json)"
+  RESOLVED_JSON="$json2" node <<'NODE' || fail "models.cookRetry should default to null when no layer sets it"
+const envelope = JSON.parse(process.env.RESOLVED_JSON)
+if (envelope.config.models.cookRetry !== null) throw new Error('cookRetry is ' + JSON.stringify(envelope.config.models.cookRetry))
+NODE
+  config_run "$fixture" doctor >/dev/null ||
+    fail "brigade-config doctor rejected a config setting models.cookRetry"
 NODE
 }
 

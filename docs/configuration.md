@@ -88,6 +88,7 @@ bad decomposition is expensive.
   "models": {
     "scout": null,
     "cook": null,
+    "cookRetry": null,
     "cookHeavy": null,
     "inspector": null,
     "analyst": null,
@@ -103,7 +104,11 @@ This is the seam for swapping in a team-specific reviewer, a domain-trained cook
 cheaper steward, without editing the workflow scripts.
 
 The escalation ladder still comes from the tier; these keys only decide *which agent*
-fills each rung.
+fills each rung. At ★★ and ★ the ladder is `cook` → `cookRetry` → `cookHeavy`.
+`cookRetry` defaults to the same agent as `cook`, so a config that never sets it retries on
+the same model as before. Point it at a stronger agent to make the retry rung a real
+escalation instead of a second roll of the same dice. The ★★★ ladder is heavy attempts
+only and ignores `cook` and `cookRetry`.
 
 Every brigade agent but the steward picks its own model in its frontmatter. The steward is
 a general-purpose agent with no model of its own, so brigade pins it to a mid-tier one —
