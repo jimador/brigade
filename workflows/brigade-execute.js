@@ -573,12 +573,17 @@ order and stop at the first failure.
    removes a worktree whose only copy of the work was never committed. That has
    already happened once, to 400 staged lines.
      git -C ${worktreePath} log --oneline ${A.deliveryBranch}..${branch}
-   If that prints nothing, the item produced no commits. Do NOT rebase, land, or
-   clean up. Check whether the work merely went uncommitted:
+   If that prints nothing, the item produced no commits. Do NOT rebase or land.
+   Check whether the work merely went uncommitted:
      git -C ${worktreePath} status --porcelain
-   Return ok: false, naming the branch, stating it carries no commits, and saying
-   explicitly whether the worktree holds uncommitted changes that must be preserved.
-   Leave the branch and worktree exactly as they are.
+   - It prints anything: return ok: false, naming the branch, stating it carries no
+     commits, and that the worktree holds uncommitted changes that must be preserved.
+     Leave the branch and worktree exactly as they are.
+   - It prints nothing: nothing can be lost. This is a no-op item, such as a packet
+     whose premise proved false and resolved to zero file changes. Skip steps 2 to 5,
+     run step 6's teardown (its ancestor check passes, since the branch adds nothing),
+     run step 7, and return ok: true with detail stating the item carries no commits
+     and landed nothing.
 
 2. Rebase the item branch onto the delivery branch:
      git -C ${worktreePath} rebase ${A.deliveryBranch}

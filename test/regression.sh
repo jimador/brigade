@@ -1643,6 +1643,11 @@ assert.ok(healingPrompt.includes('do NOT land, and do NOT write a verdict'), 'st
 // removes a worktree whose only copy of the work was never committed.
 assert.ok(healingPrompt.includes(`log --oneline ${'main'}..${branch}`), 'steward-land prompt lost the has-commits precondition')
 assert.ok(flatten(healingPrompt).includes('carries no commits'), 'steward-land prompt lost the no-commits refusal wording')
+// A clean worktree with no commits is a no-op item (a false premise resolved to zero
+// changes), and the packet template says it ends done: the steward must not turn it
+// into a landing failure, and must still refuse when uncommitted work is present.
+assert.ok(flatten(healingPrompt).includes('This is a no-op item'), 'steward-land prompt lost the clean no-op landing path')
+assert.ok(flatten(healingPrompt).includes('uncommitted changes that must be preserved'), 'steward-land prompt lost the uncommitted-work refusal')
 
 // Absent-data path at the prompt level: null reconstructions -> the steward is told to
 // refuse exactly as before, never told to write anything.
