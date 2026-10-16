@@ -1,0 +1,2 @@
+{ "file": "src/cache.js", "why": "an entry still reads at exactly ttlMs",
+  "edits": [{ "find": "now() - entry.setAt >= ttlMs", "replace": "now() - entry.setAt > ttlMs" }] }

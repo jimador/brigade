@@ -47,6 +47,12 @@ The four items and what their mutants break:
 | `3-cache-ttl` | the cache's `ttlMs` | expires one tick late, a read restarts the time, a second set keeps the old time, `ttlMs: 0` never expires, an expired entry stays in `size`, a default time to live |
 | `4-retry-after` | `retryAfterMs` | off by one, the full window instead of the time left, a wait while a call is left, the query uses up a call, the query starts a window, another key's window, both window options accepted |
 
+Items `5-order-tasks-implicit` to `8-retry-after-implicit` reuse those functions, mutants and
+reference tests with packets that state no facts: the goal, the signature, a one-line
+summary and the pasted code. Their `contract.md` asks the agent to write the contract as
+numbered clauses first, read from the code, then one test per clause; their `plain.md` keeps
+the template's test step. They measure E-007, the cook's Contract first rule.
+
 Both packets of a pair state the same facts. Every mutant breaks a fact that both
 packets state, and the prose packet is complete and correct, not a strawman.
 

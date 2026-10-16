@@ -49,6 +49,13 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.44.1
+
+- touches: none
+- what: a cook asked for tests by a packet that numbers no contract clauses writes the
+  contract first, as clauses at the top of the test file, then one test per clause
+  (`agents/brigade-cook.md` step 3). Cook behavior only; open packets need no edit.
+
 ### 0.44.0
 
 - touches: dishes

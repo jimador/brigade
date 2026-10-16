@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "asking retryAfterMs uses up a call",
+  "edits": [{ "find": "      const current = liveWindow(key, time)\n      if (!current || current.count < limit) return 0", "replace": "      let current = liveWindow(key, time)\n      if (!current) { current = { start: time, count: 0 }; windows.set(key, current) }\n      if (current.count < limit) { current.count += 1; return 0 }" }] }

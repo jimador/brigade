@@ -1,0 +1,2 @@
+{ "file": "src/cache.js", "why": "an expired entry that was read still counts in size",
+  "edits": [{ "find": "      entries.delete(key)\n      if (ttlMs !== undefined && now() - entry.setAt >= ttlMs) return undefined", "replace": "      if (ttlMs !== undefined && now() - entry.setAt >= ttlMs) return undefined\n      entries.delete(key)" }] }

@@ -1,0 +1,2 @@
+{ "file": "src/tasks.js", "why": "leaves done tasks out",
+  "edits": [{ "find": "return [...tasks].sort(", "replace": "return tasks.filter((task) => !task.done).sort(" }] }

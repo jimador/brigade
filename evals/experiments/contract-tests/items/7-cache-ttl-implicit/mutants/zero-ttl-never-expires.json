@@ -1,0 +1,2 @@
+{ "file": "src/cache.js", "why": "ttlMs 0 is treated as no time to live",
+  "edits": [{ "find": "if (ttlMs !== undefined && now()", "replace": "if (ttlMs && now()" }] }

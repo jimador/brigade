@@ -1,0 +1,2 @@
+{ "file": "src/tasks.js", "why": "breaks ties by reverse id instead of keeping input order",
+  "edits": [{ "find": "    return 0\n  })", "replace": "    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0\n  })" }] }

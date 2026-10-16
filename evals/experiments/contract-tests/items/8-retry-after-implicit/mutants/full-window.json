@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "always reports the full window length, not the time left",
+  "edits": [{ "find": "return current.start + lengthMs - time", "replace": "return lengthMs" }] }

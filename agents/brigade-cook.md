@@ -48,6 +48,14 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
 3. **Implement:** follow the packet's Implement steps precisely. Match the conventions
    section. Touch only the files in the packet's list. Write the test(s) the packet names,
    including its adversarial/edge case — a test that can't fail is not a test.
+   - **Contract first.** When the packet asks for tests and numbers no contract clauses,
+     open the new test file with the contract as a comment block, read from the packet and
+     the code: `R1`… requires (the inputs the code accepts, and what it does outside them),
+     `E1`… ensures (what a call returns or changes), `I1`… invariants (what a call leaves
+     unchanged), `L1`… laws (idempotence, stability, a round-trip, a sum of parts). Write at
+     least one test per clause, named with its id, and test each requires clause on both
+     sides of its boundary. When the packet does number clauses, use its ids and add none
+     of your own without reporting them.
 4. **Verify:** run the packet's Verify commands exactly as written, from the worktree.
    - All pass → continue.
    - Any fail → fix within the packet's scope and re-run. If you cannot make it pass

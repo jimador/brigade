@@ -1,0 +1,2 @@
+{ "file": "src/duration.js", "why": "a compound duration keeps only its last part",
+  "edits": [{ "find": "total += Number(match[index + 1])", "replace": "total = Number(match[index + 1])" }] }

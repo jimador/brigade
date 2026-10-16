@@ -1,0 +1,2 @@
+{ "file": "src/tasks.js", "why": "two undated tasks of one priority swap places",
+  "edits": [{ "find": "    if (a.due === undefined || b.due === undefined) {", "replace": "    if (a.due === undefined && b.due === undefined) return a.id < b.id ? 1 : -1\n    if (a.due === undefined || b.due === undefined) {" }] }

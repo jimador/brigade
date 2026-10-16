@@ -1,0 +1,2 @@
+{ "file": "src/duration.js", "why": "a day counts as 12 hours",
+  "edits": [{ "find": "d: 24 * 60 * 60 * 1000", "replace": "d: 12 * 60 * 60 * 1000" }] }

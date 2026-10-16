@@ -1,0 +1,2 @@
+{ "file": "src/rate-limiter.js", "why": "retryAfterMs reads the window of the most recent key, not the key asked about",
+  "edits": [{ "find": "      const current = liveWindow(key, time)\n      if (!current || current.count < limit) return 0", "replace": "      const last = [...windows.keys()].pop()\n      const current = liveWindow(last, time)\n      if (!current || current.count < limit) return 0" }] }

@@ -1,0 +1,2 @@
+{ "file": "src/tasks.js", "why": "returns copies of the task objects, not the same objects",
+  "edits": [{ "find": "return [...tasks].sort(", "replace": "return tasks.map((task) => ({ ...task })).sort(" }] }

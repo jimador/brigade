@@ -163,3 +163,22 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
 - evidence: the six final reports in this session's transcript; the case's fixture and
   graders are in `evals/red-gate-bisects/` for `claude plugin eval` on a machine where it can
   grant Bash.
+
+### E-007 Cooks write the contract before the tests
+
+- date: 2026-10-16
+- hypothesis: when a packet asks for tests and states no contract clauses, a cook that first
+  writes the contract as numbered requires, ensures, invariant and law clauses read from the
+  code, then one test per clause, catches more planted bugs than a cook given the template's
+  "include at least one adversarial/edge case" step.
+- setup: adopted without a run, as a low-cost change with the article's mutant-kill result
+  behind it. Items `5-` to `8-*-implicit` in `evals/experiments/contract-tests/` are ready to
+  measure it: the same four functions and 27 mutants as items 1-4, with packets that state
+  no facts, so the two arms differ only in the test step.
+- metric: mutant kill rate per style on items 5-8, against the explicit items 1-4.
+- result: pending; run it when test quality looks like it slipped: inspector test-honesty
+  findings rising, or a bug escaping a packet whose tests passed.
+- decision: adopt (`agents/brigade-cook.md` step 3, Contract first); revisit on the first
+  sign of a regression in test quality.
+- evidence: none yet.
+

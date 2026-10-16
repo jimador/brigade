@@ -160,7 +160,8 @@ If the plan declares `writing: <preset>`, write the steps and hazards to the S r
 2. **Implement:** <precise change 1>.
 3. **Implement:** <precise change 2 — including the new test: name the cases; at least one
    adversarial/edge case (malformed input, empty/null boundary, error path), not just the
-   happy path>.
+   happy path>. When the packet states no Guarantee clauses, the cook writes the
+   contract as numbered clauses at the top of the test file first, one test per clause.
 4. **Verify (must pass):**
 
 ```bash
