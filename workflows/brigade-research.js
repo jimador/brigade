@@ -19,7 +19,12 @@ const MAX_PARALLEL_COOKS = 4
 
 const CIRCUIT_BREAKER = { maxLadderExhausts: 2, maxTotalFails: 4 }
 
-const STEWARD = { agentType: 'general-purpose', effort: 'low' }
+// The steward runs git plumbing to a script: worktrees, rebases, landings, cleanup.
+// It needs an agent with shell access, and `general-purpose` has no model of its own,
+// so without this it inherits the caller's — meaning a dish planned on the top-tier
+// model also runs every `git worktree add` there. Name a mid-tier model explicitly:
+// competent at git, and a fraction of the cost for work this mechanical.
+const STEWARD = { agentType: 'general-purpose', effort: 'low', model: 'sonnet' }
 
 // Agent types the scripts dispatch, by role. A config layer can point any role at a
 // different agent — that is how a fork or a team-specific agent gets swapped in
@@ -62,6 +67,10 @@ function resolvePolicy(tier, overrides) {
       maxTotalFails: breaker.maxTotalFails != null ? breaker.maxTotalFails : CIRCUIT_BREAKER.maxTotalFails,
     },
     workingMemory: o.workingMemory != null ? o.workingMemory : true,
+    // Only pin the steward's model while it is still the shipped general-purpose agent.
+    // A config layer that swaps in its own steward has presumably chosen a model in that
+    // agent's frontmatter, and an explicit model here would silently override it.
+    stewardModel: agentFor('steward') === STEWARD.agentType ? STEWARD.model : undefined,
     agents: {
       scout: agentFor('scout'),
       inspector: agentFor('inspector'),
