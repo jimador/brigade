@@ -9,6 +9,6 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate:*)
 
 ## Task
 
-Report the validator's verdict in ≤ 3 lines. On FAIL: list each offending artifact path
+Lead with the validator's verdict in one line. On FAIL: list each offending artifact path
 with its finding, and which producer (planner/scout/cook/inspector/analyst) must re-emit
 it. Never edit artifacts to silence findings.

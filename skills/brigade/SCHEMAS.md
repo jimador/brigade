@@ -94,7 +94,7 @@ sections in order (a well-groomed ticket makes Phase 0–2 dramatically cheaper)
   the ticket; never delete what a human wrote.
 
 Budget: ≤ 60 lines of body. A ticket missing Goal or Acceptance criteria fails intake
-readiness — groom it (see `prompts/groom-board.md`) or ask, don't guess.
+readiness — groom it (the companion `groom` skill, `skills/groom/SKILL.md`) or ask, don't guess.
 
 ### `plan` — the dish DAG (`.brigade/dishes/<dish>/PLAN.md`)
 

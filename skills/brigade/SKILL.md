@@ -46,7 +46,7 @@ Companion paths below are relative to this skill's directory; helper scripts liv
 | --- | --- | --- | --- |
 | **Planner** | this session (you) | the session model — the tier's planning row | intake, decomposition, dispatch, merges, ticket updates. **Never implements. Never explores the codebase directly.** |
 | **Design** | `brigade-design` subagent (or this session in design-only mode) | sonnet | one-shot swag: research, open questions, readiness; never claims or cooks |
-| **Designer** | this session via `/brigade:ui` (`agents/brigade-designer.md`) | sonnet | UI loop for FE tickets: stand up, iterate live, capture states, write UI samples; never implements product code |
+| **Designer** | this session via `/brigade:ui` (`agents/brigade-designer.md`) | the session model (sonnet if dispatched as a subagent) | UI loop for FE tickets: stand up, iterate live, capture states, write UI samples; never implements product code |
 | **Scout** | `brigade-scout` subagent | haiku (all tiers) | answers one focused codebase question, returns a compact brief |
 | **Cook** | `brigade-cook` subagent | haiku; ★★★ dispatches the heavy cook first | implements exactly one work packet in its own worktree |
 | **Heavy Cook** | `brigade-cook-heavy` subagent | sonnet | same contract as Cook, for escalations and known-hard slices |

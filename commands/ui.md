@@ -8,7 +8,7 @@ argument-hint: [ticket-id] [state-name]
 Run the **Designer loop** in this session (not a cook).
 
 1. Resolve the ticket id (argument, or ask) and its `repo`. If cwd is a workspace root,
-   search member boards under `~/vault/tickets/<workspace>/` (see `~/.brigade/workspaces.md`).
+   search member boards under the vault's `tickets/<workspace>/` (see `~/.brigade/workspaces.md`).
 2. Load `agents/brigade-designer.md` + `skills/brigade/SKILL.md` § UI design loop, and the
    source adapter's § UI samples (`skills/brigade/sources/<adapter>.md`).
 3. Derive the dish slug (`brigade-coord key`), acquire it as `claude`, create

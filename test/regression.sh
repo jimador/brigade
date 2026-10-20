@@ -2865,6 +2865,17 @@ JS
     fail "workflows/brigade-review.js GENERATED trailer count: expected $reference_count, got $count"
 }
 
+# The heavy cook's dispatch never includes brigade-cook.md, and the heavy cook works in the
+# target repo where that file doesn't exist, so it carries its own copy of the shared
+# contract. The two copies must match from `## The loop` to the end of the file.
+test_cook_contracts_match() {
+  local base heavy
+  base="$(sed -n '/^## The loop$/,$p' "${1:-$ROOT/agents/brigade-cook.md}")"
+  heavy="$(sed -n '/^## The loop$/,$p' "${2:-$ROOT/agents/brigade-cook-heavy.md}")"
+  [ -n "$base" ] || fail "brigade-cook.md has no '## The loop' section"
+  [ "$base" = "$heavy" ] || fail "brigade-cook-heavy.md's shared contract drifted from brigade-cook.md"
+}
+
 test_inspector_modes() {
   file="$ROOT/agents/brigade-inspector.md"
 
@@ -4804,6 +4815,7 @@ test_review_verify_tally
 test_review_pure_functions
 test_review_bundle
 test_inspector_modes
+test_cook_contracts_match
 test_validate_review_report
 test_workflow_smoke
 test_risk_helper

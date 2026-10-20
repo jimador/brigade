@@ -49,6 +49,17 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.46.0
+
+- touches: none
+- what: prompt cleanup, no artifact shape changes. The heavy cook now carries the full
+  shared cook contract instead of pointing at a file it never sees, and a regression check
+  keeps the two copies identical. The scout's last brief section is `## Not verified`, as
+  the schema already said. The `/brigade:status`, `/brigade:config` and `/brigade:validate`
+  summaries lose their line caps. Smaller fixes: a dead groom path in `SCHEMAS.md`, the
+  Designer's model in the roles table, workspace boards described relative to the vault,
+  and dated incident notes in the cook's hard rules restated as reasons.
+
 ### 0.45.0
 
 - touches: none

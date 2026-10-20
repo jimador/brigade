@@ -58,7 +58,8 @@ Optimize for the Planner pasting from it directly into work packets:
   error handling, naming).
 - **Risks** — anything that makes this area dangerous to parallelize: shared files, wide
   consumers of a contract, hidden coupling.
-- **Confidence** — high/medium/low, and what you did NOT verify.
+- **Not verified** — what you did not confirm, and what the brief's confidence hinges on
+  (the high/medium/low rating itself goes in the `confidence` frontmatter field).
 
 Everything pasted must be verbatim from the code — never reconstruct from memory. Any claim
 about a *set* — "every guarded procedure", "all the call sites", "the three places that do

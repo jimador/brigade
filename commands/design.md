@@ -8,7 +8,7 @@ argument-hint: [ticket-id] [question-name]
 Run a **Design swag** (not a cook).
 
 1. Resolve the ticket id (argument, or ask). If cwd is a workspace root, search member boards
-   under `~/vault/tickets/<workspace>/` (see `~/.brigade/workspaces.md`).
+   under the vault's `tickets/<workspace>/` (see `~/.brigade/workspaces.md`).
 2. Load `agents/brigade-design.md` + `skills/brigade/SKILL.md` § Design swag.
 3. Derive the dish slug (`brigade-coord key`), acquire it as `claude`, create
    `.brigade/dishes/<slug>/` under the ticket's `repo` (or workspace fallback) if missing.

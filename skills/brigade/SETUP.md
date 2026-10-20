@@ -53,7 +53,7 @@ below is the fallback for when onboard can't run or you want to walk through it 
 When the session cwd matches a workspace in `~/.brigade/workspaces.md` (or a vault
 `tickets/<id>/_workspace.md`):
 
-1. List/groom across **all** member boards under `~/vault/tickets/<workspace>/`.
+1. List/groom across **all** member boards under the vault's `tickets/<workspace>/`.
 2. Tickets carry `workspace`, `project`, and `repo` (absolute child git path).
 3. Cook worktrees under `worktree_root`; branches live in the **child** repo — never treat
    the workspace root as the git remote.

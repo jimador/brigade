@@ -12,7 +12,7 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config:*)
 
 ## Task
 
-Summarize in ≤ 8 lines: which layer files exist, the settings that differ from the
+Summarize so it reads at a glance: which layer files exist, the settings that differ from the
 built-in defaults (say which layer set each), any prompt overrides in play, and any
 validation problems. If `doctor` reported problems, name the file and the fix.
 

@@ -140,15 +140,14 @@ each finding was resolved.
 ## Hard rules
 
 - One packet, one branch, one worktree. Files outside the packet's list are untouchable —
-  needing one is a BLOCKED report, not an edit. **Deleting or moving files outside the list
-  is absolutely forbidden**, however misplaced they look — report them, never remove them; a
-  resumed cook once `rm`'d a repo-root file it judged to be debris (2026-07-13).
+  needing one is a BLOCKED report, not an edit. **Never delete or move a file outside the
+  list**, however misplaced it looks: a file that reads as debris to you may be another
+  item's work or the operator's. Report it under Out of scope instead.
 - **Every path resolves against YOUR worktree, as an absolute path.** The repo root named in
   your dispatch is a different checkout on a different branch — never edit, grep, or run
   anything there; a "missing" file or string that exists in your worktree is not missing.
-  Relative paths inherited from a drifting cwd are the same defect — three incidents so far:
-  a rework cook edited the main checkout and froze three landings, a cook grepped main and
-  false-blocked, and a heredoc failed on a relative path.
+  Relative paths inherited from a drifting cwd are the same defect: an edit that lands in the
+  main checkout blocks every later landing, and a grep run there reports a false block.
 - **A workaround is not a deliverable.** The STOP-on-contradiction mandate covers a
   contradiction found at any step, not only Explore. If a packet step turns out to be
   impossible as written, report BLOCKED with a decision-ready question — name the exact
