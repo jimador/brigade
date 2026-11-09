@@ -23,6 +23,7 @@ conformance of the artifacts it reviews.
   - `design_swag`
   - `design_language`
   - `review_report`
+  - `red_team`
   - `ledger`
   - `heuristic`
   - `learnings`
@@ -442,6 +443,37 @@ Body sections, in order: `## Scope` (what was reviewed, base/head, context tier 
 (commands run, verbatim key output). Budget: ≤ 250 lines. Authority: the diff, the
 worktree, probe artifacts; product findings cite the requirements source or carry the
 no-requirements caveat.
+
+### `red_team`: handoff red-team record (`reports/red-team-<head7>.md`)
+
+Producer: Planner, from the find and verify pass outputs (`HANDOFF.md` § 3). Consumers: the
+PR body's Red-team review section, the Analyst. One file per reviewed head; a new head gets a
+new file and none is overwritten.
+
+```yaml
+---
+doc: red_team
+schema: 1
+dish: <dish-slug>
+role: planner
+model: opus
+created: 2026-07-04T03:10:00Z
+head: 0123abcdef                  # the sha the review covers
+range: main...0123abcdef          # must end at head
+find: { tool: codex, command: "codex review --base main < /dev/null" }
+verify: { tool: claude, command: "claude -p \"Verify pass. ...\"" }
+findings: { confirmed: 1, refuted: 2 }
+verdict: clean                    # clean|open|override|stopped
+---
+```
+
+Body sections, in order: `## Find pass` (where its output is saved, candidate count),
+`## Verify pass` (each candidate: reproduced, traced or refuted, with the evidence),
+`## Findings` (each survivor in the configured finding format and what happened to it: the
+fixing commit and its failing-first test, or the recorded decision). `verdict: clean` only
+when no `error` and no undecided `warning` survives; `stopped` when a pass could not run;
+`override` needs the human's `Override: <name>, <reason>` line in the body. Budget: ≤ 150
+lines. Authority: the two pass outputs on disk.
 
 ### `ledger` — cook working memory (`.brigade/dishes/<dish>/state/<item>.md`)
 

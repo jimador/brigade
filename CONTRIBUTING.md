@@ -20,7 +20,7 @@ CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
                     (scripts/brigade-eval)
 scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
                     brigade-coord, brigade-subagent-line, brigade-risk, brigade-evidence,
-                    brigade-onboard, brigade-eval
+                    brigade-onboard, brigade-eval, brigade-pr
 hooks/              SessionStart state injection, PreToolUse git guard,
                     SubagentStop artifact-validate gate
 workflows/src/      hand-edited Workflow script sources
@@ -28,6 +28,7 @@ workflows/config.js policy consts + config merging, spliced into all three scrip
 workflows/*.js      GENERATED — never hand-edit
 docs/               the documentation set
 test/regression.sh  operational regressions
+test/scripts/       node tests for brigade-pr and its config blocks
 evals/              claude plugin eval cases (opt-in, real model calls; see the eval tier)
 ```
 
@@ -62,6 +63,7 @@ node --check scripts/brigade-onboard
 node --check scripts/brigade-risk
 node --check scripts/brigade-eval
 node --check scripts/brigade-evidence
+node --check scripts/brigade-pr
 node --check scripts/board-demo
 node --check workflows/config.js
 for f in hooks/board/lib/*.mjs; do node --check "$f" || exit 1; done
@@ -71,6 +73,7 @@ python3 -c "import json; [json.load(open(f)) for f in ['.claude-plugin/plugin.js
 claude plugin validate .claude-plugin/plugin.json
 claude plugin validate .claude-plugin/marketplace.json
 node --test test/board/*.test.mjs
+node --test test/scripts/*.test.mjs
 claude plugin test .
 ./test/regression.sh
 ```

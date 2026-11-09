@@ -49,6 +49,18 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.47.0
+
+- touches: none
+- what: handoff gains a red team and a checked PR body. After the acceptance pass the
+  Planner runs a find pass and a verify pass over the whole delivery range, each in its own
+  process and in a tool other than the author's, fixes what survives with a failing-first
+  test, and reviews each new head again. Each round is recorded as a `red_team` artifact.
+  The PR body is rendered from `prTemplate` and checked by `brigade-pr check`; a PR leaves
+  draft only with a clean verdict on its head or a human override. Both are configured in
+  the new `review.redTeam` and `prTemplate` blocks. Open dishes pick this up at their
+  handoff; nothing on disk changes.
+
 ### 0.46.0
 
 - touches: none

@@ -102,3 +102,58 @@ Resolve once per dish with `brigade-config writing --json`, which prints
 that artifact: `report` to the cook, `verdict` to the inspector, `brief` to the scout, and
 `packet`, `plan`, `ticket_comment`, `pr_body` to you. An agent never pays context for rules
 it does not use, and never follows rules meant for another artifact.
+
+## Red team and PR template
+
+Two blocks drive the handoff red team and the PR description (`HANDOFF.md` § 3 and § 4).
+Both go in any JSON layer. Objects merge key by key. Lenses, severities, sections and
+`prTemplate.validation` merge by `id`: a later entry patches the one with its id,
+`"enabled": false` switches it off, and a new id is appended.
+
+```json
+{
+  "review": { "redTeam": {
+    "lenses": [{ "id": "concurrency", "enabled": false },
+               { "id": "migrations", "title": "Migrations", "lens": "Stored data a deploy leaves half moved." }],
+    "reviewerOrder": ["claude", "codex"],
+    "reviewers": { "cursor": { "enabled": false } }
+  } },
+  "prTemplate": {
+    "sections": [{ "id": "screenshots", "enabled": false }],
+    "validation": [{ "id": "e2e", "run": "npm run e2e", "paths": ["web/**"] }],
+    "uiPaths": ["web/src/**"],
+    "size": { "maxChangedLines": 600 }
+  }
+}
+```
+
+`review.redTeam`:
+
+- `required`: `true` (default) makes a clean verdict or a human override a condition of a
+  ready PR. `false` makes the review advisory; the PR may record n/a with a reason.
+- `lenses`: what the find pass hunts for. Seven by default: `correctness`, `failure`,
+  `security`, `concurrency`, `compatibility`, `tests`, `scope`. Each is `{ title, lens }`.
+- `severities`: `error` blocks, `warning` is fixed or recorded as a decision, `note` is advice.
+- `findingFormat` (`compiler` or `plain`) and `ruleNamespace` shape each finding line.
+- `reviewerOrder` and `reviewers.<tool>`: `{ name, bin, find, verify, enabled }`. `bin` is
+  looked up on PATH; a tool that is not installed is skipped. Commands take `{base}`,
+  `{head}`, `{brief}` and `{findings}`; `verify` must take `{findings}`. The default find
+  commands for Codex and Claude Code use their own reviewers and do not read the brief, so
+  custom lenses reach the find pass only through a command that reads `{brief}`, such as
+  `codex exec "Find pass. Read {brief}, then review git diff {base}...{head} through every lens in it." < /dev/null`.
+
+`prTemplate`:
+
+- `sections`: `{ title, kind, required, requiredWhen, hint }`; `kind` is `text`, `stack`,
+  `validation`, `screenshots` or `review`; `requiredWhen: "ui"` requires it only for a UI
+  change. The `stack` and `validation` sections, and `review` while the red team is
+  required, cannot be switched off or made optional.
+- `validation`: `{ run, required, paths }` per command whose output the PR must carry; a
+  command with `paths` is required only when a changed file matches. Empty means every
+  `gate` command is required.
+- `uiPaths`: globs; a change to a match needs screenshots.
+- `size`: `maxChangedLines` (400), `maxStackDepth` (5), `enforce` (`error` or `warning`),
+  `exclude` (globs not counted).
+
+`brigade-pr` reads both through `brigade-config` and refuses to run while `doctor` reports a
+problem in either.

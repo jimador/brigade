@@ -118,6 +118,76 @@ const DEFAULTS = {
   contextSources: [],
   review: {
     dimensions: [], // empty = ship the workflow's built-in defaults; layers only override
+    // The handoff red team: two passes over the whole delivery range, each in its own context
+    // and, where one is installed, in a tool other than the author's. HANDOFF.md runs it and
+    // `brigade-pr redteam` picks the tools from this block.
+    redTeam: {
+      required: true, // false lets a PR record n/a, with a reason, for the review
+      findingFormat: 'compiler',
+      ruleNamespace: 'review',
+      severities: [
+        { id: 'error', meaning: 'blocks merge' },
+        { id: 'warning', meaning: 'fix it, or record a decision' },
+        { id: 'note', meaning: 'advice only' },
+      ],
+      lenses: [
+        { id: 'correctness', title: 'Correctness', lens: 'Wrong results, broken invariants, unhandled states, off-by-one limits. Try to make the change return a wrong answer.' },
+        { id: 'failure', title: 'Failure handling', lens: 'Error paths, partial failure, retries, timeouts, cleanup. Make it fail halfway and check what is left behind.' },
+        { id: 'security', title: 'Security', lens: 'Trust boundaries, untrusted input, injection, secrets, authorization. Attack it as a hostile caller.' },
+        { id: 'concurrency', title: 'Concurrency', lens: 'Races, ordering, shared state, re-entrancy, lost updates.' },
+        { id: 'compatibility', title: 'Compatibility', lens: 'Callers, stored data and public contracts that stop working. Run the old caller against the new code.' },
+        { id: 'tests', title: 'Tests and evidence', lens: 'Tests that pass for the wrong reason, missing refusal and edge cases, claims in the pull request with no evidence behind them.' },
+        { id: 'scope', title: 'Scope', lens: 'Changes outside the stated purpose, dead code, leftovers, one layer doing two things.' },
+      ],
+      // The order tools are picked in for the find and verify passes.
+      reviewerOrder: ['codex', 'claude', 'cursor'],
+      // `bin` is looked up on PATH; a tool that is not installed is skipped. Commands fill
+      // {base}, {head}, {brief} and {findings} when they run.
+      reviewers: {
+        codex: {
+          name: 'Codex',
+          bin: 'codex',
+          find: 'codex review --base {base} < /dev/null',
+          verify: 'codex exec "Verify pass. Read {brief}. For each finding in {findings}, try to refute it against git diff {base}...{head}. Keep only the findings you reproduce or trace, in the format the brief gives." < /dev/null',
+        },
+        claude: {
+          name: 'Claude Code',
+          bin: 'claude',
+          find: 'claude -p "/code-review {base}...{head}"',
+          verify: 'claude -p "Verify pass. Read {brief}. For each finding in {findings}, try to refute it against git diff {base}...{head}. Keep only the findings you reproduce or trace, in the format the brief gives."',
+        },
+        cursor: {
+          name: 'Cursor',
+          bin: 'agent',
+          find: 'agent -p --output-format text "Find pass. Read {brief}, then review git diff {base}...{head} through every lens in it and report findings in its format."',
+          verify: 'agent -p --output-format text "Verify pass. Read {brief}. For each finding in {findings}, try to refute it against git diff {base}...{head}. Keep only the findings you reproduce or trace, in the format the brief gives."',
+        },
+      },
+    },
+  },
+  // The PR description: its sections, which commands' output it must carry, and the size
+  // limit per layer. `brigade-pr template` prints it and `brigade-pr check` enforces it.
+  prTemplate: {
+    sections: [
+      { id: 'summary', title: 'What changes', kind: 'text', required: true, hint: 'What someone can do after this change that they could not before, and why it is needed. Start with Related: #N when there is an issue.' },
+      { id: 'stack', title: 'Stack', kind: 'stack', required: true, hint: 'Where this pull request sits in its stack. A pull request on its own is layer 1 of 1 with the main branch as its parent.' },
+      { id: 'surfaces', title: 'Surfaces', kind: 'text', required: true, hint: 'The interfaces, commands, files or screens this change adds or alters, as short code or a table. n/a with a reason when there are none.' },
+      { id: 'failure', title: 'On failure', kind: 'text', required: true, hint: 'What a user or caller sees when this change fails or refuses, and how they recover. n/a with a reason when nothing new can fail.' },
+      { id: 'validation', title: 'How it was validated', kind: 'validation', required: true, hint: 'Say how you validated the change and state its scope, then paste the commands you ran and their real output, trimmed but with every failure kept. Every required command must appear.' },
+      { id: 'screenshots', title: 'Screenshots', kind: 'screenshots', required: true, requiredWhen: 'ui', hint: 'Required when the change touches a UI path: real captured images of each changed state, each with a caption. Otherwise n/a with a reason.' },
+      { id: 'review', title: 'Red-team review', kind: 'review', required: true, hint: 'The red-team review of the current head. A human who waives the review replaces the fields with one Override line. An agent never writes an Override line.' },
+      { id: 'risk', title: 'Risk and rollback', kind: 'text', required: true, hint: 'What could break, who it affects, and how to undo it.' },
+    ],
+    // Commands whose output the validation section must carry: { id, run, required, paths }.
+    // Empty means every `gate` command is required.
+    validation: [],
+    uiPaths: [], // globs; a change to a matching file needs screenshots
+    size: {
+      maxChangedLines: 400,
+      maxStackDepth: 5,
+      enforce: 'error', // error | warning
+      exclude: ['**/package-lock.json', '**/*.lock', '**/*.snap', '**/*.png', '**/*.gif', '**/dist/**'],
+    },
   },
   prompts: {}, // name -> { append: [...text] }
   writing: {
@@ -193,8 +263,8 @@ function mergeLayer(target, provenance, source, layerName, prefix = '') {
       target[key] = mergeContextSources(target[key] || [], value, provenance, layerName)
       continue
     }
-    if (dotted === 'review.dimensions') {
-      target[key] = mergeReviewDimensions(target[key] || [], value, provenance, layerName)
+    if (ID_LISTS.has(dotted)) {
+      target[key] = mergeArrayById(target[key] || [], value, provenance, layerName, dotted)
       continue
     }
     if (dotted === 'writing') {
@@ -234,11 +304,17 @@ function mergeContextSources(current, incoming, provenance, layerName) {
   return mergeArrayById(current, incoming, provenance, layerName, 'contextSources')
 }
 
-// Review dimensions merge by id too: a repo can retune one dimension (turn it off,
-// swap its lens) without restating the whole set.
-function mergeReviewDimensions(current, incoming, provenance, layerName) {
-  return mergeArrayById(current, incoming, provenance, layerName, 'review.dimensions')
-}
+// Lists of entries that each carry an `id` merge by id too: a repo can retune one entry
+// (switch it off with `enabled: false`, swap its text) or append its own without restating
+// the whole set. Review dimensions, red-team lenses and severities, and PR sections and
+// required commands all work this way.
+const ID_LISTS = new Set([
+  'review.dimensions',
+  'review.redTeam.severities',
+  'review.redTeam.lenses',
+  'prTemplate.sections',
+  'prTemplate.validation',
+])
 
 // Writing settings merge by their own rules, because the generic merge would get two
 // of them wrong: it replaces arrays (rules must stack) and merges nested objects
@@ -470,6 +546,32 @@ function validate() {
     }
   }
 
+  // The red-team and PR lists merge by id, so a duplicate or id-less entry is only
+  // visible in the layer that wrote it.
+  for (const layer of layers) {
+    if (!layer.file || !isPlainObject(layer.data)) continue
+    for (const dotted of ['review.redTeam.severities', 'review.redTeam.lenses', 'prTemplate.sections', 'prTemplate.validation']) {
+      const list = getByPath(layer.data, dotted)
+      if (list === undefined) continue
+      if (!Array.isArray(list)) {
+        problems.push({ layer: layer.name, file: layer.file, problem: `${dotted} must be a list of entries with an id` })
+        continue
+      }
+      const seen = new Set()
+      for (const entry of list) {
+        if (!isPlainObject(entry) || typeof entry.id !== 'string' || !entry.id) {
+          problems.push({ layer: layer.name, file: layer.file, problem: `${dotted}: every entry needs a string id` })
+        } else if (seen.has(entry.id)) {
+          problems.push({ layer: layer.name, file: layer.file, problem: `duplicate ${dotted} id "${entry.id}"` })
+        } else seen.add(entry.id)
+      }
+    }
+  }
+  const redTeam = isPlainObject(config.review) ? config.review.redTeam : undefined
+  for (const problem of [...redTeamProblems(redTeam), ...prTemplateProblems(config.prTemplate, redTeam)]) {
+    problems.push({ layer: 'merged', file: null, problem })
+  }
+
   // Writing settings are checked per layer, because the merge quietly skips a bad
   // value and the person fixing it needs to know which file holds it.
   for (const layer of layers) {
@@ -550,6 +652,95 @@ function writingProblems(writing) {
   return problems
 }
 
+// --- red team and PR template ------------------------------------------------
+
+const FINDING_FORMATS = ['compiler', 'plain']
+const SECTION_KINDS = ['text', 'stack', 'validation', 'screenshots', 'review']
+const SIZE_ENFORCE = ['error', 'warning']
+const isWhole = (v) => Number.isInteger(v) && v > 0
+const isGlobList = (v) => Array.isArray(v) && v.every(isSentence)
+const enabledEntries = (list) => (Array.isArray(list) ? list : []).filter((e) => isPlainObject(e) && e.enabled !== false)
+
+// Everything wrong with the merged `review.redTeam` block, each naming its dotted key.
+function redTeamProblems(redTeam) {
+  if (!isPlainObject(redTeam)) return ['review.redTeam must be an object']
+  const problems = []
+  const need = (ok, problem) => { if (!ok) problems.push(problem) }
+  need(isBoolean(redTeam.required), 'review.redTeam.required must be true or false')
+  need(FINDING_FORMATS.includes(redTeam.findingFormat), `review.redTeam.findingFormat must be one of ${FINDING_FORMATS.join(', ')}`)
+  need(isSentence(redTeam.ruleNamespace), 'review.redTeam.ruleNamespace must be a name')
+  for (const s of enabledEntries(redTeam.severities)) {
+    need(isSentence(s.meaning), `review.redTeam.severities "${s.id}": needs a "meaning"`)
+  }
+  need(enabledEntries(redTeam.severities).length > 0, 'review.redTeam.severities needs at least one enabled severity')
+  for (const lens of enabledEntries(redTeam.lenses)) {
+    need(isSentence(lens.title) && isSentence(lens.lens), `review.redTeam.lenses "${lens.id}": needs a "title" and a "lens"`)
+  }
+  need(enabledEntries(redTeam.lenses).length > 0, 'review.redTeam.lenses needs at least one enabled lens')
+  const reviewers = isPlainObject(redTeam.reviewers) ? redTeam.reviewers : {}
+  need(isPlainObject(redTeam.reviewers), 'review.redTeam.reviewers must be an object of tools')
+  const order = redTeam.reviewerOrder
+  need(Array.isArray(order) && order.every(isSentence), 'review.redTeam.reviewerOrder must be a list of tool names')
+  for (const tool of Array.isArray(order) ? order : []) {
+    need(isPlainObject(reviewers[tool]), `review.redTeam.reviewerOrder names "${tool}", which has no review.redTeam.reviewers entry`)
+  }
+  const on = Object.entries(reviewers).filter(([, r]) => isPlainObject(r) && r.enabled !== false)
+  for (const [tool, r] of on) {
+    for (const key of ['bin', 'find', 'verify']) {
+      need(isSentence(r[key]), `review.redTeam.reviewers.${tool}.${key} must be a ${key === 'bin' ? 'program name' : 'command'}`)
+    }
+    need(r.name === undefined || isSentence(r.name), `review.redTeam.reviewers.${tool}.name must be a name`)
+    need(r.enabled === undefined || isBoolean(r.enabled), `review.redTeam.reviewers.${tool}.enabled must be true or false`)
+    if (isSentence(r.verify)) need(r.verify.includes('{findings}'), `review.redTeam.reviewers.${tool}.verify must take the find pass's output as {findings}`)
+  }
+  need(on.length > 0, 'review.redTeam.reviewers needs at least one enabled tool')
+  return problems
+}
+
+// Everything wrong with the merged `prTemplate` block. A section that carries a policy the
+// red team or the gate states cannot be switched off through the template.
+function prTemplateProblems(prTemplate, redTeam) {
+  if (!isPlainObject(prTemplate)) return ['prTemplate must be an object']
+  const problems = []
+  const need = (ok, problem) => { if (!ok) problems.push(problem) }
+  const sections = enabledEntries(prTemplate.sections)
+  for (const s of sections) {
+    need(isSentence(s.title), `prTemplate.sections "${s.id}": needs a "title"`)
+    need(SECTION_KINDS.includes(s.kind), `prTemplate.sections "${s.id}": kind must be one of ${SECTION_KINDS.join(', ')}`)
+    need(isBoolean(s.required), `prTemplate.sections "${s.id}": required must be true or false`)
+    need(s.requiredWhen === undefined || s.requiredWhen === 'ui', `prTemplate.sections "${s.id}": requiredWhen may only be "ui"`)
+    need(s.hint === undefined || typeof s.hint === 'string', `prTemplate.sections "${s.id}": hint must be a string`)
+  }
+  const titles = sections.map((s) => String(s.title || '').toLowerCase())
+  for (const t of new Set(titles.filter((t, i) => t && titles.indexOf(t) !== i))) {
+    problems.push(`prTemplate.sections: two sections share the title "${t}"`)
+  }
+  const reviewRequired = isPlainObject(redTeam) && redTeam.required === true
+  for (const kind of ['stack', 'validation', ...(reviewRequired ? ['review'] : [])]) {
+    const s = sections.find((e) => e.kind === kind)
+    need(s, `prTemplate.sections needs an enabled section of kind "${kind}"`)
+    need(!s || s.required === true, `prTemplate.sections "${s && s.id}": a section of kind "${kind}" must be required`)
+  }
+  for (const c of enabledEntries(prTemplate.validation)) {
+    need(isSentence(c.run), `prTemplate.validation "${c.id}": "run" must be a command`)
+    need(c.required === undefined || isBoolean(c.required), `prTemplate.validation "${c.id}": required must be true or false`)
+    need(c.paths === undefined || isGlobList(c.paths), `prTemplate.validation "${c.id}": paths must be a list of globs`)
+  }
+  need(isGlobList(prTemplate.uiPaths), 'prTemplate.uiPaths must be a list of globs')
+  if (isGlobList(prTemplate.uiPaths) && prTemplate.uiPaths.length) {
+    const shots = sections.find((s) => s.kind === 'screenshots')
+    need(shots && (shots.required === true || shots.requiredWhen === 'ui'),
+      'prTemplate.uiPaths is set, so prTemplate.sections needs a screenshots section required for a UI change')
+  }
+  const size = isPlainObject(prTemplate.size) ? prTemplate.size : {}
+  need(isPlainObject(prTemplate.size), 'prTemplate.size must be an object')
+  need(isWhole(size.maxChangedLines), 'prTemplate.size.maxChangedLines must be a whole number above 0')
+  need(isWhole(size.maxStackDepth), 'prTemplate.size.maxStackDepth must be a whole number above 0')
+  need(SIZE_ENFORCE.includes(size.enforce), `prTemplate.size.enforce must be one of ${SIZE_ENFORCE.join(', ')}`)
+  need(isGlobList(size.exclude), 'prTemplate.size.exclude must be a list of globs')
+  return problems
+}
+
 // --- output ------------------------------------------------------------------
 
 function flatten(value, prefix = '', out = {}) {
@@ -561,8 +752,13 @@ function flatten(value, prefix = '', out = {}) {
   return out
 }
 
+// A segment may also name an entry of an id list, as in review.redTeam.lenses.security.
 function getByPath(config, dotted) {
-  return dotted.split('.').reduce((acc, key) => (acc == null ? acc : acc[key]), config)
+  return dotted.split('.').reduce((acc, key) => {
+    if (acc == null) return acc
+    if (Array.isArray(acc)) return acc.find((e) => isPlainObject(e) && e.id === key)
+    return acc[key]
+  }, config)
 }
 
 function printResolve(json) {

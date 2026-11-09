@@ -186,6 +186,34 @@ review lenses (`correctness`, `tests`, `architecture`, `maintainability`, `reuse
 "enabled": false }] } }` disables a built-in dimension, patching other fields (`title`,
 `lens`) retunes it, and an `id` not in the built-in set is appended as a custom dimension.
 
+### Red team and PR template
+
+`review.redTeam` sets the handoff red team: the lenses its find pass hunts through, the
+severities, and the tools for each pass with their commands and the order they are tried in.
+`prTemplate` sets the PR description: its sections, the commands whose output it must carry,
+the paths that count as a UI change, and the size limit per layer. Both follow the
+merge-by-`id` shape above for lenses, severities, sections and commands:
+
+```json
+{
+  "review": { "redTeam": { "lenses": [{ "id": "concurrency", "enabled": false }] } },
+  "prTemplate": { "sections": [{ "id": "screenshots", "enabled": false }], "size": { "maxChangedLines": 600 } }
+}
+```
+
+`scripts/brigade-pr` uses them at handoff, at zero model tokens:
+
+```bash
+brigade-pr redteam --base main --brief <file> --json   # head, range, find and verify commands
+brigade-pr template                                    # the PR body skeleton
+brigade-pr check <body-file> --base main               # before the body is published
+brigade-pr check --pr 123 --ready                      # before the PR leaves draft
+brigade-pr size --base main                            # changed lines in this layer
+```
+
+Every key, with its default, is in
+[`skills/brigade/CONFIG.md`](../skills/brigade/CONFIG.md) under Red team and PR template.
+
 ### Prompt overrides
 
 Short additions inline; anything longer goes in a file. Both are covered in
@@ -215,6 +243,6 @@ brigade-config doctor
 
 Catches unparseable JSON, unknown top-level keys, bad enum values (`tier`,
 `policy.planCheck`, context-source `type`), a non-positive `maxParallel`, `kb.enabled`
-with no `kb.cli`, duplicate or id-less context sources, and `static-file` sources whose
-path does not exist. It exits 1 when anything is wrong, so it works in a pre-commit hook
+with no `kb.cli`, duplicate or id-less context sources, `static-file` sources whose
+path does not exist, and every bad red-team or PR template setting. It exits 1 when anything is wrong, so it works in a pre-commit hook
 or CI.
