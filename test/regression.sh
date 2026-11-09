@@ -2927,6 +2927,63 @@ test_validate_review_report() {
   fi
 }
 
+test_validate_red_team() {
+  # The handoff red team's record: a clean one validates, and each way of getting it wrong is
+  # named: a range that ends somewhere other than the reviewed head, an unknown verdict, a
+  # pass with no tool, and an override with no human's line.
+  fixture="$TMP_ROOT/validate-red-team"
+  mkdir -p "$fixture/.brigade/dishes/d/reports"
+  good="$fixture/.brigade/dishes/d/reports/red-team-0123abc.md"
+  cat >"$good" <<'EOF'
+---
+doc: red_team
+schema: 1
+dish: d
+role: planner
+model: test
+created: 2026-11-09T00:00:00Z
+head: 0123abcdef
+range: main...0123abcdef
+find: { tool: codex, command: "codex review --base main < /dev/null" }
+verify: { tool: claude, command: "claude -p verify" }
+findings: { confirmed: 1, refuted: 2 }
+verdict: clean
+---
+
+## Find pass
+three candidates
+
+## Verify pass
+one reproduced, two refuted
+
+## Findings
+error[review:lost-update] fixed in 4567def with a failing-first test
+EOF
+  CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$good" >/dev/null ||
+    fail "brigade-validate rejected a valid red_team record"
+
+  bad="$fixture/.brigade/dishes/d/reports/red-team-bad.md"
+  sed -e 's/^range: .*/range: main...fedcba9876/' -e 's/^verdict: .*/verdict: maybe/' \
+    -e 's/^verify: .*/verify: { command: "x" }/' "$good" >"$bad"
+  out="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$bad" 2>&1)" &&
+    fail "brigade-validate passed a broken red_team record"
+  for want in "not at the reviewed head 0123abcdef" "invalid red_team verdict: maybe" "red_team verify must name its tool"; do
+    printf '%s\n' "$out" | grep -Fq "$want" || fail "brigade-validate missed '$want' in a red_team record: $out"
+  done
+
+  sed -e 's/^verdict: .*/verdict: override/' "$good" >"$bad"
+  out="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$bad" 2>&1)" &&
+    fail "brigade-validate passed an override red_team record with no human's line"
+  printf '%s\n' "$out" | grep -Fq 'Override: <name>, <reason>' ||
+    fail "brigade-validate did not ask for the override line: $out"
+}
+
+test_pr_helper() {
+  # brigade-pr and the red-team and PR template settings in brigade-config.
+  node --test "$ROOT"/test/scripts/*.test.mjs >"$TMP_ROOT/pr-helper.log" 2>&1 ||
+    fail "brigade-pr tests failed: $(grep -E '^(not ok|✖)' "$TMP_ROOT/pr-helper.log" | head -5)"
+}
+
 test_workflow_smoke() {
   # Retro-P1 (dish workflow-code-review): `node --check` only parses a generated
   # workflow — it never RUNS one, so two deterministic runtime crashes (an
@@ -4817,6 +4874,8 @@ test_review_bundle
 test_inspector_modes
 test_cook_contracts_match
 test_validate_review_report
+test_validate_red_team
+test_pr_helper
 test_workflow_smoke
 test_risk_helper
 test_eval_core

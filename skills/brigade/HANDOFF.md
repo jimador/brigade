@@ -1,7 +1,7 @@
 # Handoff — Phase 6
 
-Read when: every item has landed and the dish is ready to hand off, or before a diff lands
-without an inspector pass.
+Read when: every item has landed and the dish is ready to hand off, before a PR is opened,
+edited or marked ready, or before a diff lands without an inspector pass.
 
 ## 1. Prove the gate
 
@@ -65,28 +65,90 @@ the gate commands, stage or run instructions when the deliverable runs, and the 
 Read the verdict: every NOT VERIFIED criterion is a finding to fix — a cook dispatch, then
 re-run the pass — before any handoff text. Attach the evidence to the ticket.
 
-## 3. Hand off the branch
+## 3. Red-team the delivery range
 
-Open the single human-review PR `<delivery-branch> → main` (`gh pr create`) with
-summary, item list, Evidence highlights, and risks — or, with no remote or `gh`, tell
-the user the integration branch is ready for local review. If the base branch has advanced
-(or its own PR merged) since you branched, rebase the integration branch `--onto <latest
-main> <original base>` first for a clean per-ticket diff. With `graphite_platform: true`
-in the repo config this step becomes `gt sync` + `gt submit --stack`, one PR per item;
-see `GRAPHITE.md`. With `remote_pr: false` in `.brigade/config.md`, or an operator
-directive to land without a PR: rebase onto the latest main, prove the gate on the tip,
-fast-forward push (never `--force`), and say so in the handoff; the ticket then moves
-on the human's review of the pushed branch. When the session start listed writing rules, the
+The Inspector judged each item alone. The red team reviews the whole delivery range at its
+current head, after the acceptance pass and before any PR text. It adds to the per-item gate
+and never replaces it. Its settings are `review.redTeam` (`CONFIG.md` § Red team and PR
+template).
+
+1. Record the head and range, pick the tools, and write the brief both passes read:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr" redteam --base <main_branch> --author claude \
+     --brief .brigade/dishes/<slug>/reports/red-team-brief.md --json
+   ```
+
+   `--author` is the runtime that wrote the code: `claude` here, `codex` in a Codex session.
+   The find pass runs in a tool other than the author's and the verify pass in a tool other
+   than the find pass's. A tool that is not installed is skipped and the next one in
+   `reviewerOrder` takes its place. Exit 1 means no tool is installed: stop, open the PR as
+   a draft, and say which pass could not run.
+2. Run the find command from the delivery worktree, in the background, into
+   `reports/red-team-find-<head7>.txt`. Run `redteam` again with `--findings` set to that
+   file and run the verify command it returns into `reports/red-team-verify-<head7>.txt`.
+   Each pass is its own process with its own context. Never stand in for a pass with your
+   own reading of the diff, and never let a cook that wrote the code run one.
+3. Fix what survives. Each `error`, and each `warning` not recorded as a decision in the PR,
+   becomes a rework item through `brigade-execute`: its first step is a test that fails on
+   the reviewed head, then the fix makes it pass, then the Inspector gates it. A defect no
+   test can show names the command or trace that proves the fix. Re-prove the gate (§ 1).
+4. A new head makes the review stale. Review the range again at the new head and record it.
+   After two rounds that still leave an `error`, stop and ask the operator one
+   decision-ready question; the PR stays a draft.
+5. Record every round in `reports/red-team-<head7>.md` (`red_team` in `SCHEMAS.md`) and run
+   `brigade-validate` on it. `verdict: clean` only when no `error` and no undecided
+   `warning` survives on that head.
+
+Only a human waives the review, in their own words, with a reason. Record it as
+`verdict: override` with their `Override: <name>, <reason>` line. An agent never writes an
+override. With `review.redTeam.required: false` the red team is advisory: it still runs,
+and the PR may record n/a with a reason.
+
+## 4. Hand off the branch
+
+Write the PR body from the configured template and check it before anyone sees it:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr" template > .brigade/dishes/<slug>/pr-body.md
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr" check .brigade/dishes/<slug>/pr-body.md --base <main_branch>
+```
+
+Fill every section from evidence on disk. How it was validated carries each gate command
+from § 1 as `$ <command>` with its real output from the head, and a `Scope:` line that
+matches the `brigade-evidence cover` result: `full`, or `targeted` and what it leaves out.
+Red-team review copies Head, Range, both passes, the findings and the verdict from the
+latest `red-team-<head7>.md`. `check` must print `check: ok` before the body is published.
+
+If the base branch has advanced (or its own PR merged) since you branched, rebase the
+integration branch `--onto <latest main> <original base>` for a clean per-ticket diff. Do it
+before § 3 when you can: a rebase makes a new head, and a new head needs its own review.
+
+Open the single human-review PR `<delivery-branch> → main` as a draft
+(`gh pr create --draft --body-file <file>`). Mark it ready only after
+`brigade-pr check --pr <n> --ready` prints `check: ok`, which needs a clean verdict or a
+human override on the current head; then `gh pr ready <n>`. Run `check --pr <n>` again
+after every edit to the body. A push after the review sends you back to § 3. With no remote
+or `gh`, tell the user the integration branch is ready for local review and attach the
+red-team record.
+
+With `graphite_platform: true` in the repo config this step becomes `gt sync` +
+`gt submit --stack`, one PR per item; see `GRAPHITE.md`. Each PR in the stack carries the
+red-team review of its own layer's range and passes `check --pr`. With `remote_pr: false`
+in `.brigade/config.md`, or an operator directive to land without a PR: rebase onto the
+latest main, prove the gate and run the red team on the tip, fast-forward push (never
+`--force`), and say so in the handoff with the red-team verdict; the ticket then moves on
+the human's review of the pushed branch. When the session start listed writing rules, the
 PR body follows the preset's rule text and every `pr_body` rule.
 
-## 4. Ticket and comment
+## 5. Ticket and comment
 
 Move the ticket to its in-review-equivalent status; post a handoff comment — what changed,
 how it was verified, how to review — plain language, nothing a board reader can't open.
 When the session start listed writing rules, the comment follows the preset's rule text and
 every `ticket_comment` rule.
 
-## 5. Retro
+## 6. Retro
 
 Retros run on the tier's cadence (`TIERS.md`) and are never skipped silently at any tier:
 if you must defer a due pass, say so to the operator. Read `RETRO.md` before dispatching
@@ -96,7 +158,7 @@ are the operator's call (one yes/no per retro, never automatic); a brain upgrade
 plugin source, never the installed copy; and a brain upgrade that adds a rule also compacts
 the section it touched — absorbing without compacting makes prose nobody can scan.
 
-## 6. Done
+## 7. Done
 
 The ticket reaches its done-equivalent status only when the human merges the PR (or accepts
 the pushed branch); delete the integration branch only after that. Release the dish lease
@@ -123,7 +185,8 @@ Verify commands were re-run green. Record the deviation in PLAN.md.
 ## Complete when
 
 The gate is proven at full scope, every acceptance criterion carries exactly one verdict, the
-PR is open — or the branch is pushed or handed off as the repo config directs — the ticket is
-in review with a plain-language comment, a due retro has run or its deferral is stated to the
-operator, and the dish lease is released. Report the handoff in two lines: what shipped, where
-the evidence lives.
+delivery head has a clean red-team record or a human override, the PR is open and
+`brigade-pr check --pr <n> --ready` passes on its published body (or the branch is pushed or
+handed off as the repo config directs), the ticket is in review with a plain-language
+comment, a due retro has run or its deferral is stated to the operator, and the dish lease
+is released. Report the handoff in two lines: what shipped, where the evidence lives.

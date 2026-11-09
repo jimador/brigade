@@ -40,6 +40,7 @@ const TYPES = {
   design_swag: { keys: ['ticket', 'source', 'readiness', 'sources'], budget: 140 },
   ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
   review_report: { keys: ['input', 'context_tier', 'tier', 'findings'], budget: 250 },
+  red_team: { keys: ['head', 'range', 'find', 'verify', 'findings', 'verdict'], budget: 150 },
 }
 const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
 const RECOMMENDED = ['role', 'model', 'created']
@@ -458,6 +459,7 @@ function validateFile(file) {
     plan_check: ['## Blind sketch', '## Comparison', '## Recommendations'],
     ledger: ['## Canon', '## World state'],
     review_report: ['## Scope', '## Findings', '## Context disclosure', '## Evidence'],
+    red_team: ['## Find pass', '## Verify pass', '## Findings'],
   }
   const required = REQUIRED_SECTIONS[doc]
   if (required) {
@@ -630,6 +632,28 @@ function validateFile(file) {
       const tier = fmValue(fm, 'tier')
       if (tier && !TIERS.includes(tier)) {
         problems.push(`invalid tier: ${tier} (allowed: ${TIERS.join('|')})`)
+      }
+      break
+    }
+    case 'red_team': {
+      // A review covers one head: the range must end at it, and the verdict says whether the
+      // PR may be marked ready (clean or override) or not (open or stopped).
+      const verdict = fmValue(fm, 'verdict')
+      const verdicts = ['clean', 'open', 'override', 'stopped']
+      if (verdict && !verdicts.includes(verdict)) problems.push(`invalid red_team verdict: ${verdict} (allowed: ${verdicts.join('|')})`)
+      const head = fmValue(fm, 'head')
+      if (head && !/^[0-9a-f]{7,40}$/i.test(head)) problems.push(`red_team head must be a commit sha (got ${head})`)
+      const end = (fmValue(fm, 'range') || '').match(/^\S+?\.{2,3}([0-9a-f]{7,40})$/i)
+      if (fmValue(fm, 'range') && !end) problems.push('red_team range must be <base>...<head sha>')
+      if (end && head && !(end[1].startsWith(head) || head.startsWith(end[1]))) {
+        problems.push(`red_team range ends at ${end[1]}, not at the reviewed head ${head}`)
+      }
+      for (const pass of ['find', 'verify']) {
+        const value = fmValue(fm, pass)
+        if (value && !/\btool:\s*\S/.test(value)) problems.push(`red_team ${pass} must name its tool: { tool: <name>, command: "<command>" }`)
+      }
+      if (verdict === 'override' && !body.some((l) => /^\s*Override:\s*\S+,\s*\S+/.test(l))) {
+        problems.push('red_team override verdict needs the human\'s "Override: <name>, <reason>" line in the body')
       }
       break
     }

@@ -1,0 +1,659 @@
+#!/usr/bin/env node
+// brigade-pr: the pull request description and the handoff red team, at zero model tokens.
+//
+// Everything it knows comes from the resolved brigade config (`review.redTeam` and
+// `prTemplate`), read through the brigade-config next to this script, so a repo changes a
+// section, a lens or a review tool in a config layer and never forks brigade.
+//
+// Usage:
+//   brigade-pr template                       the PR body skeleton, from prTemplate.sections
+//   brigade-pr check <body-file> [--base <ref>] [--head <sha>] [--ready] [--ui | --no-ui] [--json]
+//   brigade-pr check --pr <number> [--base <ref>] [--ready] [--ui | --no-ui] [--json]
+//                                             check a description against the template
+//   brigade-pr size [--base <ref>] [--head <sha>] [--json]
+//                                             changed lines in this layer against its parent
+//   brigade-pr redteam [--author <tool>] [--base <ref>] [--head <sha>] [--brief <file>]
+//                      [--findings <file>] [--json]
+//                                             pick the find and verify tools, fill their
+//                                             commands, and write the reviewers' brief
+//
+// --base defaults to the configured mainBranch. --ready also requires a clean verdict, or a
+// human override, in the review section: run it before marking a PR ready.
+//
+// Exit codes: 0 ok, 1 a check failed or no review tool is installed, 2 a usage or input error.
+import fs from 'node:fs'
+import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
+const REVIEW_FIELDS = ['Head', 'Range', 'Find pass', 'Verify pass', 'Findings', 'Verdict']
+
+class UsageError extends Error {}
+
+const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+const enabled = (list) => (Array.isArray(list) ? list : []).filter((e) => isObject(e) && e.enabled !== false)
+const words = (s) => s.trim().split(/\s+/).filter(Boolean).length
+
+// ---------------------------------------------------------------- config and git
+
+// Found the same way brigade-config finds it, so both read the same layers.
+function repoRoot() {
+  const explicit = process.env.BRIGADE_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_DIR
+  if (explicit) return path.resolve(explicit)
+  for (let dir = process.cwd(); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.brigade'))) return dir
+    if (path.dirname(dir) === dir) break
+  }
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return process.cwd()
+  }
+}
+
+// The resolved config, from the same resolver every other brigade surface uses. A problem
+// doctor finds in the red-team or PR settings is refused here, because a check against a
+// broken template proves nothing. Problems elsewhere in the config are not this script's.
+function loadConfig(root) {
+  const run = (args) => {
+    try {
+      return execFileSync(process.execPath, [path.join(SCRIPTS, 'brigade-config'), ...args], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (e) {
+      if (typeof e.stdout === 'string' && e.stdout.trim()) return e.stdout
+      throw new UsageError(`brigade-config ${args[0]} failed: ${String(e.stderr || e.message).split('\n')[0]}`)
+    }
+  }
+  let config
+  let problems
+  try {
+    config = JSON.parse(run(['resolve', '--json'])).config
+    problems = JSON.parse(run(['doctor', '--json'])).problems
+  } catch (e) {
+    if (e instanceof UsageError) throw e
+    throw new UsageError(`could not read the brigade config: ${e.message}`)
+  }
+  const ours = problems.filter((p) => /review\.redTeam|prTemplate/.test(p.problem)).map((p) => `[${p.layer}] ${p.problem}`)
+  if (ours.length) throw new UsageError(`the red-team or PR settings are invalid; run brigade-config doctor:\n  ${ours.join('\n  ')}`)
+  return config
+}
+
+function git(root, args) {
+  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
+function globToRegExp(glob) {
+  let re = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === '*' && glob[i + 1] === '*') {
+      if (glob[i + 2] === '/') {
+        re += '(?:.*/)?'
+        i += 2
+      } else {
+        re += '.*'
+        i += 1
+      }
+    } else if (c === '*') re += '[^/]*'
+    else if (c === '?') re += '[^/]'
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp(`^${re}$`)
+}
+
+const matchesAny = (file, globs) => globs.some((g) => globToRegExp(g).test(file))
+
+// NUL-separated, so git neither quotes nor escapes an unusual file name.
+function changedFiles(root, base, head) {
+  return git(root, ['diff', '--name-only', '-z', `${base}...${head}`]).split('\0').filter(Boolean)
+}
+
+// Parses `git diff --numstat -z`. A rename is "added<TAB>deleted<TAB>" followed by the old
+// and the new path as two more NUL-terminated fields.
+function parseNumstat(raw) {
+  const fields = raw.split('\0')
+  const rows = []
+  for (let i = 0; i < fields.length; i++) {
+    if (!fields[i]) continue
+    const [added, deleted, file] = fields[i].split('\t')
+    const paths = file ? [file] : [fields[++i], fields[++i]]
+    rows.push({ file: paths[paths.length - 1], paths, lines: added === '-' ? 0 : Number(added) + Number(deleted) })
+  }
+  return rows
+}
+
+// Changed lines on base...head, minus excluded paths. A binary file counts as no lines, and
+// a rename is excluded only when both of its paths are.
+function sizeReport(root, size, base, head) {
+  const exclude = size.exclude ?? []
+  const rows = parseNumstat(git(root, ['diff', '--numstat', '-z', `${base}...${head}`]))
+    .map((r) => ({ ...r, excluded: r.paths.every((f) => matchesAny(f, exclude)) }))
+  const counted = rows.filter((r) => !r.excluded).reduce((sum, r) => sum + r.lines, 0)
+  return { base, head, counted, limit: size.maxChangedLines, over: counted > size.maxChangedLines, rows }
+}
+
+// ---------------------------------------------------------------- the template
+
+// Placeholders in the generated skeleton mark an unfinished description.
+const SCAFFOLD = {
+  stack: '- Layer: <k> of <n>\n- Parent: <the parent branch or pull request, or main>',
+  validationProse: '<how you validated the change>',
+  validationScope: 'Scope: <full, or targeted and what it leaves out>',
+  validationOutput: '$ <command>\n<its real output>',
+}
+const REVIEW_HINTS = {
+  Head: 'the head sha the review covers',
+  Range: 'base...head',
+  'Find pass': 'tool and command',
+  'Verify pass': 'tool and command',
+  Findings: 'confirmed and refuted counts, and what happened to each',
+  Verdict: 'clean, or the findings still open',
+}
+const PLACEHOLDERS = [
+  ...Object.values(SCAFFOLD).flatMap((s) => s.match(/<[^<>\n]+>/g)),
+  ...Object.values(REVIEW_HINTS).map((h) => `<${h}>`),
+]
+
+function template(config) {
+  const parts = ['<!-- Fill every section with real values. Check it with brigade-pr check <file> before it is published. -->']
+  for (const s of enabled(config.prTemplate.sections)) {
+    const when = s.requiredWhen === 'ui' ? ' Required for a UI change.' : s.required ? ' Required.' : ' Optional.'
+    parts.push(`## ${s.title}`, `<!-- ${s.hint ?? ''}${when} -->`)
+    if (s.kind === 'stack') parts.push(SCAFFOLD.stack)
+    if (s.kind === 'validation') parts.push(`${SCAFFOLD.validationProse}\n\n${SCAFFOLD.validationScope}`, `\`\`\`text\n${SCAFFOLD.validationOutput}\n\`\`\``)
+    if (s.kind === 'review') parts.push(REVIEW_FIELDS.map((f) => `- ${f}: <${REVIEW_HINTS[f]}>`).join('\n'))
+  }
+  return `${parts.join('\n\n')}\n`
+}
+
+// ---------------------------------------------------------------- reading a description
+
+const IMAGE = /!\[[^\]]*\]\([^)\s]+\)|<img\s[^>]*src=|https:\/\/github\.com\/user-attachments\/assets\/\S+/i
+const stripComments = (s) => s.replace(/<!--[\s\S]*?-->/g, '')
+const stripInlineCode = (s) => s.replace(/`[^`\n]*`/g, '')
+
+// Splits Markdown into prose and fenced blocks. A fence opens with three or more backticks
+// or tildes and closes with at least as many of the same character.
+function blocks(text) {
+  const out = []
+  let fence = null
+  for (const line of text.split('\n')) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1]
+    if (fence) {
+      if (marker && marker[0] === fence.char && marker.length >= fence.length && line.trim() === marker) {
+        out.push({ type: 'fence', lines: fence.lines })
+        fence = null
+      } else fence.lines.push(line)
+    } else if (marker) fence = { char: marker[0], length: marker.length, lines: [] }
+    else if (out.length && out[out.length - 1].type === 'prose') out[out.length - 1].lines.push(line)
+    else out.push({ type: 'prose', lines: [line] })
+  }
+  if (fence) out.push({ type: 'fence', lines: fence.lines })
+  return out
+}
+
+const prose = (text) => blocks(text).filter((b) => b.type === 'prose').map((b) => b.lines.join('\n')).join('\n')
+const fences = (text) => blocks(text).filter((b) => b.type === 'fence').map((b) => b.lines)
+
+// Splits a body into its `## ` sections, keyed by lower-case title. A heading inside a
+// fence, such as a line of pasted output, stays in the section around it.
+function parseSections(body) {
+  const sections = new Map()
+  const duplicates = []
+  let current = null
+  const add = (line) => current && current.lines.push(line)
+  for (const block of blocks(stripComments(body))) {
+    if (block.type === 'fence') {
+      add('```')
+      block.lines.forEach(add)
+      add('```')
+      continue
+    }
+    for (const line of block.lines) {
+      const heading = line.match(/^##\s+(.+?)\s*#*\s*$/)
+      if (!heading) {
+        add(line)
+        continue
+      }
+      const key = heading[1].toLowerCase()
+      if (sections.has(key)) duplicates.push(heading[1])
+      current = { title: heading[1], lines: [] }
+      sections.set(key, current)
+    }
+  }
+  return { sections: new Map([...sections].map(([k, v]) => [k, v.lines.join('\n').trim()])), duplicates }
+}
+
+function notApplicable(text) {
+  const m = text.match(/^n\/a\b[\s,.:;()-]*([\s\S]*)$/i)
+  return m ? { reason: m[1].trim() } : null
+}
+
+const field = (text, name) => prose(text).match(new RegExp(`^\\s*[-*]?\\s*${name}:[ \\t]*(.*)$`, 'im'))?.[1]?.trim() ?? ''
+const sameCommit = (a, b) => a.toLowerCase().startsWith(b.toLowerCase()) || b.toLowerCase().startsWith(a.toLowerCase())
+
+// A command counts as run when a fenced line is the command, alone or after a shell prompt,
+// with at least one line of output under it. A longer command does not count as a shorter one.
+function ranWithOutput(blocksOfLines, command) {
+  const invocation = new RegExp(`^\\s*(?:[$>%]\\s+)?${command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s+-\\S.*)?\\s*$`)
+  return blocksOfLines.some((lines) => {
+    const at = lines.findIndex((l) => invocation.test(l))
+    return at !== -1 && lines.slice(at + 1).some((l) => l.trim() !== '')
+  })
+}
+
+// What brigade-evidence says each prompted command (`$ <command>`) in the output proves.
+function classify(commands) {
+  if (commands.length === 0) return []
+  const out = execFileSync(process.execPath, [path.join(SCRIPTS, 'brigade-evidence'), 'classify', '--json', ...commands], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  return JSON.parse(out).commands
+}
+
+// ---------------------------------------------------------------- the check
+
+// Checks a description against the configured template. `context` may carry the changed
+// files, the real head, whether the change is a UI change, and `ready`. A check that needs
+// a missing piece of context is skipped with a warning.
+function checkPr(body, config, context = {}) {
+  const errors = []
+  const warnings = []
+  const { sections, duplicates } = parseSections(body)
+  for (const title of duplicates) errors.push(`${title}: the section appears twice`)
+  const pt = config.prTemplate
+  const ui = context.ui ?? (context.files ? context.files.some((f) => matchesAny(f, pt.uiPaths ?? [])) : null)
+
+  for (const section of enabled(pt.sections)) {
+    const text = sections.get(section.title.toLowerCase())
+    const required = section.requiredWhen === 'ui' ? ui === true : section.required
+    const say = (list, message) => list.push(`${section.title}: ${message}`)
+    if (text === undefined) {
+      if (required) say(errors, 'the section is missing')
+      else if (section.requiredWhen === 'ui' && ui === null) say(warnings, 'missing; pass --base or --ui so a UI change can be told apart')
+      continue
+    }
+    if (text === '') {
+      if (required) say(errors, 'the section is empty')
+      continue
+    }
+    const placeholder = PLACEHOLDERS.find((p) => text.includes(p))
+    if (placeholder) say(errors, `a placeholder is left: ${placeholder}`)
+    const checks = { text: checkText, stack: checkStack, validation: checkValidation, screenshots: checkScreenshots, review: checkReview }
+    checks[section.kind](text, { config, context, ui, error: (m) => say(errors, m), warn: (m) => say(warnings, m) })
+  }
+  return { errors, warnings, ui }
+}
+
+function checkNa(text, ctx) {
+  const na = notApplicable(text)
+  if (na && words(na.reason) < 3) ctx.error('n/a needs a reason of at least three words')
+  return na
+}
+
+function checkText(text, ctx) {
+  checkNa(text, ctx)
+}
+
+function checkStack(text, { config, error }) {
+  const layer = field(text, 'Layer').match(/^(\d+)\s+of\s+(\d+)/i)
+  if (!layer) return error('"Layer: <k> of <n>" is missing')
+  const [k, n] = [Number(layer[1]), Number(layer[2])]
+  const depth = config.prTemplate.size.maxStackDepth
+  if (k < 1 || k > n) error(`layer ${k} of ${n} is not a position in the stack`)
+  if (n > depth) error(`a stack of ${n} layers is deeper than the limit of ${depth}`)
+  if (!field(text, 'Parent')) error('"Parent:" is missing')
+}
+
+// The commands a description must show output for: prTemplate.validation, or every `gate`
+// command when that list is empty.
+function requiredCommands(config) {
+  const listed = enabled(config.prTemplate.validation)
+  if (listed.length) return listed.filter((c) => c.required !== false)
+  return (Array.isArray(config.gate) ? config.gate : []).map((run) => ({ run }))
+}
+
+function checkValidation(text, { config, context, error, warn }) {
+  if (notApplicable(text)) return error('validation cannot be n/a')
+  const output = fences(text).filter((lines) => lines.some((l) => l.trim() !== '' && !PLACEHOLDERS.includes(l.trim())))
+  if (output.length === 0) error('paste the commands you ran and their output in a fenced block')
+  const said = prose(text).replace(SCAFFOLD.validationProse, '').replace(/^\s*[-*]?\s*Scope:.*$/gim, '').trim()
+  if (!said) error('say how you validated the change, outside the output block')
+  for (const command of requiredCommands(config)) {
+    if (command.paths?.length) {
+      if (!context.files) {
+        warn(`could not tell whether ${command.run} applies; pass --base`)
+        continue
+      }
+      if (!context.files.some((f) => matchesAny(f, command.paths))) continue
+    }
+    if (!ranWithOutput(output, command.run)) {
+      error(`the required command ${command.run} is missing, or has no output under it, in an output block`)
+    }
+  }
+  checkScope(text, output, { error })
+}
+
+// The scope line says what the output proves, and brigade-evidence holds it to that: a
+// targeted run never backs a claim of full scope.
+function checkScope(text, output, { error }) {
+  const scope = field(text, 'Scope')
+  if (!scope) return error('"Scope:" is missing; say full, or targeted and what it leaves out')
+  const kind = scope.match(/^(full|targeted)\b/i)?.[1]?.toLowerCase()
+  if (!kind) return error(`"Scope:" must start with full or targeted (got "${scope}")`)
+  if (kind === 'targeted' && words(scope.replace(/^targeted\b[\s,.:;-]*/i, '')) < 3) {
+    error('a targeted scope says what it leaves out, in at least three words')
+  }
+  if (kind !== 'full') return
+  const commands = output.flatMap((lines) => lines.map((l) => l.match(/^\s*\$\s+(.+?)\s*$/)?.[1]).filter(Boolean))
+  for (const c of classify(commands).filter((r) => r.scope === 'targeted')) {
+    const why = c.narrowedBy.length ? `narrowed by ${c.narrowedBy.join(' ')}` : `targets ${c.targets.join(' ')}`
+    error(`${c.command} is a targeted run (${why}), so the scope is not full; say what it leaves out`)
+  }
+}
+
+function checkScreenshots(text, { ui, error, warn }) {
+  const hasImage = IMAGE.test(stripInlineCode(prose(text)))
+  if (ui === true && !hasImage) return error('this is a UI change, so it needs real screenshots of each changed state')
+  if (!hasImage) {
+    checkNa(text, { error })
+    if (ui === null) warn('could not tell whether this is a UI change; pass --base or --ui')
+  }
+}
+
+function checkReview(text, { config, context, error, warn }) {
+  const override = field(text, 'Override')
+  if (override) {
+    const [name, ...reason] = override.split(',')
+    if (!name.trim() || words(reason.join(',')) < 3) return error('an override names the human and a reason: "Override: <name>, <reason>"')
+    return warn(`the review was waived by a human override: ${name.trim()}`)
+  }
+  if (!config.review.redTeam.required && notApplicable(text)) return checkNa(text, { error })
+  for (const name of REVIEW_FIELDS) if (!field(text, name)) error(`"${name}:" is missing`)
+  const head = field(text, 'Head').match(/\b[0-9a-f]{7,40}\b/i)?.[0]
+  if (field(text, 'Head') && !head) error('"Head:" must be a commit sha')
+  const range = field(text, 'Range')
+  if (range) {
+    const end = range.match(/^\S+?\.{2,3}([0-9a-f]{7,40})\b/i)?.[1]
+    if (!end) error('"Range:" must be a git range ending at the reviewed sha, such as main...<sha>')
+    else if (head && !sameCommit(end, head)) error(`the range ends at ${end}, not at the reviewed head ${head}`)
+  }
+  if (head && context.head && !sameCommit(context.head, head)) {
+    error(`the review covers ${head}, but the head is ${context.head.slice(0, 12)}; review the changed range again`)
+  }
+  if (head && !context.head) warn('could not compare the reviewed head with the real head; pass --pr or --base')
+  const verdict = field(text, 'Verdict')
+  if (context.ready && verdict && !/^clean\b/i.test(verdict)) {
+    error(`the verdict is "${verdict}"; a PR is ready only with a clean verdict on its head or a human override`)
+  }
+}
+
+// ---------------------------------------------------------------- the red team
+
+function onPath(bin) {
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue
+    try {
+      fs.accessSync(path.join(dir, bin), fs.constants.X_OK)
+      return true
+    } catch {}
+  }
+  return false
+}
+
+// The tools that can review, in the configured order: enabled, and installed. The find pass
+// runs in a tool other than the author's where one is available, and the verify pass in a
+// tool other than the find pass's, so no one tool both finds and confirms a defect.
+function reviewPlan(redTeam, author) {
+  const reviewers = redTeam.reviewers
+  const names = [...redTeam.reviewerOrder, ...Object.keys(reviewers).filter((t) => !redTeam.reviewerOrder.includes(t))]
+  const skipped = []
+  const tools = []
+  for (const tool of names) {
+    const r = reviewers[tool]
+    if (!isObject(r) || r.enabled === false) skipped.push({ tool, reason: 'switched off' })
+    else if (!onPath(r.bin)) skipped.push({ tool, reason: `${r.bin} is not on PATH` })
+    else tools.push(tool)
+  }
+  if (tools.length === 0) return { tools, skipped, find: null, verify: null }
+  const find = tools.find((t) => t !== author) ?? tools[0]
+  const verify = tools.find((t) => t !== find) ?? find
+  return { tools, skipped, find, verify }
+}
+
+const fillCommand = (command, vars) => command.replace(/\{(base|head|brief|findings)\}/g, (m, key) => vars[key] ?? m)
+
+function findingFormat(redTeam) {
+  const ns = redTeam.ruleNamespace
+  const lines = redTeam.findingFormat === 'compiler'
+    ? [
+        `error[${ns}:rule-name]: one line stating the defect`,
+        '  --> path/to/file:42',
+        '  trigger: the input or state that causes it',
+        '  impact: what goes wrong for a caller or a user',
+        '  help: the change that fixes it',
+        '  evidence: reproduced by <test or command>, or traced through <file:line, file:line>',
+      ]
+    : [
+        '[error] path/to/file:42: one line stating the defect',
+        '  trigger: the input or state that causes it',
+        '  impact: what goes wrong for a caller or a user',
+        '  fix: the change that fixes it',
+        '  evidence: reproduced by <test or command>, or traced through <file:line, file:line>',
+      ]
+  const note = redTeam.findingFormat === 'compiler'
+    ? '`rule-name` is the name of the repository rule the defect breaks, otherwise a short kebab-case name.'
+    : 'The first word is the severity.'
+  return ['```text', ...lines, '```', '', note].join('\n')
+}
+
+// The brief both passes read: the range, the lenses, the finding format and the verify rules.
+function brief(redTeam, plan) {
+  const severities = enabled(redTeam.severities).map((s) => `\`${s.id}\` (${s.meaning})`).join(', ')
+  return `# Red-team review brief
+
+Range: \`${plan.base}...${plan.head}\`. Review only this range. Do not edit any file.
+
+Two passes run in separate contexts. The find pass hunts for defects through every lens. The
+verify pass tries to refute each candidate. Only what survives is reported.
+
+## The find pass
+
+Read the changed code, the code it calls and the tests. Then go through each lens and try to
+make the change fail:
+
+${enabled(redTeam.lenses).map((l) => `- ${l.title}. ${l.lens}`).join('\n')}
+
+Write each candidate in the finding format below. Keep candidates you are unsure of; the
+verify pass decides.
+
+## The verify pass
+
+For each candidate, in a fresh context:
+
+1. Try to refute it from the source: the guard that already prevents it, the caller that
+   never reaches it, the test that already covers it.
+2. When it survives, prove it with the smallest thing that shows the defect: a failing test,
+   a command and its output, or a trace through the code with file and line at each step.
+3. Mark it \`reproduced\` (a test or command shows it) or \`traced\` (a code trace shows it),
+   or drop it as refuted.
+
+Deduplicate findings that share one cause. Label a defect that predates the range as
+pre-existing.
+
+## The finding format
+
+${findingFormat(redTeam)}
+
+Severity: ${severities}.
+`
+}
+
+function cmdRedteam(root, config, flags, print) {
+  const redTeam = config.review.redTeam
+  const author = flags.author ?? 'claude'
+  const base = flags.base ?? config.mainBranch
+  let head
+  let mergeBase
+  try {
+    head = git(root, ['rev-parse', flags.head ?? 'HEAD']).trim()
+    mergeBase = git(root, ['merge-base', base, head]).trim()
+  } catch (e) {
+    throw new UsageError(`could not resolve ${base}...${flags.head ?? 'HEAD'}: ${String(e.stderr || e.message).split('\n')[0]}`)
+  }
+  const plan = reviewPlan(redTeam, author)
+  const briefPath = flags.brief ? path.resolve(flags.brief) : null
+  const vars = { base, head, brief: briefPath ?? undefined, findings: flags.findings ? path.resolve(flags.findings) : undefined }
+  const pass = (tool, kind) => tool && {
+    tool,
+    name: redTeam.reviewers[tool].name ?? tool,
+    command: fillCommand(redTeam.reviewers[tool][kind], vars),
+  }
+  const doc = {
+    ok: plan.find !== null,
+    author,
+    head,
+    base,
+    mergeBase,
+    range: `${base}...${head}`,
+    find: pass(plan.find, 'find'),
+    verify: pass(plan.verify, 'verify'),
+    sameTool: plan.find !== null && plan.find === plan.verify,
+    skipped: plan.skipped,
+    brief: briefPath,
+    lenses: enabled(redTeam.lenses).map((l) => l.id),
+  }
+  if (briefPath) {
+    fs.mkdirSync(path.dirname(briefPath), { recursive: true })
+    fs.writeFileSync(briefPath, brief(redTeam, { base, head }))
+  }
+  if (flags.json) print(JSON.stringify(doc, null, 2))
+  else {
+    print(`head   ${head}`)
+    print(`range  ${doc.range} (merge base ${mergeBase.slice(0, 12)})`)
+    for (const s of plan.skipped) print(`skip   ${s.tool}: ${s.reason}`)
+    if (doc.find) {
+      print(`find   ${doc.find.name}: ${doc.find.command}`)
+      print(`verify ${doc.verify.name}: ${doc.verify.command}`)
+    }
+    if (doc.sameTool) print('warning: only one review tool is installed, so both passes run in it; each still gets its own context')
+    if (briefPath) print(`brief  ${briefPath}`)
+  }
+  if (!doc.ok) {
+    print('redteam: no review tool is installed; stop, leave the PR in draft, and say which pass could not run')
+    return 1
+  }
+  return 0
+}
+
+// ---------------------------------------------------------------- commands
+
+function parseArgs(argv) {
+  const flags = {}
+  const positional = []
+  const valued = new Set(['--base', '--head', '--pr', '--author', '--brief', '--findings'])
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (valued.has(a)) {
+      if (argv[i + 1] === undefined) throw new UsageError(`${a} needs a value`)
+      flags[a.slice(2)] = argv[++i]
+    } else if (a.startsWith('--')) flags[a.slice(2)] = true
+    else positional.push(a)
+  }
+  return { flags, positional }
+}
+
+function cmdCheck(root, config, flags, positional, print) {
+  let body
+  const context = { ready: Boolean(flags.ready) }
+  let base = flags.base
+  if (flags.pr) {
+    let pr
+    try {
+      pr = JSON.parse(execFileSync('gh', ['pr', 'view', flags.pr, '--json', 'body,baseRefName,headRefOid'], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      }))
+    } catch (e) {
+      throw new UsageError(`gh pr view ${flags.pr} failed: ${String(e.stderr || e.message).split('\n')[0]}`)
+    }
+    body = pr.body ?? ''
+    context.head = pr.headRefOid
+    base = base ?? `origin/${pr.baseRefName}`
+  } else {
+    const file = positional[1]
+    if (!file) throw new UsageError('check needs a body file or --pr <number>')
+    try {
+      body = fs.readFileSync(path.resolve(file), 'utf8')
+    } catch (e) {
+      throw new UsageError(`could not read ${file}: ${e.message}`)
+    }
+    base = base ?? config.mainBranch
+    try {
+      context.head = git(root, ['rev-parse', flags.head ?? 'HEAD']).trim()
+    } catch {}
+  }
+  if (flags.ui) context.ui = true
+  if (flags['no-ui']) context.ui = false
+  const extra = []
+  try {
+    context.files = changedFiles(root, base, context.head ?? 'HEAD')
+    const size = sizeReport(root, config.prTemplate.size, base, context.head ?? 'HEAD')
+    if (size.over) extra.push([config.prTemplate.size.enforce, `size: ${size.counted} changed lines, over the limit of ${size.limit}; split the layer`])
+  } catch (e) {
+    extra.push(['error', `could not diff ${base}; fetch it or pass --base (${String(e.stderr || e.message).split('\n')[0]})`])
+  }
+  const { errors, warnings } = checkPr(body, config, context)
+  for (const [level, message] of extra) (level === 'error' ? errors : warnings).push(message)
+  if (flags.json) print(JSON.stringify({ ok: errors.length === 0, errors, warnings }, null, 2))
+  else {
+    for (const w of warnings) print(`warning: ${w}`)
+    for (const e of errors) print(`error: ${e}`)
+    print(errors.length ? `check: ${errors.length} error(s)` : `check: ok${warnings.length ? `, ${warnings.length} warning(s)` : ''}`)
+  }
+  return errors.length ? 1 : 0
+}
+
+function cmdSize(root, config, flags, print) {
+  const base = flags.base ?? config.mainBranch
+  let report
+  try {
+    report = sizeReport(root, config.prTemplate.size, base, flags.head ?? 'HEAD')
+  } catch (e) {
+    throw new UsageError(`could not diff ${base}: ${String(e.stderr || e.message).split('\n')[0]}`)
+  }
+  const enforce = config.prTemplate.size.enforce
+  if (flags.json) print(JSON.stringify({ ...report, enforce }, null, 2))
+  else {
+    for (const r of report.rows.filter((row) => row.excluded)) print(`excluded ${r.file} (${r.lines})`)
+    print(`size: ${report.counted} changed lines against ${base}, limit ${report.limit}`)
+    if (report.over) print(`${enforce}: split this layer; it is ${report.counted - report.limit} lines over the limit`)
+  }
+  return report.over && enforce === 'error' ? 1 : 0
+}
+
+function main(argv, print = console.log) {
+  const { flags, positional } = parseArgs(argv)
+  const command = positional[0]
+  const known = ['template', 'check', 'size', 'redteam']
+  if (!known.includes(command)) throw new UsageError(`unknown command ${command ?? '(none)'}; commands: ${known.join(', ')}`)
+  const root = repoRoot()
+  const config = loadConfig(root)
+  switch (command) {
+    case 'template':
+      process.stdout.write(template(config))
+      return 0
+    case 'check': return cmdCheck(root, config, flags, positional, print)
+    case 'size': return cmdSize(root, config, flags, print)
+    case 'redteam': return cmdRedteam(root, config, flags, print)
+  }
+}
+
+try {
+  process.exitCode = main(process.argv.slice(2))
+} catch (e) {
+  if (!(e instanceof UsageError)) throw e
+  console.error(`brigade-pr: ${e.message}`)
+  process.exitCode = 2
+}

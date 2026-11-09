@@ -258,6 +258,7 @@ board's own code and draws every frame with it; the whole run plays in under 30 
 | `scripts/brigade-coord` | atomic per-dish Claude/Codex ownership and handoff leases |
 | `scripts/brigade-validate` | zero-token schema conformance checker for dish artifacts |
 | `scripts/brigade-evidence` | zero-token verification-scope classifier — stops a targeted pass being read as repo green |
+| `scripts/brigade-pr` | zero-token handoff helper: picks the red-team tools and writes their brief, renders the PR body from the configured template, and checks it |
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `scripts/board-demo` | regenerates the board demo in this README from the board's own drawing code; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
