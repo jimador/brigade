@@ -150,8 +150,10 @@ substitution, or heredocs) and refuses to let `.brigade/` be staged at all. It f
 closed: if it cannot parse a command, it blocks it.
 
 A SubagentStop hook runs the schema validator over dish artifacts written in the last ten
-minutes whenever an artifact-writing agent finishes, and blocks the stop so the agent
-fixes its own malformed output while it is still the cheapest place to fix it. It gives up
+minutes (briefs, reports, research, state) whenever an artifact-writing agent finishes, and
+blocks the stop so the agent fixes its own malformed output while it is still the cheapest
+place to fix it. It also reads the output path from the agent's dispatch prompt and blocks
+when that file was never written, telling the agent to write it now from what it has. It gives up
 after two rounds per agent rather than risk a stuck subagent. Its matcher names each
 scoped agent type outright — `brigade:brigade-cook`, `brigade:brigade-cook-heavy`,
 `brigade:brigade-inspector` — because a matcher containing the plugin scope colon compiles

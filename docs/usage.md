@@ -72,6 +72,7 @@ brigade-config doctor           # validate every layer; exit 1 on problems
 
 brigade-validate                # schema-check every dish artifact
 brigade-validate <path.md>...   # check specific files
+brigade-validate <dish-dir>     # check one dish (or the *.md files in any folder)
 brigade-validate --json         # structured results
 
 brigade-bundle                  # regenerate workflows/ from workflows/src/

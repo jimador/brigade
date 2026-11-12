@@ -8,7 +8,7 @@ same one a kitchen makes: how much craft goes into each plate.
 | say | "brigade heavy" | "brigade" | "brigade light" |
 | planning (normal) | frontier (`fable`) | `opus` | `sonnet` |
 | planning (difficult) | frontier | frontier (`fable`) | `opus` |
-| scouts | haiku, ≤ 6 per dish | haiku, ≤ 4 | haiku, ≤ 2, questions merged |
+| scouts | sonnet, ≤ 6 per dish | sonnet, ≤ 4 | sonnet, ≤ 2, questions merged |
 | first-attempt cook | heavy cook (sonnet) | cook (haiku) | cook (haiku) |
 | escalation ladder | heavy retry → planner | cook retry → heavy → planner | cook retry → heavy → planner |
 | plan check | always | on triggers | never |

@@ -47,7 +47,7 @@ Companion paths below are relative to this skill's directory; helper scripts liv
 | **Planner** | this session (you) | the session model — the tier's planning row | intake, decomposition, dispatch, merges, ticket updates. **Never implements. Never explores the codebase directly.** |
 | **Design** | `brigade-design` subagent (or this session in design-only mode) | sonnet | one-shot swag: research, open questions, readiness; never claims or cooks |
 | **Designer** | this session via `/brigade:ui` (`agents/brigade-designer.md`) | the session model (sonnet if dispatched as a subagent) | UI loop for FE tickets: stand up, iterate live, capture states, write UI samples; never implements product code |
-| **Scout** | `brigade-scout` subagent | haiku (all tiers) | answers one focused codebase question, returns a compact brief |
+| **Scout** | `brigade-scout` subagent | sonnet (all tiers) | answers one focused codebase question, returns a compact brief |
 | **Cook** | `brigade-cook` subagent | haiku; ★★★ dispatches the heavy cook first | implements exactly one work packet in its own worktree |
 | **Heavy Cook** | `brigade-cook-heavy` subagent | sonnet | same contract as Cook, for escalations and known-hard slices |
 | **Inspector** | `brigade-inspector` subagent | sonnet | adversarial PASS/FAIL review of one work item's diff before merge; optional pre-dispatch plan check |
@@ -244,7 +244,7 @@ is recorded in PLAN.md, the dish directory exists, and `state/planner.md` is see
 
 Check memory first: read the tail of `.brigade/LEARNINGS.md`; if `kb.enabled` and `kb.cli` is
 on PATH, search it for the live heuristic set and prior art, else skip silently. Then
-formulate the smallest set of focused questions decomposition actually needs.
+formulate the smallest set of focused questions decomposition actually needs. Each question has one part and names one subsystem; split a question that asks for more before dispatch.
 
 Invoking `brigade-research` is the opt-in to multi-agent orchestration. Invoke the Workflow
 tool by name — `name: "brigade:brigade-research"` — never by `scriptPath`: the plugin

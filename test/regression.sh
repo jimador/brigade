@@ -4385,6 +4385,128 @@ EOF
   echo "SCOUT BRIEF HOOK OK"
 }
 
+write_good_brief() {
+  # $1 = path. A brief that brigade-validate accepts.
+  mkdir -p "$(dirname "$1")"
+  cat >"$1" <<'BRIEF'
+---
+doc: brief
+schema: 1
+dish: sample
+item: one
+role: scout
+model: sonnet
+created: 2026-07-04T03:10:00Z
+question: what breaks
+confidence: high
+sources:
+  - src/a.ts:1-2
+urls: []
+---
+
+## Answer
+Fine.
+BRIEF
+}
+
+test_validate_accepts_directories() {
+  fixture="$TMP_ROOT/validate-dirs"
+  dish="$fixture/.brigade/dishes/sample"
+  write_good_brief "$dish/briefs/1-good.md"
+  mkdir -p "$dish/reports" "$fixture/plain"
+  printf -- '---\ndoc: brief\nquestion: x\n---\n\nbroken\n' >"$dish/briefs/2-bad.md"
+  printf '# note\n' >"$fixture/plain/note.md"
+  mkdir -p "$fixture/empty"
+
+  out="$(CLAUDE_PROJECT_DIR="$fixture" node "$ROOT/scripts/brigade-validate" "$dish" 2>&1)" && rc=0 || rc=$?
+  [ "$rc" -eq 1 ] || fail "brigade-validate <dish-dir> should exit 1 on a bad artifact, got $rc: $out"
+  printf '%s' "$out" | grep -q '2-bad.md' || fail "dish-dir run did not name the bad file: $out"
+  printf '%s' "$out" | grep -q 'EISDIR' && fail "dish-dir run still reports EISDIR: $out"
+
+  out="$(CLAUDE_PROJECT_DIR="$fixture" node "$ROOT/scripts/brigade-validate" "$dish/briefs" 2>&1)" && rc=0 || rc=$?
+  [ "$rc" -eq 1 ] || fail "brigade-validate <dish>/briefs should exit 1, got $rc: $out"
+  printf '%s' "$out" | grep -q '2-bad.md' || fail "briefs-dir run did not name the bad file: $out"
+  printf '%s' "$out" | grep -q 'EISDIR' && fail "briefs-dir run still reports EISDIR: $out"
+
+  out="$(CLAUDE_PROJECT_DIR="$fixture" node "$ROOT/scripts/brigade-validate" "$fixture/empty" 2>&1)" \
+    || fail "an empty directory should not be an error: $out"
+  printf '%s' "$out" | grep -q 'EISDIR' && fail "empty-dir run reports EISDIR: $out"
+  echo "VALIDATE DIRECTORY OK"
+}
+
+test_hook_validates_research_reports() {
+  fixture="$TMP_ROOT/research-hook"
+  mkdir -p "$fixture/.brigade/dishes/sample/research"
+  printf -- '---\ndoc: research\n---\n\nMalformed on purpose.\n' \
+    >"$fixture/.brigade/dishes/sample/research/one.md"
+  out="$(printf '{"agent_id":"regression-researcher"}' \
+    | CLAUDE_PROJECT_DIR="$fixture" bash "$ROOT/hooks/post-cook-validate.sh" 2>&1 || true)"
+  printf '%s' "$out" | grep -q '"decision": *"block"' \
+    || fail "post-cook-validate.sh did not block on a nonconforming research report; got: $out"
+  rm -f "${TMPDIR:-/tmp}/brigade-postcook-regression-researcher"
+  echo "RESEARCH HOOK OK"
+}
+
+test_hook_blocks_missing_artifact() {
+  fixture="$TMP_ROOT/missing-artifact-hook"
+  dish="$fixture/.brigade/dishes/sample"
+  target="$dish/briefs/1-missing.md"
+  mkdir -p "$dish/briefs"
+  transcript="$fixture/transcript.jsonl"
+  python3 - "$transcript" "$target" <<'PY'
+import json, sys
+path, target = sys.argv[1:3]
+lines = [
+    {"type": "user", "message": {"role": "user", "content": "You are a scout.\nWrite your brief to: " + target + "\nBe brief."}},
+    {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "reading"}]}},
+]
+open(path, "w").write("\n".join(json.dumps(l) for l in lines) + "\n")
+PY
+  agent=regression-missing
+  guard="${TMPDIR:-/tmp}/brigade-postcook-$agent"
+  rm -f "$guard"
+  input="$(printf '{"agent_id":"%s","agent_transcript_path":"%s"}' "$agent" "$transcript")"
+  run_hook() { printf '%s' "$1" | CLAUDE_PROJECT_DIR="$fixture" bash "$ROOT/hooks/post-cook-validate.sh" 2>&1 || true; }
+
+  out="$(run_hook "$input")"
+  printf '%s' "$out" | grep -q '"decision": *"block"' || fail "hook did not block on a missing brief; got: $out"
+  printf '%s' "$out" | grep -qF "$target" || fail "block reason does not name the missing path; got: $out"
+
+  # Once the file exists and conforms the hook is silent.
+  write_good_brief "$target"
+  out="$(run_hook "$input")"
+  [ -z "$out" ] || fail "hook should be silent once the brief exists; got: $out"
+  rm -f "$target"
+
+  # Second block, then the third call gives up with a systemMessage.
+  out="$(run_hook "$input")"
+  printf '%s' "$out" | grep -q '"decision": *"block"' || fail "second call should still block; got: $out"
+  out="$(run_hook "$input")"
+  printf '%s' "$out" | grep -q '"systemMessage"' || fail "third call should give up with a systemMessage; got: $out"
+  printf '%s' "$out" | grep -qF "$target" || fail "systemMessage does not name the missing path; got: $out"
+  printf '%s' "$out" | grep -q '"decision"' && fail "third call must not block; got: $out"
+  rm -f "$guard"
+
+  # No transcript, or an unreadable one: today's behaviour (silent).
+  out="$(run_hook "$(printf '{"agent_id":"%s"}' "$agent")")"
+  [ -z "$out" ] || fail "hook should be silent without a transcript path; got: $out"
+  out="$(run_hook "$(printf '{"agent_id":"%s","agent_transcript_path":"%s/nope.jsonl"}' "$agent" "$fixture")")"
+  [ -z "$out" ] || fail "hook should be silent for an unreadable transcript; got: $out"
+  rm -f "$guard"
+  echo "MISSING ARTIFACT HOOK OK"
+}
+
+test_scout_runs_sonnet_and_writes_skeleton() {
+  grep -q '^model: sonnet$' "$ROOT/agents/brigade-scout.md" \
+    || fail "agents/brigade-scout.md frontmatter is not model: sonnet"
+  grep -q '^maxTurns: 40$' "$ROOT/agents/brigade-scout.md" \
+    || fail "agents/brigade-scout.md frontmatter is not maxTurns: 40"
+  grep -q 'Write a skeleton of the brief to that path within your first 10 tool calls' \
+    "$ROOT/workflows/brigade-research.js" \
+    || fail "workflows/brigade-research.js is missing the skeleton-brief line"
+  echo "SCOUT SONNET OK"
+}
+
 test_research_reports_expected_brief_path() {
   # A scout that writes its brief but returns no structured output was previously reported
   # as a flat failure, so planners re-dispatched work that had already succeeded. The
@@ -4884,6 +5006,10 @@ test_eval_seed_cases
 test_eval_cli_backend
 test_hook_matchers
 test_hook_validates_scout_briefs
+test_validate_accepts_directories
+test_hook_validates_research_reports
+test_hook_blocks_missing_artifact
+test_scout_runs_sonnet_and_writes_skeleton
 test_research_reports_expected_brief_path
 test_subagent_line_model
 test_evidence_scope
