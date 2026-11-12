@@ -21,7 +21,7 @@ configured default (★★ out of the box), **brigade light** for ★.
 | call sensitivity | low — spend for quality | balanced | high — every expensive call justified |
 | planning (normal) | frontier — `fable`, else `opus` at max effort | `opus` | `sonnet` |
 | planning (difficult) | frontier | frontier — `fable`, else `opus` at max effort | `opus` |
-| scouts | haiku, ≤ 6/dish; planner may read pivotal files itself | haiku, ≤ 4/dish | haiku, ≤ 2/dish, merge questions |
+| scouts | sonnet, ≤ 6/dish; planner may read pivotal files itself | sonnet, ≤ 4/dish | sonnet, ≤ 2/dish, merge questions |
 | first-attempt cook | brigade-cook-heavy (sonnet) | brigade-cook (haiku) | brigade-cook (haiku) |
 | escalation ladder | heavy retry → planner | cook → cookRetry → heavy → planner | cook → cookRetry → heavy → planner |
 | plan check | always | on triggers | never (self-check list only) |
@@ -56,7 +56,7 @@ table flags matter there too.
 compare the session model to the tier's planning row and tell the operator to `/model`
 to it, or proceed degraded and say so.
 
-**Scouts** caps research dispatches per dish. At ★ merge questions into fewer scouts; at
+**Scouts** run on sonnet at every tier (haiku scouts ran out of turns on multi-part questions before writing a brief) and cap research dispatches per dish. At ★ merge questions into fewer scouts; at
 ★★★ the planner may read pivotal files itself instead of dispatching.
 
 **First-attempt cook** picks the initial executor: `brigade-cook-heavy` at ★★★,

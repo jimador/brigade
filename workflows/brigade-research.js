@@ -363,6 +363,7 @@ Web sources allowed: ${q.allowWeb ? 'yes' : 'no'}
 
 Write your brief to: ${briefPath}
 Use this timestamp for the brief's \`created:\` field: ${A.now}
+Write a skeleton of the brief to that path within your first 10 tool calls, then refine it in place. Never end without the file on disk.
 
 Brief schema and body sections:
 
