@@ -49,6 +49,14 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.48.0
+
+- touches: none
+- what: the SubagentStop hook now also blocks when an agent stops without writing the file
+  its dispatch prompt named, and it validates research reports. `brigade-validate` accepts a
+  dish directory or any folder of markdown. Scouts run on sonnet with 40 turns and write a
+  skeleton brief early, so a scout that runs short still leaves a file behind.
+
 ### 0.47.0
 
 - touches: none
