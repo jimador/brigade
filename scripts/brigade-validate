@@ -11,6 +11,9 @@
 // Usage:
 //   brigade-validate                 # validate every dish under .brigade/
 //   brigade-validate <path.md>...    # validate specific artifact files
+//   brigade-validate <dish-dir>      # validate one dish: PLAN.md, analyst.md, DESIGN.md and the
+//                                    # *.md files in briefs/ reports/ research/ state/
+//   brigade-validate <dir>           # any other directory: the *.md files directly inside it
 //   brigade-validate --json          # machine-readable results
 //
 // Exit codes: 0 = all conforming, 1 = violations found, 2 = usage/IO error.
@@ -705,6 +708,22 @@ function validateFile(file) {
   return { file, problems, warnings, doc }
 }
 
+// The artifacts of one dish: its top-level documents and the markdown files directly
+// inside its four artifact folders.
+function collectDishTargets(dir) {
+  const targets = []
+  for (const rel of ['PLAN.md', 'analyst.md', 'DESIGN.md']) {
+    const f = path.join(dir, rel)
+    if (fs.existsSync(f)) targets.push(f)
+  }
+  for (const sub of ['briefs', 'reports', 'research', 'state']) {
+    const d = path.join(dir, sub)
+    if (!fs.existsSync(d)) continue
+    for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) targets.push(path.join(d, f))
+  }
+  return targets
+}
+
 function collectDefaultTargets(root) {
   const b = path.join(root, '.brigade', 'dishes')
   if (!fs.existsSync(b)) return []
@@ -712,17 +731,29 @@ function collectDefaultTargets(root) {
   for (const dish of fs.readdirSync(b)) {
     const dir = path.join(b, dish)
     if (!fs.statSync(dir).isDirectory()) continue
-    for (const rel of ['PLAN.md', 'analyst.md', 'DESIGN.md']) {
-      const f = path.join(dir, rel)
-      if (fs.existsSync(f)) targets.push(f)
-    }
-    for (const sub of ['briefs', 'reports', 'research', 'state']) {
-      const d = path.join(dir, sub)
-      if (!fs.existsSync(d)) continue
-      for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) targets.push(path.join(d, f))
-    }
+    targets.push(...collectDishTargets(dir))
   }
   return targets
+}
+
+// A directory argument becomes the files inside it. A dish directory (it has PLAN.md or
+// one of the artifact folders) expands to its artifacts; any other directory expands to
+// the *.md files directly inside it. Plain file arguments pass through unchanged.
+function isDishDir(dir) {
+  return fs.existsSync(path.join(dir, 'PLAN.md')) ||
+    ['briefs', 'reports', 'research', 'state'].some((sub) => fs.existsSync(path.join(dir, sub)))
+}
+
+function expandArg(arg) {
+  let stat
+  try {
+    stat = fs.statSync(arg)
+  } catch {
+    return [arg] // let validateFile report it as unreadable
+  }
+  if (!stat.isDirectory()) return [arg]
+  if (isDishDir(arg)) return collectDishTargets(arg)
+  return fs.readdirSync(arg).filter((f) => f.endsWith('.md')).sort().map((f) => path.join(arg, f))
 }
 
 function repoRoot() {
@@ -753,10 +784,12 @@ function main() {
   const files = args.filter((a) => a !== '--json')
   const root = repoRoot()
 
-  const targets = files.length > 0 ? files : collectDefaultTargets(root)
+  const targets = files.length > 0 ? files.flatMap(expandArg) : collectDefaultTargets(root)
   if (targets.length === 0) {
     if (json) console.log(JSON.stringify({ checked: 0, ok: true, results: [] }))
-    else console.log('brigade-validate: nothing to check (no .brigade/dishes artifacts found)')
+    else console.log(files.length > 0
+      ? 'brigade-validate: nothing to check (no markdown artifacts in the given paths)'
+      : 'brigade-validate: nothing to check (no .brigade/dishes artifacts found)')
     return 0
   }
 
