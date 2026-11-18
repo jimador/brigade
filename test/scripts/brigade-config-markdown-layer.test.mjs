@@ -1,8 +1,10 @@
 // Tests for the `.brigade/config.md` layer in brigade-config. That layer sits just above the
-// built-in defaults and below every JSON layer, and reads only `tier` and `verification_gate`.
+// built-in defaults and below every JSON layer, and reads only `tier`, `verification_gate` and
+// `main_branch`.
 // One test per guarantee:
 //   R1  only the `## Repo` section is read, up to the next `## ` heading
-//   E1  `- tier: <value>` sets tier, trailing ` # comment` dropped, an empty value sets nothing
+//   E1  `- tier: <value>` sets tier, trailing ` # comment` dropped, an empty value sets nothing;
+//       `- main_branch: <value>` sets mainBranch the same way, a `<placeholder>` sets nothing
 //   E2  `- verification_gate:` plus indented `- <command>` lines set gate in order, `#` kept,
 //       `<placeholder>` commands skipped
 //   E3  provenance says `config.md` for what it set; a JSON layer setting the same key wins
@@ -137,4 +139,29 @@ test('I1: with no config.md, resolve reports the defaults and lists only the JSO
   assert.equal(out.provenance.tier, 'defaults')
   assert.deepEqual(out.config.gate, [])
   assert.deepEqual(out.layers.map((l) => l.layer), ['defaults', 'global', 'team', 'local'])
+})
+
+test('E1: a main_branch bullet sets mainBranch, and a JSON layer still wins', (t) => {
+  const dir = fixture({ '.brigade/config.md': configMd(['- main_branch: develop   # trunk']) })
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const out = resolve(dir)
+  assert.equal(out.config.mainBranch, 'develop')
+  assert.equal(out.provenance.mainBranch, 'config.md')
+
+  const overridden = fixture({
+    '.brigade/config.md': configMd(['- main_branch: develop']),
+    '.brigade/config.local.json': JSON.stringify({ mainBranch: 'trunk' }),
+  })
+  t.after(() => fs.rmSync(overridden, { recursive: true, force: true }))
+  const local = resolve(overridden)
+  assert.equal(local.config.mainBranch, 'trunk')
+  assert.equal(local.provenance.mainBranch, 'local')
+
+  for (const line of ['- main_branch: <your main branch>', '- main_branch:    # e.g. main']) {
+    const placeholder = fixture({ '.brigade/config.md': configMd([line]) })
+    t.after(() => fs.rmSync(placeholder, { recursive: true, force: true }))
+    const fallback = resolve(placeholder)
+    assert.equal(fallback.config.mainBranch, 'main')
+    assert.equal(fallback.provenance.mainBranch, 'defaults')
+  }
 })

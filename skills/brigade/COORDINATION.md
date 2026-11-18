@@ -56,7 +56,8 @@ then acquire a new lease.
 Lifecycle updates are serialized by a short operation mutex. If a crashed helper leaves
 one behind, `status` reports `operation_busy`; after the same live-state checks and
 separate operator approval, archive only that mutex with
-`brigade-coord recover-lock <dish-slug> --force`, then run `break` or resume normally.
+`brigade-coord recover-lock <dish-slug> --force`, then run `break` or resume normally. The path-lease records have their own mutex; recover it the same way with
+`brigade-coord recover-lock .path-leases --force`.
 
 ## The wire contract
 

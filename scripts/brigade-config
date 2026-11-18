@@ -5,8 +5,8 @@
 // person can change one thing without restating everything above it:
 //
 //   1. defaults   built into this file (what brigade does with no config at all)
-//   2. config.md  <repo>/.brigade/config.md              only `tier` and `verification_gate`
-//                                                        from its `## Repo` section
+//   2. config.md  <repo>/.brigade/config.md              only `tier`, `verification_gate` and
+//                                                        `main_branch` from its `## Repo` section
 //   3. global     ~/.brigade/config.json                 personal, every repo
 //   4. team       <repo>/brigade.config.json             committed, shared
 //   5. local      <repo>/.brigade/config.local.json      personal, this repo, never committed
@@ -245,8 +245,9 @@ function layerFiles() {
   ]
 }
 
-// Pull the two settings brigade-config honours out of the onboarding file
-// `.brigade/config.md`: `tier` and `verification_gate` (as `gate`), and only from its
+// Pull the three settings brigade-config honours out of the onboarding file
+// `.brigade/config.md`: `tier`, `main_branch` (as `mainBranch`) and `verification_gate`
+// (as `gate`), and only from its
 // `## Repo` section, so a look-alike bullet elsewhere in the file changes nothing.
 // A key with no usable value is left out, so the layers below it still show through.
 function readConfigMarkdown(text) {
@@ -263,6 +264,13 @@ function readConfigMarkdown(text) {
       // Drop a trailing ` # comment` (the template annotates the allowed values that way).
       const value = tier[1].replace(/\s#.*$/, '').trim()
       if (value) data.tier = value
+      continue
+    }
+    const mainBranch = section[i].match(/^- main_branch:(.*)$/)
+    if (mainBranch) {
+      // Same comment rule as tier; a `<...>` value is the template's unfilled placeholder.
+      const value = mainBranch[1].replace(/\s#.*$/, '').trim()
+      if (value && !value.startsWith('<')) data.mainBranch = value
       continue
     }
     if (/^- verification_gate:/.test(section[i])) {
