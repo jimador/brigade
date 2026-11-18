@@ -936,7 +936,11 @@ function printPrompts(json) {
     )
   }
   if (json) {
-    console.log(JSON.stringify({ overrides: result }, null, 2))
+    // The workflows append these strings to each agent's prompt, so they come from the same
+    // resolver `prompt <name>` uses and the two commands can never disagree.
+    const text = {}
+    for (const name of Object.keys(result)) text[name] = resolvedPrompt(name).map((entry) => entry.text)
+    console.log(JSON.stringify({ overrides: result, text }, null, 2))
     return
   }
   const entries = Object.entries(result)
