@@ -403,11 +403,11 @@ You are the Steward checking that an inspector's verdict file is on disk. You on
 never create, edit, move or delete any file.
 
 Run these two commands:
-  head -12 '${verdictPath}'
+  awk 'NR==1 && /^---$/ {f=1; print; next} f {print} f && /^---$/ {exit}' '${verdictPath}'
   \${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate '${verdictPath}'
 
 Return:
-- exists: true when the file is there, false when head says it does not exist.
+- exists: true when the file is there, false when awk says it cannot open it.
 - valid: true only when brigade-validate printed ok for it AND its frontmatter says
   doc: verdict AND ${accepts}. Anything else is false.
 - detail: one line saying what you saw (the validate line, or the error).

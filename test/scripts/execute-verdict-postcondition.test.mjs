@@ -8,11 +8,14 @@
 //   E3  a miss with no usable verdictDoc sends one fresh inspector, then the probe looks again
 //   E4  a FAIL from that fresh inspector is an ordinary FAIL and the next rung cooks
 //   E5  a miss after the fresh inspector blocks the item, names the path, and lands nothing
+//   E1  the probe's read command prints the whole frontmatter, trivial_only included
 // Run with `node --test test/scripts/*.test.mjs`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -83,7 +86,7 @@ test('E2: a probe hit lands once with no transcription or redo', async () => {
   // The probe runs before the land and only reads.
   assert.ok(labels.indexOf('probe:a:0') < labels.indexOf('steward-land:a'))
   const probe = calls.find((c) => c.label === 'probe:a:0').prompt
-  assert.ok(probe.includes(`head -12 '${VERDICT_PATH}'`))
+  assert.ok(probe.includes(`awk 'NR==1 && /^---$/ {f=1; print; next} f {print} f && /^---$/ {exit}' '${VERDICT_PATH}'`))
   assert.ok(probe.includes(`\${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate '${VERDICT_PATH}'`))
   assert.match(probe, /never create, edit, move or delete any file/)
   assert.deepEqual(item.attempts, [{ agentType: item.attempts[0].agentType, result: 'done' }])
@@ -174,4 +177,34 @@ test('E2: a trivial-only FAIL still lands when its file says FAIL with trivial_o
   const { item, calls } = await run({ 'inspect:': [trivial], 'probe:': [hit] })
   assert.equal(item.status, 'done')
   assert.match(calls.find((c) => c.label.startsWith('probe:')).prompt, /verdict: FAIL together with trivial_only: true/)
+})
+
+test('E1: the probe reads the whole frontmatter, so trivial_only shows past several findings', async () => {
+  const trivial = { verdict: 'FAIL', verdictPath: VERDICT_PATH, trivialOnly: true, findings: [] }
+  const { calls } = await run({ 'inspect:': [trivial], 'probe:': [hit] })
+  const prompt = calls.find((c) => c.label.startsWith('probe:')).prompt
+  // The read command is the first indented line under "Run these two commands:".
+  const lines = prompt.split('\n')
+  const command = lines[lines.findIndex((l) => l.startsWith('Run these two commands:')) + 1].trim()
+  assert.ok(command.endsWith(`'${VERDICT_PATH}'`), command)
+  // A verdict with three findings puts trivial_only well past line 12.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verdict-probe-'))
+  const file = path.join(dir, 'a-verdict.md')
+  fs.writeFileSync(file, [
+    '---', 'doc: verdict', 'schema: 1', 'dish: dish', 'item: a', 'role: inspector', 'model: m',
+    'created: 2026-01-01T00:00:00Z', 'verdict: FAIL', 'attempt_reviewed: 1', 'reran_gate: true',
+    'findings:',
+    '  - { id: F1, severity: low, location: "x.js:1", summary: "typo one" }',
+    '  - { id: F2, severity: low, location: "x.js:2", summary: "typo two" }',
+    '  - { id: F3, severity: low, location: "x.js:3", summary: "typo three" }',
+    'trivial_only: true', '---', '', '## Verdict', 'FAIL (trivial only)', '',
+  ].join('\n'))
+  try {
+    const out = execFileSync('/bin/sh', ['-c', command.replace(`'${VERDICT_PATH}'`, `'${file}'`)], { encoding: 'utf8' })
+    assert.match(out, /^trivial_only: true$/m, out)
+    // Frontmatter only: the body after the closing fence stays out.
+    assert.ok(!out.includes('## Verdict'), out)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
