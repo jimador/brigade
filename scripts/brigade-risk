@@ -51,20 +51,28 @@ function loadPolicy() {
   if (typeof policy.file_threshold !== 'number' || !Array.isArray(policy.categories)) {
     throw new Error(`policy file ${filePath} json block is missing file_threshold or categories`)
   }
-  const categories = policy.categories.map((cat) => {
+  // Risk categories match case-insensitively. Design-review patterns match case-sensitively,
+  // so a camelCase suffix like `NotifierPort` can be matched without also matching `report`.
+  const compile = (list, label, flags) => list.map((cat) => {
     if (typeof cat.id !== 'string' || !Array.isArray(cat.patterns)) {
-      throw new Error(`policy file ${filePath} has a category missing id or patterns`)
+      throw new Error(`policy file ${filePath} has a ${label} category missing id or patterns`)
     }
     const regexes = cat.patterns.map((source) => {
       try {
-        return new RegExp(source, 'i')
+        return new RegExp(source, flags)
       } catch (err) {
         throw new Error(`policy file ${filePath} category ${cat.id} has a bad regex "${source}": ${err.message}`)
       }
     })
     return { id: cat.id, regexes }
   })
-  return { fileThreshold: policy.file_threshold, categories }
+  const categories = compile(policy.categories, 'risk', 'i')
+  // design_review is optional; a policy without it evaluates to no design-review matches.
+  if (policy.design_review !== undefined && !Array.isArray(policy.design_review)) {
+    throw new Error(`policy file ${filePath} design_review must be an array`)
+  }
+  const designCategories = compile(policy.design_review ?? [], 'design-review', '')
+  return { fileThreshold: policy.file_threshold, categories, designCategories }
 }
 
 function rangeFiles(range) {
@@ -89,11 +97,20 @@ function firstMatch(filePath, categories) {
   return null
 }
 
+// Documentation, tests, fixtures and markdown never get design review: a doc that names a
+// contract is not the contract, and a fixture is not persisted data. Policy prose documents this.
+const DESIGN_EXCLUDED = /(^|\/)(docs|tests?|__tests__|fixtures)\/|\.md$/i
+
+// Design-review matches are computed alongside, never folded into, escalate: a
+// design-review match asks the operator for design review and changes nothing else.
 function evaluate(files, policy) {
   const matches = []
+  const designMatches = []
   for (const filePath of files) {
     const category = firstMatch(filePath, policy.categories)
     if (category) matches.push({ path: filePath, category })
+    const designCategory = DESIGN_EXCLUDED.test(filePath) ? null : firstMatch(filePath, policy.designCategories)
+    if (designCategory) designMatches.push({ path: filePath, category: designCategory })
   }
   const fileCount = files.length
   const thresholdExceeded = fileCount > policy.fileThreshold
@@ -104,6 +121,8 @@ function evaluate(files, policy) {
     file_threshold: policy.fileThreshold,
     threshold_exceeded: thresholdExceeded,
     matches,
+    design_review: designMatches.length > 0,
+    design_matches: designMatches,
   }
 }
 
@@ -144,6 +163,10 @@ function main() {
   } else {
     for (const m of result.matches) {
       console.log(`${m.category}  ${m.path}`)
+    }
+    if (result.design_review) {
+      const ids = [...new Set(result.design_matches.map((m) => m.category))]
+      console.log(`design-review: ${ids.join(', ')}`)
     }
     console.log(`files: ${result.file_count}/${result.file_threshold}`)
     console.log(`escalate: ${result.escalate ? 'yes' : 'no'}`)
