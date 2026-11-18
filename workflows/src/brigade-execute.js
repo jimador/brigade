@@ -110,6 +110,8 @@ FIRST verify that report file exists with doc: report frontmatter (head -3 it).
 Missing file or wrong doc type = automatic FAIL with a blocking finding (id A0,
 location: the missing path) — inspect nothing else first.
 Write your verdict to: ${verdictPath}
+When you return, put the exact full text of the verdict file you wrote (or tried to
+write), frontmatter included, in verdictDoc.
 
 Verification gate the cook should have run — check the evidence is real, not paraphrased:
 ${gateBlock()}
@@ -346,6 +348,84 @@ You never run git add or git commit on anything, never touch any file outside
 Return the result per the steward schema.
 `
 
+// What the verdict file must say before the workflow lands on it. An inspector that returns a
+// FAIL whose findings are all trivial still lands, and its file says verdict: FAIL with
+// trivial_only: true, so that case accepts either verdict line.
+const verdictAccepts = (verdictResult) => (verdictResult && verdictResult.trivialOnly
+  ? 'verdict: PASS, or verdict: FAIL together with trivial_only: true'
+  : 'verdict: PASS')
+
+// Checks that the inspector's verdict file is really on disk before anything lands. The
+// workflow cannot read files itself, so a steward looks and reports back.
+const verdictProbePrompt = (verdictPath, accepts = 'verdict: PASS') => `
+You are the Steward checking that an inspector's verdict file is on disk. You only look:
+never create, edit, move or delete any file.
+
+Run these two commands:
+  head -12 '${verdictPath}'
+  \${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate '${verdictPath}'
+
+Return:
+- exists: true when the file is there, false when head says it does not exist.
+- valid: true only when brigade-validate printed ok for it AND its frontmatter says
+  doc: verdict AND ${accepts}. Anything else is false.
+- detail: one line saying what you saw (the validate line, or the error).
+`
+
+// The line the transcriber adds under a verdict it wrote out for the inspector, so a later
+// reader knows the inspector wrote every other word but not the file.
+const TRANSCRIBED_LINE = "Transcribed verbatim by the workflow from the inspector's return; the inspector's own write was refused."
+const TRANSCRIBE_EOF = 'BRIGADE_VERDICT_EOF'
+
+// A returned verdict text is worth writing out only when it is the verdict the workflow is
+// about to land: it opens with frontmatter that says doc: verdict and an accepted verdict
+// line, and no line of it could end the heredoc early.
+const usableVerdictDoc = (doc, verdictResult) => {
+  if (typeof doc !== 'string' || !doc.trim()) return false
+  const lines = doc.split('\n').map((line) => line.replace(/\r$/, ''))
+  if (lines[0].trim() !== '---') return false
+  const end = lines.findIndex((line, n) => n > 0 && line.trim() === '---')
+  if (end === -1) return false
+  if (lines.some((line) => line.trim() === TRANSCRIBE_EOF)) return false
+  const front = lines.slice(1, end).map((line) => line.replace(/\s+#.*$/, '').trim())
+  if (!front.includes('doc: verdict')) return false
+  if (front.includes('verdict: PASS')) return true
+  return !!(verdictResult && verdictResult.trivialOnly) && front.includes('verdict: FAIL') && front.includes('trivial_only: true')
+}
+
+// The exact text the transcriber writes: the inspector's verdict as returned, then the
+// attribution line as the last line.
+const transcribedText = (doc) => `${doc.endsWith('\n') ? doc : `${doc}\n`}${TRANSCRIBED_LINE}\n`
+
+// The workflow builds the whole heredoc, so the steward copies one command instead of
+// retyping a file. The quoted delimiter keeps the shell from expanding anything inside.
+const verdictTranscribePrompt = (verdictPath, doc) => `
+You are the Steward writing out a verdict an inspector returned but could not save, because
+its own Write call was refused. You do not judge, fix, reformat or add to its text: the
+inspector wrote every word. Run exactly this one command with your Bash tool, unchanged:
+
+cat > '${verdictPath}' <<'${TRANSCRIBE_EOF}'
+${transcribedText(doc)}${TRANSCRIBE_EOF}
+
+Then run: tail -1 '${verdictPath}'
+Return ok: true when the command ran and that last line is the attribution line, otherwise
+ok: false with the error in detail. Write no other file.
+`
+
+// Added to the second inspector's prompt when the first returned a verdict but no file.
+const redoInspectorSentence = (verdictPath) => `A previous inspector returned a verdict without writing ${verdictPath}. Review the diff yourself and write the file with your Write tool before returning; nothing lands without it.`
+
+// Every steward call after worktree creation goes through here: landing, the verdict probe
+// and the transcriber.
+const stewardAgent = (label, phase, prompt, schema) => guarded(label, () => structuredAgent(prompt, {
+  label,
+  phase,
+  schema,
+  agentType: POLICY.agents.steward,
+  effort: STEWARD.effort,
+  model: POLICY.stewardModel,
+}))
+
 // Cook attempts share a semaphore sized to the tier's parallelism budget.
 // Inspector and steward calls are uncapped here — the runtime enforces its own
 // global cap on those.
@@ -566,23 +646,45 @@ async function runItem(item, promises) {
       break
     }
 
-    blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
-    const verdictResult = await guarded(`inspect:${item.slug}:${i}`, () => structuredAgent(
+    // One inspector dispatch. The redo variant is a fresh inspector with the same prompt plus
+    // one sentence telling it the previous inspector's verdict file never reached disk.
+    const inspect = (label, extra) => guarded(label, () => structuredAgent(
       withWritingRules(
         withPromptOverrides(
-          inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)),
+          inspectorPrompt(item, worktreePath, branch, reportPath, verdictPath, POLICY.workingMemory && (item.heavy || i > 0)) + extra,
           PROMPT_EXTRAS.inspector,
         ),
         WRITING,
         'verdict',
       ),
       {
-        label: `inspect:${item.slug}:${i}`,
+        label,
         phase: 'Inspect',
         schema: SCHEMA_VERDICT_RETURN,
         agentType: POLICY.agents.inspector,
       },
     ))
+
+    // Asks a steward whether the verdict file is on disk and passes brigade-validate with the
+    // verdict about to land. Anything short of a clear yes is a miss.
+    const probeVerdict = async (passed) => {
+      const probe = await stewardAgent(`probe:${item.slug}:${i}`, 'Inspect', verdictProbePrompt(verdictPath, verdictAccepts(passed)), SCHEMA_VERDICT_PROBE)
+      const hit = !!(probe && probe.exists === true && probe.valid === true)
+      blog('inspector', `verdict file ${hit ? 'found' : 'missing or invalid'} for ${item.slug} attempt ${i + 1}: ${probe ? probe.detail : 'probe returned no result'}`)
+      return hit
+    }
+
+    // When the inspector handed back its verdict text, a steward writes that text out as is
+    // and the probe looks again. Without usable text there is nothing to write.
+    const transcribeVerdict = async (passed) => {
+      if (!usableVerdictDoc(passed.verdictDoc, passed)) return false
+      const written = await stewardAgent(`transcribe:${item.slug}:${i}`, 'Inspect', verdictTranscribePrompt(verdictPath, passed.verdictDoc), SCHEMA_STEWARD_RETURN)
+      blog('inspector', `transcribed the returned verdict for ${item.slug} attempt ${i + 1}: ${written ? written.detail : 'transcriber returned no result'}`)
+      return probeVerdict(passed)
+    }
+
+    blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
+    let verdictResult = await inspect(`inspect:${item.slug}:${i}`, '')
 
     if (!verdictResult) {
       attempts.push({ agentType, result: 'failed', cause: 'no-result' })
@@ -599,6 +701,36 @@ async function runItem(item, promises) {
       continue
     }
 
+    // A PASS only counts once its verdict file is on disk; the steward refuses to land without
+    // it. Probe first, then write out the inspector's own returned text, then try one fresh
+    // inspector. Its FAIL is an ordinary FAIL; a second miss blocks the item.
+    if (!(await probeVerdict(verdictResult)) && !(await transcribeVerdict(verdictResult))) {
+      blog('inspector', `no verdict file for ${item.slug} attempt ${i + 1}: dispatching a fresh inspector`)
+      const redo = await inspect(`inspect:${item.slug}:${i}:redo`, `\n${redoInspectorSentence(verdictPath)}\n`)
+
+      if (redo && redo.verdict === 'FAIL' && !redo.trivialOnly) {
+        attempts.push({ agentType, result: 'failed', cause: 'inspector-fail' })
+        findingsHistory.push({ agentType, attempt: i, findings: redo.findings || [] })
+        recordInspectorFail(item.slug)
+        blog('inspector', `redo verdict FAIL for ${item.slug} attempt ${i + 1}: ${(redo.findings || []).length} findings`)
+        continue
+      }
+
+      // A redo with no return may still have written its file, so the probe decides. The
+      // returned verdict to land on is the redo's when there is one.
+      const passed = redo || verdictResult
+      const onDisk = (await probeVerdict(passed)) || (redo ? await transcribeVerdict(redo) : false)
+      if (!onDisk) {
+        // Not an inspector FAIL, so it does not count toward the breaker's maxTotalFails.
+        attempts.push({ agentType, result: 'failed', cause: 'no-result' })
+        status = 'blocked'
+        blockedReason = `verdict file missing after a fresh inspector: ${verdictPath}`
+        blog('blocked', `blocked ${item.slug}: ${blockedReason}`)
+        break
+      }
+      verdictResult = passed
+    }
+
     attempts.push({ agentType, result: 'done' })
     findingsHistory.push({ agentType, attempt: i, findings: verdictResult.findings || [] })
     blog('inspector', `verdict PASS for ${item.slug} attempt ${i + 1}${verdictResult.trivialOnly ? ' (trivial findings only)' : ''}; landing`)
@@ -609,17 +741,12 @@ async function runItem(item, promises) {
     // before the steward is even dispatched, and hand both through.
     const reportReconstruction = reportReconstructionBlock(item, branch, cookResult)
     const verdictReconstruction = verdictReconstructionBlock(item, i + 1, verdictResult)
-    const landResult = await withLandLock(() => guarded(`steward-land:${item.slug}`, () => structuredAgent(
+    const landResult = await withLandLock(() => stewardAgent(
+      `steward-land:${item.slug}`,
+      'Land',
       stewardLandPrompt(worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction),
-      {
-        label: `steward-land:${item.slug}`,
-        phase: 'Land',
-        schema: SCHEMA_STEWARD_RETURN,
-        agentType: POLICY.agents.steward,
-        effort: STEWARD.effort,
-        model: POLICY.stewardModel,
-      },
-    )))
+      SCHEMA_STEWARD_RETURN,
+    ))
 
     if (!landResult || !landResult.ok) {
       status = 'rework-needed'
