@@ -2,7 +2,9 @@
 // brigade-scope — checks the files an item changed against its packet's file list in the
 // PLAN.md. A changed path outside the item's `files` is out of scope; a changed path owned by
 // another item marked `contract: true` is contract-owned (change a merged contract through a
-// new contract item). Pure data in, verdict out: no model, no judgment.
+// new contract item). A contract item skips that check and is bounded by its own `files` alone,
+// because changing another contract's paths is how a merged contract changes. Pure data in,
+// verdict out: no model, no judgment.
 //
 // Usage:
 //   brigade-scope [--json] [--base <ref>] [--head <ref>] <PLAN.md> <item-slug>
@@ -109,10 +111,12 @@ function main() {
   // Protected paths: entries of other items that are contract-owned. First owner in plan
   // order wins when two contract items list overlapping paths. An entry without a trailing
   // `/` matches only its exact path (C3); when it names a directory, warn so the author
-  // writes it with the slash. The warning never changes the exit code.
+  // writes it with the slash. The warning never changes the exit code. A contract item
+  // protects nothing here: a contract item may change another contract's paths, because that
+  // is how a merged contract changes. Its own `files` list still bounds it.
   const protectedEntries = []
   const warned = new Set()
-  for (const other of plan.items) {
+  for (const other of item.contract ? [] : plan.items) {
     if (other.slug === slug || !other.contract) continue
     for (const raw of other.files) {
       const entry = normalize(raw)

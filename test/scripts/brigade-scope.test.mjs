@@ -275,3 +275,41 @@ test('a bad git ref exits 2 instead of reporting a clean scope', () => {
   assert.equal(r.status, 2)
   assert.match(r.stderr, /git diff/)
 })
+
+const SHARED = [
+  { slug: 'contract-a', contract: true, files: ['skills/s.md', 'a.test.mjs'] },
+  { slug: 'contract-b', contract: true, files: ['skills/s.md', 'b.test.mjs'] },
+]
+
+test('E1 a contract item may change a path another contract item lists; its own files still bound it', () => {
+  // A shared path in its own files passes, with nothing contract-owned.
+  const rootA = makeRepo({ baseFiles: ['README.md', 'skills/s.md'], changes: ['skills/s.md'] })
+  const planA = writePlan(rootA, SHARED)
+  const rA = runScope(rootA, [planA, 'contract-a'])
+  assert.equal(rA.status, 0, rA.stderr)
+  assert.equal(rA.stdout, 'scope OK: 1 changed files within contract-a\n')
+  const a = JSON.parse(runScope(rootA, [planA, 'contract-a', '--json']).stdout)
+  assert.deepEqual(a.contractOwned, [])
+  assert.equal(a.ok, true)
+
+  // Adversarial: a path only the other contract lists is still out of scope, and is not
+  // reported as contract-owned.
+  const rootB = makeRepo({ baseFiles: ['README.md', 'skills/s.md'], changes: ['skills/s.md', 'b.test.mjs'] })
+  const planB = writePlan(rootB, SHARED)
+  const rB = runScope(rootB, [planB, 'contract-a'])
+  assert.equal(rB.status, 1)
+  assert.equal(rB.stdout, 'out of scope: b.test.mjs\n')
+  assert.doesNotMatch(rB.stdout, /contract-owned:/)
+  const b = JSON.parse(runScope(rootB, [planB, 'contract-a', '--json']).stdout)
+  assert.deepEqual(b.outOfScope, ['b.test.mjs'])
+  assert.deepEqual(b.contractOwned, [])
+  assert.equal(b.ok, false)
+})
+
+test('I1 an implementation item is still blocked on a path a contract item lists', () => {
+  const root = makeRepo({ baseFiles: ['README.md', 'skills/s.md'], changes: ['skills/s.md'] })
+  const plan = writePlan(root, [{ slug: 'impl', files: ['skills/s.md'] }, ...SHARED])
+  const r = runScope(root, [plan, 'impl'])
+  assert.equal(r.status, 1)
+  assert.equal(r.stdout, 'contract-owned: skills/s.md (owned by contract-a)\n')
+})
