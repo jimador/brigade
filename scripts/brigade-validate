@@ -476,6 +476,66 @@ function dispositionRows(body) {
   return rows
 }
 
+// The data rows of a four-column table under `heading`, each with its trimmed line and its
+// cells, or null when the plan has no such section. Header and separator rows are skipped, and
+// a short row is padded with empty cells so a missing last cell reads as empty.
+function tableRows(body, heading) {
+  const lines = sectionLines(body, heading)
+  if (lines === null) return null
+  const rows = []
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('|')) continue
+    const cells = trimmed.replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+    if (cells[0].toLowerCase() === 'id' || /^[-:]+$/.test(cells[0])) continue
+    while (cells.length < 4) cells.push('')
+    rows.push({ line: trimmed, cells })
+  }
+  return rows
+}
+
+// The PR feedback and follow-up tables record a decision on every review comment and every
+// out-of-scope note, so each row needs a known ruling, a non-empty last cell and its own id.
+const RULING_TABLES = [
+  {
+    heading: '## PR feedback',
+    id: /^PR\d+$/,
+    noId: (line) => `PR feedback row "${line}" has no PR<k> id`,
+    rulings: ['accept', 'clarify', 'push-back'],
+    badRuling: (id, r) => `PR feedback ${id} ruling "${r}" is not one of accept|clarify|push-back`,
+    empty: (id) => `PR feedback ${id} has no reply`,
+    duplicate: (id) => `duplicate PR feedback id: ${id}`,
+  },
+  {
+    heading: '## Follow-ups',
+    id: /^FU\d+$/,
+    noId: (line) => `follow-up row "${line}" has no FU<k> id`,
+    rulings: ['filed', 'covered', 'dropped'],
+    badRuling: (id, r) => `follow-up ${id} ruling "${r}" is not one of filed|covered|dropped`,
+    empty: (id) => `follow-up ${id} names no ticket or reason`,
+    duplicate: (id) => `duplicate follow-up id: ${id}`,
+  },
+]
+
+function checkRulingTables(body, problems) {
+  for (const table of RULING_TABLES) {
+    const rows = tableRows(body, table.heading)
+    if (rows === null) continue
+    const seen = new Set()
+    for (const { line, cells } of rows) {
+      const [id, , ruling, last] = cells
+      if (!table.id.test(id)) {
+        problems.push(table.noId(line))
+        continue
+      }
+      if (seen.has(id)) problems.push(table.duplicate(id))
+      seen.add(id)
+      if (!table.rulings.includes(ruling.toLowerCase())) problems.push(table.badRuling(id, ruling))
+      if (last === '') problems.push(table.empty(id))
+    }
+  }
+}
+
 // The contract-first (C1) plan rules over a plan parsePlan read without errors: plan level,
 // item contract flags, attempt cause/reason/result, paths owned by contract items, packets
 // planned against an unmerged contract, and the `## Parked` table. Attempt triggers are checked
@@ -840,6 +900,7 @@ function validateFile(file, ticketPath = null) {
       }
       if (kind !== 'research') checkDispositions(file, body, problems, warnings)
       if (kind !== 'research') checkTicketTestPlan(body, fmValue(fm, 'level'), problems, warnings)
+      if (kind !== 'research') checkRulingTables(body, problems)
       if (kind !== 'research' && ticketPath !== null) checkTicketTestPlanCount(body, ticketPath, problems)
       if (keys.has('writing')) {
         const checks = loadPacketChecks(file, writingPreset(fm))

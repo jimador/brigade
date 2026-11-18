@@ -157,7 +157,8 @@ never indent one item unlike its siblings.
 Body sections, in order: `## Dish` (goal + acceptance criteria from the ticket, and
 `### Ticket test plan` when the ticket has one),
 `## Waves` (planned dispatch order), `## Plan-check dispositions` (when a plan check ran),
-`## Parked` (when questions are held), then one `## Packet: <slug>` per item (see `packet`) — build dishes only; a `kind: research`
+`## Parked` (when questions are held), `## PR feedback` (when the dish came back from
+review), `## Follow-ups` (at handoff), then one `## Packet: <slug>` per item (see `packet`) — build dishes only; a `kind: research`
 plan has no packet sections.
 
 `### Ticket test plan` sits inside `## Dish` when the ticket has its own test plan (a
@@ -174,6 +175,19 @@ The ticket's test plan is the first heading of level 2 or 3 whose text is `Valid
 leading space that start with `- ` (with or without a `[ ]` box) or with a number and `.` or
 `)`. The plan must carry exactly that many `TP<k>` lines; a plan with `TP<k>` lines whose
 ticket has no such section fails too.
+
+`## PR feedback` (when a dish comes back from PR review) is a table with columns
+`id | where | ruling | reply`: one row per actionable review comment. `id` is `PR<k>`, unique.
+`where` is the comment's file and line, or `top-level`. `ruling` is `accept` (a rework packet
+does it), `clarify` (a question was asked on the thread) or `push-back` (a reasoned reply
+declines it). `reply` says what was posted on the comment's thread and is never empty.
+`## Follow-ups` (at handoff) is a table with columns `id | source | ruling | ticket`: one row
+per out-of-scope note in a cook report or verdict. `id` is `FU<k>`, unique. `source` is the
+artifact file name. `ruling` is `filed` (a new ticket), `covered` (an existing ticket already
+holds it) or `dropped`. `ticket` is the ticket id for `filed` and `covered`, the reason for
+`dropped`, and is never empty. `brigade-validate` fails a row with an unknown ruling, an empty
+`reply` or `ticket`, or a repeated id. Both sections go after `## Parked` and before the
+packets.
 
 `## Plan-check dispositions` is a table with columns `id | source | ruling | how`: one row per
 id in each `reports/plan-check-<n>.md` `findings:` list (source `plan-check-<n>`) and one per
