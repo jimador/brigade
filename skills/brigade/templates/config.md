@@ -38,6 +38,8 @@
 - todo: todo
 - in_progress: in_progress
 - in_review: in_review
+- rework: rework             # the reviewer sent the PR back; a board without this status uses in_progress
+# - merging: merging         # optional: a human approved the PR and the planner may land it; leave commented to merge by hand
 - done: done
 - blocked: blocked
 

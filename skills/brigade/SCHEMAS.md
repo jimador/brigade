@@ -68,8 +68,8 @@ Conventions for all types:
 Producer: humans, idea intake, or a grooming pass. Consumer: Planner (intake), Design.
 
 On markdown boards (local/obsidian), frontmatter carries at least: `id`, `title`, `status`
-(`backlog|scoping|design|todo|in_progress|in_review|done|blocked`), `assignee`, optional
-`kind`, `worker`, `workspace`, `project`, `repo`. Brigade's body contract remains these
+(`backlog|scoping|design|todo|in_progress|in_review|rework|merging|done|blocked`), `assignee`,
+optional `kind`, `worker`, `workspace`, `project`, `repo`. Brigade's body contract remains these
 sections in order (a well-groomed ticket makes Phase 0–2 dramatically cheaper):
 
 - `## Goal` — the outcome in one short paragraph, user-visible behavior first.
