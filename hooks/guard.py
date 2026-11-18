@@ -305,8 +305,15 @@ def brigade_path(path):
     elif path.startswith(":/"):
         path = path[2:]
     return ".brigade" in repo_relative(path)
+def dynamic_path(path):
+    # A pathspec that still holds a $(...), a backtick or a $VAR only gets its real value
+    # when the shell runs it, so `git add "$(echo .)"` could stage anything. The quotes
+    # are gone by now, so a literal $ in a single-quoted name is refused too; that rare
+    # case is worth the safety.
+    return "$" in path or "`" in path
 def path_violation(paths, verb):
     for path in paths:
+        if dynamic_path(path): return "pathspec value cannot be inspected statically: unresolved $(...), backtick or $VAR"
         if broad_path(path): return "no repository-wide or wildcard pathspec"
         if brigade_path(path): return f".brigade/ cannot be {verb}"
     return None
@@ -396,12 +403,26 @@ def inspect(source, depth=0):
         if violation:
             return violation
     return None
+def governed(source):
+    # Could this command reach anything the guard rules on? The only verbs that produce a
+    # violation are git, and eval (which refuses dynamic payloads); every wrapper the
+    # inspector unwraps (env -S, sh -c, command, exec, substitutions) still carries the
+    # verb's letters. The shell can spell `git` as "g"it, g\it or a line-continued
+    # gi\<newline>t, so drop quotes, backslashes and continuations before looking. Plain
+    # substring matching is deliberate: a false hit only means the full fail-closed
+    # inspection runs, as it always did.
+    flat = re.sub(r"\\\r?\n", "", source)
+    flat = re.sub(r"[\\'\"]", "", flat)
+    return "git" in flat or "eval" in flat
 def main():
     try:
         command = json.load(sys.stdin)["tool_input"]["command"]
         if not isinstance(command, str): raise TypeError
     except (KeyError, TypeError, ValueError):
         print("invalid hook payload; refusing command"); return
+    # A command that never names a governed verb can't break git hygiene, so it is allowed
+    # before any parsing; a substitution or heredoc the parser can't read must not block it.
+    if not governed(command): return
     try:
         violation = inspect(command)
     except GuardError as error:

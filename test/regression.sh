@@ -168,8 +168,9 @@ assert_guard_heredoc_payload_blocks() {
   stderr_file="$TMP_ROOT/guard.stderr"
   payload="$(python3 - <<'PY'
 import json
-# Shared-line-heredoc with unbalanced quoting: heredoc marker on same line with unclosed single quote
-print(json.dumps({"tool_input": {"command": "echo <<" + "'" + "EOF"}}))
+# Shared-line-heredoc with unbalanced quoting: heredoc marker on same line with unclosed single quote.
+# It names git, because a command with no governed verb is allowed before parsing.
+print(json.dumps({"tool_input": {"command": "git status <<" + "'" + "EOF"}}))
 PY
 )"
   if printf '%s' "$payload" |
@@ -190,8 +191,9 @@ assert_guard_heredoc_python_direct() {
   stderr_file="$TMP_ROOT/guard.stderr"
   payload="$(python3 - <<'PY'
 import json
-# Shared-line-heredoc with unbalanced quoting: heredoc marker on same line with unclosed single quote
-print(json.dumps({"tool_input": {"command": "echo <<" + "'" + "EOF"}}))
+# Shared-line-heredoc with unbalanced quoting: heredoc marker on same line with unclosed single quote.
+# It names git, because a command with no governed verb is allowed before parsing.
+print(json.dumps({"tool_input": {"command": "git status <<" + "'" + "EOF"}}))
 PY
 )"
   if printf '%s' "$payload" |
@@ -3709,6 +3711,49 @@ test_guard_quoted_substitution() {
   assert_guard_blocks "echo \"\$(git add '.')\""
 }
 
+test_guard_dynamic_and_ungoverned() {
+  # A pathspec that is still a $(...), a backtick or a $VAR has no value until the shell
+  # runs it, so the guard can't know it isn't `.` and refuses it.
+  dynamic="pathspec value cannot be inspected statically"
+  assert_guard_blocks_with_exact_message 'git add "$(echo .)"' "$dynamic"
+  assert_guard_blocks_with_exact_message 'git add $(printf .)' "$dynamic"
+  assert_guard_blocks_with_exact_message 'git add "$P"' "$dynamic"
+  assert_guard_blocks_with_exact_message 'git add `echo .`' "$dynamic"
+  assert_guard_blocks_with_exact_message 'git commit -m msg -- src/$F' "$dynamic"
+  # Option values are not pathspecs: a dynamic message, repo or arithmetic stays fine.
+  assert_guard_allows "git commit -m \"\$(cat <<'EOF'
+subject line
+EOF
+)\" src/a.ts"
+  assert_guard_allows 'git -C "$WT" add src/a.ts'
+  assert_guard_allows 'git commit -m "$MSG" -- src/a.ts'
+
+  # A command that names no governed verb is allowed before any parsing, so a substitution
+  # or heredoc the parser can't read no longer blocks it.
+  assert_guard_allows 'P=$(yax kb search "q" --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"a\"])")'
+  assert_guard_allows 'echo "$(echo "$(date)")"'
+  assert_guard_allows "python3 - <<'E'
+print(\"(\")
+E
+X=\$(echo \"(\")"
+  assert_guard_allows "python3 - <<'E'
+print(1)
+E
+P=\$(echo \"\$(date)\")"
+  # SECURITY: once git appears anywhere, today's fail-closed inspection still runs.
+  assert_guard_blocks 'P=$(echo "$(git add .)")'
+  assert_guard_blocks_with_exact_message 'X=$(git add -A)' "no indiscriminate staging"
+  assert_guard_blocks 'P=$(yax kb search "q" | python3 -c "print(\"a\")"); git add .'
+  assert_guard_blocks "python3 - <<'E'
+print(1)
+E
+git add ."
+  # SECURITY: quoting or escaping the verb's letters doesn't hide it, and eval stays governed.
+  assert_guard_blocks '"g"it add .'
+  assert_guard_blocks 'g\it add .'
+  assert_guard_blocks 'X=gi; eval "${X}t add ."'
+}
+
 test_steward_model() {
   # The steward is the one role whose agent has no model in its own frontmatter, so an
   # unpinned dispatch inherits the caller's model and runs git plumbing on whatever the
@@ -5559,7 +5604,9 @@ if "brigade:brigade-cook-heavy" not in subagent:
 # brigade-scout MUST be covered: it writes briefs/, which brigade-validate checks.
 if "brigade:brigade-scout" not in subagent:
     raise SystemExit("SubagentStop matcher must list brigade:brigade-scout explicitly — it writes briefs/")
-# Agents whose artifacts this hook's find globs do not reach must not pay for a validate pass.
+# The analyst and design agents are exempt on purpose. The analyst's report is validated at
+# handoff, so checking it here too adds nothing. The design pass is interactive, and blocking
+# its stop on a malformed ledger would interrupt the operator mid-conversation.
 for agent in ("brigade:brigade-analyst", "brigade:brigade-design"):
     if matches(subagent, agent):
         raise SystemExit(f"SubagentStop matcher {subagent!r} wrongly covers {agent!r}")
@@ -6165,6 +6212,7 @@ test_guard_staging_policy
 test_guard_worktree_paths
 test_guard_arithmetic
 test_guard_quoted_substitution
+test_guard_dynamic_and_ungoverned
 test_config_layer_precedence
 test_config_context_sources_merge_by_id
 test_config_prompt_overrides_stack
