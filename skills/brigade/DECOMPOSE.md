@@ -142,13 +142,19 @@ scout claim is an inference to re-derive, not a fact to paste.
   files, or over every item's files when the dish has no contract item. A match (public
   contract, persisted data, security boundary) is shown to the operator at the dish's
   checkpoint with the item named; it never changes `escalate` or the heavy flag.
+- **D13 — A chain on one file is one slice.** When 3 or more items must edit the same file in
+  sequence, make them one heavy item under the haiku bar's file cap, or split the file so each
+  item owns one. A five-item chain on one shared schema file in one dish deadlocked the scope
+  check and serialized the whole contract level.
 
 ## The haiku bar
 
 Whatever model cooks it, a first-attempt packet clears all of this or is **split further** (D11:
 these limits are a backstop, not where the seams go):
 
-- Touches **1–3 named files** (plus its own new test file).
+- Touches **1–3 named files** (plus its own new test file). Field data across
+  455 dishes: first-attempt PASS falls from 74% at 0–1 files to 58% at 11+, and rework rises from
+  21% to 39%.
 - **≤ ~150 changed lines** expected.
 - **One behavior** — describable in one sentence without "and".
 - **Zero exploration required** — every contract, snippet, and convention the Cook needs is
@@ -224,6 +230,12 @@ Three things the check resolves rather than reports:
 - When another active dish shares this delivery branch, paste that dish's item file lists
   into the plan-check packet with an explicit overlap instruction — a file both plans touch
   is a blocking coordination point, not something commit ordering can be trusted to sort out.
+
+Before anything else the check runs
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-rehearse" <PLAN.md>` and pastes its output: it runs
+the validator, a premise check of every packet's file list against the base branch, contract
+ownership, overlap between independent items, chains of 3+ items on one file, and the risk
+table. Every finding it prints needs a disposition row like any plan-check finding.
 
 You fold in what's right. You own the plan; the check is information, not instruction. But
 every finding gets a written ruling: add a `## Plan-check dispositions` row (`SCHEMAS.md`

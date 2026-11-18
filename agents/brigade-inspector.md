@@ -120,7 +120,9 @@ lives. Order is mandatory:
    sketch your own decomposition: item titles, the files each touches, dependency edges,
    which items you'd flag heavy. Titles and file lists, not full packets. Write the sketch
    into the verdict file before proceeding (it keeps you honest).
-2. **Then read `PLAN.md`** and compare:
+2. **Then read `PLAN.md`.** First run
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-rehearse" <PLAN.md>` and paste its output into
+   `## Comparison`; each finding it prints is a finding of yours with its own id. Then compare:
    - **Coverage** — what each version addresses that the other missed (acceptance criteria
      with no owning item are Blocking).
    - **Disjointness** — same-wave items sharing files, contract owners whose consumers
