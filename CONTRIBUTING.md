@@ -52,7 +52,9 @@ regenerate the README's board demo, which `scripts/board-demo --check` holds to 
 
 ## Verification gate
 
-Run all of this before calling a change done:
+Run `./test/gate.sh` before calling a change done. It runs every command below, in this order,
+and prints `GATE OK` when they all pass. The script is the source of truth; the list is here so
+you can read what it checks.
 
 ```bash
 for f in install.sh scripts/brigade-status hooks/*.sh; do bash -n "$f" || exit 1; done
