@@ -1,0 +1,348 @@
+#!/usr/bin/env node
+// brigade-rehearse — runs the pipeline's own mechanical checks over a whole plan before anything
+// is dispatched, so a wrong packet premise or a scope clash shows up while it is still cheap to
+// fix. It cooks nothing and changes nothing. The checks:
+//
+//   validate  every FAIL from `brigade-validate <PLAN.md>`
+//   premise   a path a packet marks (edit) is missing at the base, or one it marks (create)
+//             already exists there (unmarked paths count as edit; done items are skipped)
+//   owner     a non-contract item lists a path a contract item lists (the brigade-scope rule)
+//   overlap   two items with no dependency path between them list the same file
+//   chain     a file listed by three or more items (a warning: it serializes the plan)
+//   risk      `brigade-risk` says an item escalates but the item is not `heavy: true`
+//
+// Each finding prints as one line `<check>: <item>: <detail>`; a chain warning prints as
+// `chain: <file>: <slugs in order>`. With --json, each prints as one JSON object per line.
+//
+// Usage:
+//   brigade-rehearse <PLAN.md> [--base <ref>] [--json]
+//
+// The base defaults to the plan's `delivery_branch`, else HEAD. Git runs in the current
+// directory, so run it from inside the repository the plan describes.
+//
+// Exit codes: 0 no findings (warnings allowed), 1 findings, 2 usage or I/O error.
+import { execFileSync, spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parsePlan } from './lib/plan.mjs'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+
+function usage() {
+  console.error('usage: brigade-rehearse <PLAN.md> [--base <ref>] [--json]')
+  return 2
+}
+
+// A failure the user has to fix before the rehearsal can say anything (bad ref, a sibling
+// script that could not run). main() turns it into exit 2.
+class RehearsalError extends Error {}
+
+// Same normal form as brigade-scope: leading `./` stripped, repeated `/` collapsed. A trailing
+// `/` survives and still means "everything under this directory".
+function normalize(p) {
+  let s = p.replace(/\/{2,}/g, '/')
+  while (s.startsWith('./')) s = s.slice(2)
+  return s
+}
+
+// brigade-scope's ownership rule: a directory entry (trailing `/`, or `` for the repo root)
+// covers every path under it; any other entry covers exactly itself.
+function covers(entry, p) {
+  if (entry === '' || entry.endsWith('/')) return p.startsWith(entry)
+  return p === entry
+}
+
+// Two file-list entries touch the same file when either one covers the other.
+function sameFile(a, b) {
+  return covers(a, b) || covers(b, a)
+}
+
+// Reads the (edit)/(create) marks of every packet. A packet runs from its `## Packet: <slug>`
+// heading to the next `## Packet:` heading or the end of the file; inside it, a line
+// `- <path> (edit…)` or `- <path> (create…)` marks that path. Fenced code is skipped, as
+// parsePlan skips it. The first mark for a path wins.
+function packetMarks(text) {
+  const marks = new Map()
+  let current = null
+  let fenced = false
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced
+      continue
+    }
+    if (fenced) continue
+    const heading = /^##\s+Packet:\s*(\S+)/.exec(line)
+    if (heading) {
+      current = heading[1]
+      if (!marks.has(current)) marks.set(current, new Map())
+      continue
+    }
+    if (current === null) continue
+    const m = /^\s*[-*]\s+`?([^\s`]+)`?\s+\((edit|create)\b[^)]*\)/i.exec(line)
+    if (!m) continue
+    const p = normalize(m[1])
+    const own = marks.get(current)
+    if (!own.has(p)) own.set(p, m[2].toLowerCase())
+  }
+  return marks
+}
+
+function git(args) {
+  return spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
+function existsAt(base, p) {
+  const r = git(['cat-file', '-e', `${base}:${p.replace(/\/+$/, '')}`])
+  return r.status === 0
+}
+
+// Every slug an item reaches by following depends_on, however many hops away.
+function ancestorsOf(slug, bySlug) {
+  const seen = new Set()
+  const stack = [...(bySlug.get(slug)?.depends_on ?? [])]
+  while (stack.length > 0) {
+    const s = stack.pop()
+    if (seen.has(s)) continue
+    seen.add(s)
+    for (const d of bySlug.get(s)?.depends_on ?? []) stack.push(d)
+  }
+  return seen
+}
+
+// Runs a sibling script with Node and hands back its parsed --json output. A spawn failure, an
+// unexpected exit code or unparseable output is a RehearsalError: the check could not run, which
+// is not the same thing as the check passing.
+function runSibling(name, args, okCodes) {
+  const script = path.join(HERE, name)
+  const r = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  if (r.error) throw new RehearsalError(`could not run ${name}: ${r.error.message}`)
+  if (!okCodes.includes(r.status)) {
+    const why = (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' / ')
+    throw new RehearsalError(`${name} exited ${r.status}${why ? `: ${why}` : ''}`)
+  }
+  try {
+    return JSON.parse(r.stdout)
+  } catch {
+    throw new RehearsalError(`${name} printed output that is not JSON`)
+  }
+}
+
+// validate: one finding per problem brigade-validate reports. Its --json problems are exactly
+// the lines its text mode prints as `FAIL  <file>: <problem>`.
+function checkValidate(planPath) {
+  const out = runSibling('brigade-validate', ['--json', planPath], [0, 1])
+  const found = []
+  for (const r of out.results ?? []) {
+    for (const problem of r.problems ?? []) {
+      found.push({ check: 'validate', item: 'plan', detail: problem })
+    }
+  }
+  return found
+}
+
+// premise: (edit) paths must exist at the base, (create) paths must not. One allowance: an edit
+// of a path that an ancestor item creates is fine, because that ancestor lands first and the
+// file will be there by the time this item is cooked.
+function checkPremise(plan, marks, base, bySlug) {
+  const found = []
+  for (const item of plan.items) {
+    if (item.status === 'done') continue
+    const own = marks.get(item.slug) ?? new Map()
+    let createdUpstream = null
+    for (const raw of item.files) {
+      const p = normalize(raw)
+      if (p === '') continue
+      const mark = own.get(p) ?? 'edit'
+      const there = existsAt(base, p)
+      if (mark === 'create' && there) {
+        found.push({ check: 'premise', item: item.slug, path: p,
+          detail: `${p} is marked (create) but already exists at ${base}` })
+      } else if (mark === 'edit' && !there) {
+        if (createdUpstream === null) {
+          createdUpstream = new Set()
+          for (const a of ancestorsOf(item.slug, bySlug)) {
+            for (const [q, m] of marks.get(a) ?? []) if (m === 'create') createdUpstream.add(q)
+          }
+        }
+        if (createdUpstream.has(p)) continue
+        const how = own.has(p) ? 'marked (edit)' : 'unmarked (checked as edit)'
+        found.push({ check: 'premise', item: item.slug, path: p,
+          detail: `${p} is ${how} but does not exist at ${base}` })
+      }
+    }
+  }
+  return found
+}
+
+// owner: a non-contract item that still has to be cooked may not list a path any contract item
+// lists. Contract items are exempt among themselves, as brigade-scope exempts them.
+function checkOwner(plan) {
+  const found = []
+  const contracts = plan.items.filter((it) => it.contract)
+  for (const item of plan.items) {
+    if (item.contract || item.status === 'done') continue
+    for (const raw of item.files) {
+      const p = normalize(raw)
+      const owner = contracts.find((c) => c.files.some((e) => covers(normalize(e), p)))
+      if (owner) {
+        found.push({ check: 'owner', item: item.slug, path: p,
+          detail: `${p} is owned by contract item ${owner.slug}` })
+      }
+    }
+  }
+  return found
+}
+
+// overlap: two items still to be cooked, neither reachable from the other through depends_on,
+// listing the same file. They could run in parallel and collide.
+function checkOverlap(open, bySlug) {
+  const found = []
+  const ancestors = new Map(open.map((it) => [it.slug, ancestorsOf(it.slug, bySlug)]))
+  for (let i = 0; i < open.length; i++) {
+    for (let j = i + 1; j < open.length; j++) {
+      const a = open[i]
+      const b = open[j]
+      if (ancestors.get(a.slug).has(b.slug) || ancestors.get(b.slug).has(a.slug)) continue
+      const shared = []
+      for (const ra of a.files) {
+        const pa = normalize(ra)
+        if (b.files.some((rb) => sameFile(pa, normalize(rb))) && !shared.includes(pa)) shared.push(pa)
+      }
+      for (const p of shared) {
+        found.push({ check: 'overlap', item: a.slug, path: p, other: b.slug,
+          detail: `${p} is also listed by ${b.slug}, and neither depends on the other` })
+      }
+    }
+  }
+  return found
+}
+
+// Orders items so each comes after everything it depends on, keeping plan order otherwise.
+// A cycle (brigade-validate reports those) falls back to plan order for the items caught in it.
+function landingOrder(items, bySlug) {
+  const order = []
+  const placed = new Set()
+  const visiting = new Set()
+  const visit = (it) => {
+    if (placed.has(it.slug) || visiting.has(it.slug)) return
+    visiting.add(it.slug)
+    for (const d of it.depends_on) if (bySlug.has(d)) visit(bySlug.get(d))
+    visiting.delete(it.slug)
+    placed.add(it.slug)
+    order.push(it)
+  }
+  for (const it of items) visit(it)
+  return order
+}
+
+// chain: a warning for each file three or more items still to be cooked list, naming them in the
+// order they would land.
+function checkChain(open, bySlug) {
+  const ordered = landingOrder(open, bySlug).filter((it) => open.includes(it))
+  const byFile = new Map()
+  for (const it of ordered) {
+    for (const raw of it.files) {
+      const p = normalize(raw)
+      if (!byFile.has(p)) byFile.set(p, [])
+      const slugs = byFile.get(p)
+      if (!slugs.includes(it.slug)) slugs.push(it.slug)
+    }
+  }
+  const found = []
+  for (const [p, slugs] of byFile) {
+    if (slugs.length < 3) continue
+    found.push({ check: 'chain', level: 'warning', item: p, items: slugs, detail: slugs.join(' -> ') })
+  }
+  return found
+}
+
+// risk: brigade-risk exits 0 whether or not it escalates, so read its --json. An escalating item
+// that is not heavy goes to a cook too weak for it.
+function checkRisk(open) {
+  const found = []
+  for (const item of open) {
+    if (item.files.length === 0) continue
+    const out = runSibling('brigade-risk', ['--json', '--files', ...item.files], [0])
+    if (out.escalate !== true || item.heavy) continue
+    const why = []
+    if (out.threshold_exceeded) why.push(`${out.file_count} files, threshold ${out.file_threshold}`)
+    const cats = [...new Set((out.matches ?? []).map((m) => m.category))]
+    if (cats.length > 0) why.push(`categories ${cats.join(', ')}`)
+    found.push({ check: 'risk', item: item.slug,
+      detail: `brigade-risk escalates (${why.join('; ') || 'escalate: true'}) but the item is not heavy: true` })
+  }
+  return found
+}
+
+function main() {
+  const argv = process.argv.slice(2)
+  let json = false
+  let base = null
+  const positional = []
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--json') json = true
+    else if (arg === '--base') {
+      const value = argv[i + 1]
+      if (value === undefined || value === '' || value.startsWith('--')) return usage()
+      base = value
+      i++
+    } else if (arg.startsWith('-')) return usage()
+    else positional.push(arg)
+  }
+  if (positional.length !== 1) return usage()
+  const planPath = path.resolve(positional[0])
+
+  let text
+  try {
+    text = fs.readFileSync(planPath, 'utf8')
+  } catch (err) {
+    console.error(`could not read plan ${positional[0]}: ${err.message}`)
+    return 2
+  }
+  const plan = parsePlan(text)
+  if (base === null) base = plan.frontmatter.delivery_branch || 'HEAD'
+  if (git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`]).status !== 0) {
+    console.error(`base ${base} does not name a commit here; pass --base <ref>`)
+    return 2
+  }
+
+  const bySlug = new Map(plan.items.map((it) => [it.slug, it]))
+  const open = plan.items.filter((it) => it.status !== 'done')
+  let results
+  try {
+    results = [
+      ...checkValidate(planPath),
+      ...checkPremise(plan, packetMarks(text), base, bySlug),
+      ...checkOwner(plan),
+      ...checkOverlap(open, bySlug),
+      ...checkChain(open, bySlug),
+      ...checkRisk(open),
+    ]
+  } catch (err) {
+    if (!(err instanceof RehearsalError)) throw err
+    console.error(`brigade-rehearse: ${err.message}`)
+    return 2
+  }
+
+  for (const r of results) if (!r.level) r.level = 'finding'
+  const findings = results.filter((r) => r.level === 'finding')
+  const warnings = results.length - findings.length
+  for (const r of results) {
+    if (json) {
+      const { check, level, item, detail, ...rest } = r
+      console.log(JSON.stringify({ check, level, item, detail, ...rest }))
+    } else {
+      console.log(`${r.check}: ${r.item}: ${r.detail}`)
+    }
+  }
+  if (!json) {
+    console.log(`rehearsed ${plan.items.length} items against ${base}: ` +
+      `${findings.length} finding${findings.length === 1 ? '' : 's'}, ` +
+      `${warnings} warning${warnings === 1 ? '' : 's'}`)
+  }
+  return findings.length > 0 ? 1 : 0
+}
+
+process.exitCode = main()
