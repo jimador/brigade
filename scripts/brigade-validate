@@ -961,6 +961,13 @@ function validateFile(file, ticketPath = null) {
         problems.push('blocked report missing "## Blocked" section')
       }
       if (!body.some((l) => l.startsWith('## Evidence'))) problems.push('report missing "## Evidence" section')
+      // The optional Confusions section names unclear packet parts, one line each; cap it so it
+      // stays a short list rather than a second report.
+      const confusions = sectionLines(body, '## Confusions')
+      if (confusions !== null) {
+        const n = confusions.filter((l) => l.trim() !== '').length
+        if (n > 8) problems.push(`report "## Confusions" has ${n} non-empty lines; budget is 8`)
+      }
       break
     }
     case 'verdict': {

@@ -177,9 +177,10 @@ ledger: <path|null>               # working-memory ledger, when the dispatch car
 Body sections, in order: \`## Summary\` (what changed, why, ≤ 5 lines), \`## Evidence\`
 (verbatim tail of each command's output — the verdict line must be visible),
 \`## Decisions\` (judgment calls the packet left open), \`## Out of scope\` (noticed, not
-touched), and for \`status: blocked\` a \`## Blocked\` section stating exactly what
-contradicted the packet. Authority: the working tree and the commands' real output.
-Budget: ≤ 120 lines.`,
+touched), \`## Confusions\` (optional: one line per packet part that read two ways, naming the
+part and what you assumed; leave it out when nothing was unclear; ≤ 8 lines), and for
+\`status: blocked\` a \`## Blocked\` section stating exactly what contradicted the packet.
+Authority: the working tree and the commands' real output. Budget: ≤ 120 lines.`,
   ledger: `Cook working memory — one per item at .brigade/dishes/<dish>/state/<item>.md.
 
 \`\`\`yaml
