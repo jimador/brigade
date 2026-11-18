@@ -18,6 +18,9 @@
 //       after its closing quote are still read.
 //   E2  only a list dash at the start of a line lets a quote open after it; a dash inside
 //       a plain summary is text.
+//   E1  a quote opens only where a value starts: after `key:`, after a line-leading dash,
+//       or after `[` or `,` in a `[...]` list; a comma or `{` alone never opens one.
+//   E2  so the adversarial corpus reads exactly the real ids and severities.
 //   I1  warnings never change the exit code, and clean files get no new message.
 //
 // Each test writes throwaway files and runs the real validator on them.
@@ -349,6 +352,85 @@ test('E2: a dash inside a plain summary does not let an apostrophe hide the fiel
   const dup = run('widget-verdict.md', failVerdict([Q2, '  - { id: F1, severity: low, summary: nit }']))
   assert.equal(dup.code, 1, dup.out)
   assert.ok(dup.out.includes('duplicate finding id: F1'), dup.out)
+})
+
+// The validator's own field reader, lifted out of the script so a test can see exactly
+// which ids and severities it pulls from a findings list.
+const readField = (() => {
+  const src = fs.readFileSync(VALIDATE, 'utf8')
+  const start = src.indexOf('function listEntries(')
+  const end = src.indexOf('// --- writing checks')
+  return new Function(`${src.slice(start, end)}\nreturn nestedFieldValues`)()
+})()
+
+// Each case is a findings list, the ids and severities the validator must read from it,
+// and the problem the full validator must report on it as a FAIL verdict (null = clean).
+const CORPUS = [
+  ['quoted summary that says the id: field', [
+    '  - { summary: "the id: field is wrong", id: F1, severity: low }',
+    "  - { summary: 'the id: field again', id: F2, severity: high }",
+  ], ['F1', 'F2'], ['low', 'high'], null],
+  ['double-quoted summary that wraps and closes on the next line', [
+    '  - summary: "a long summary that',
+    '      cites id: F9 and closes here"',
+    '    id: F1',
+    '    severity: medium',
+  ], ['F1'], ['medium'], null],
+  ['plain summary with a dash before an apostrophe', [
+    "  - { summary: Fails on the input - 'x, id: F1, severity: high }",
+  ], ['F1'], ['high'], null],
+  ['Q3: plain block summary with a comma before an apostrophe', [
+    "  - summary: Rejects the input, 'x",
+    '    id: F1',
+    '    severity: high',
+    '  - { id: F2, severity: low, summary: nit }',
+  ], ['F1', 'F2'], ['high', 'low'], null],
+  ['plain flow summary with a comma before an apostrophe', [
+    "  - { summary: Rejects the input, 'x, id: F1, severity: high }",
+  ], ['F1'], ['high'], null],
+  ["plain summary with an apostrophe in don't", [
+    "  - summary: don't stop",
+    '    id: F1',
+    '    severity: low',
+  ], ['F1'], ['low'], null],
+  ["quoted summary that contains , 'x'", [
+    `  - { summary: "keeps , 'x' and id: F9 inside", id: F1, severity: blocking }`,
+  ], ['F1'], ['blocking'], null],
+  ['wrapped quoted summary, then a key whose quoted value says id:', [
+    '  - summary: "wraps',
+    "      here\", note: 'q, id: F9'",
+    '    id: F1',
+    '    severity: low',
+  ], ['F1'], ['low'], null],
+  ['a real duplicate id', [
+    "  - summary: Rejects the input, 'x",
+    '    id: F1',
+    '    severity: low',
+    '  - { id: F1, severity: low, summary: nit }',
+  ], ['F1', 'F1'], ['low', 'low'], 'duplicate finding id: F1'],
+  ['an invalid severity after a plain summary with an apostrophe', [
+    "  - summary: Rejects the input, 'x",
+    '    id: F1',
+    '    severity: bogus',
+  ], ['F1'], ['bogus'], 'invalid finding severity: bogus'],
+]
+
+test('adversarial corpus', async (t) => {
+  for (const [name, lines, ids, severities, problem] of CORPUS) {
+    await t.test(name, () => {
+      const fm = ['verdict: FAIL', 'findings:', ...lines, 'reran_gate: true']
+      assert.deepEqual(readField(fm, 'findings', 'id'), ids)
+      assert.deepEqual(readField(fm, 'findings', 'severity'), severities)
+      const r = run('widget-verdict.md', failVerdict(lines))
+      assert.doesNotMatch(r.out, /FAIL verdict with no findings/, r.out)
+      if (problem === null) {
+        assert.equal(r.code, 0, r.out)
+      } else {
+        assert.equal(r.code, 1, r.out)
+        assert.ok(r.out.includes(problem), r.out)
+      }
+    })
+  }
 })
 
 const G3 = 'Red run:\n````\n```js\nconst a = 1\n## quoted heading\n````\nmutation: flipped'

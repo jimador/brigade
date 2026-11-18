@@ -113,41 +113,91 @@ function listEntries(fm, listKey) {
 // untouched text at the same spot and a quoted value still comes back with its quotes.
 function nestedFieldValues(fm, listKey, field) {
   // One line at a time, because entries are joined with spaces and a comment has to end
-  // at its own line. A quote only opens where a YAML value can start, so the apostrophe
-  // in an unquoted `don't` is just text.
+  // at its own line. A quote opens a string only where a YAML value starts: right after
+  // `key:`, right after a line-leading list dash, or right after `[` or `,` inside a
+  // `[...]` list. Anywhere else it is just text, so the apostrophe in `don't`, or in a
+  // plain summary like `Rejects the input, 'x`, never hides the fields after it.
   // An open quote carries on to the next line, because a quoted summary can wrap and
-  // close there. It is dropped where a new list entry or top-level key starts, the same
-  // places the entries are split, so a stray quote never hides the next entry.
+  // close there. So does an open `[...]` or `{...}`, so the next line knows whether a
+  // comma there starts a value. Both are dropped where a new list entry or top-level key
+  // starts, the same places the entries are split, so a stray quote never hides the next
+  // entry.
   let quote = null
+  let flow = []
+  // Where the scan is: 'key' where a key may start, 'value' where a value may start,
+  // 'item' right after a list dash (either may), 'text' inside a plain word or value,
+  // 'closed' right after a quoted value. Entries often put more fields after a quoted
+  // summary on the same line, `"...", id: F1`, so a comma there leads to a key; the
+  // quote still opens only after that key's colon.
+  let at = 'key'
+  // Whether the plain text being read started where a key may, so its `: ` ends a key.
+  let keyText = false
   const blank = (line) => {
-    if (/^\s*- /.test(line) || /^[a-z_]+:/.test(line)) quote = null
+    if (/^\s*- /.test(line) || /^[a-z_]+:/.test(line)) { quote = null; flow = [] }
+    if (quote === null && flow.length === 0) { at = 'key'; keyText = false }
     const out = line.split('')
-    // Whether a quote here would open a value: true at the start of the line and after
-    // `:`, `[`, `{`, `,` or a list dash, false once any other text has appeared. A list
-    // dash is one that starts the line and is followed by a space or the line's end; a
-    // dash anywhere else, like the one in `input - 'x`, is just text.
-    let valueStart = true
     for (let i = 0; i < line.length; i++) {
       const c = line[i]
-      if (quote === null && c !== '"' && c !== "'" && c !== '#' && !/\s/.test(c)) {
-        valueStart = ':[{,'.includes(c) ||
-          (c === '-' && line.slice(0, i).trim() === '' && (i + 1 === line.length || /\s/.test(line[i + 1])))
-        continue
-      }
       if (quote === '"') {
         if (c === '\\') { out[i] = '_'; if (i + 1 < line.length) out[++i] = '_'; continue }
-        if (c === '"') { quote = null; valueStart = false; continue }
+        if (c === '"') { quote = null; at = 'closed'; continue }
         out[i] = '_'
-      } else if (quote === "'") {
+        continue
+      }
+      if (quote === "'") {
         if (c === "'" && line[i + 1] === "'") { out[i] = out[i + 1] = '_'; i++; continue }
-        if (c === "'") { quote = null; valueStart = false; continue }
+        if (c === "'") { quote = null; at = 'closed'; continue }
         out[i] = '_'
-      } else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+        continue
+      }
+      const next = line[i + 1]
+      const ends = next === undefined || /\s/.test(next)
+      if (/\s/.test(c)) continue
+      if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
         for (let j = i; j < line.length; j++) out[j] = '_'
         break
-      } else if (c === '"' || c === "'") {
-        if (valueStart) quote = c
-        else valueStart = false
+      }
+      if (flow.length > 0 && ',[]{}'.includes(c)) {
+        if (c === '[' || c === '{') {
+          flow.push(c)
+          at = c === '[' ? 'value' : 'key'
+        } else if (c === ',') {
+          at = flow.at(-1) === '[' ? 'value' : 'key'
+        } else {
+          flow.pop()
+          at = 'text'
+        }
+        keyText = false
+        continue
+      }
+      if ((c === '"' || c === "'") && (at === 'value' || at === 'item')) {
+        quote = c
+        keyText = at === 'item'
+        at = 'text'
+        continue
+      }
+      if ((c === '[' || c === '{') && (at === 'value' || at === 'item')) {
+        flow.push(c)
+        at = c === '[' ? 'value' : 'key'
+        keyText = false
+        continue
+      }
+      if (c === ',' && at === 'closed') {
+        at = 'key'
+        continue
+      }
+      if (c === '-' && ends && flow.length === 0 && (at === 'key' || at === 'item')) {
+        at = 'item'
+        continue
+      }
+      if (c === ':' && keyText && (ends || (flow.length > 0 && ',[]{}'.includes(next)))) {
+        at = 'value'
+        keyText = false
+        continue
+      }
+      if (at !== 'text') {
+        keyText = at === 'key' || at === 'item'
+        at = 'text'
       }
     }
     return out.join('')
