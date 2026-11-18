@@ -471,7 +471,8 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   with attempt records), 78% in November; items marked done without a verdict file 1.2% in
   November. Re-measure on the next ten dishes after release 0.51.0 with the same scripts.
 - metric: tooling defects per dish (a gate or tool that blocked correct work, or let wrong work
-  through), counted from analyst retros.
+  through), counted from analyst retros; environment-blocked rate (blocked cook reports caused by
+  the environment, such as a refused commit, over all cook reports); first-attempt PASS rate.
 - result: pending
 - decision: keep watching
 - evidence: local audit `.brigade/research/field-evidence-2026-11-18.md` (never committed); the
