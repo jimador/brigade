@@ -107,6 +107,22 @@ and the PR may record n/a with a reason.
 
 ## 4. Hand off the branch
 
+Before the PR, check each item with `contract: true` in PLAN.md (`level: contracts` dishes and
+any later contract item): it landed its interface doc comment, its contract test suite and its
+decision record. The record lives in the repo's decision-record directory when it has one
+(`docs/adr/`, `docs/decisions/`, `adr/`), else `docs/decisions/NNNN-<slug>.md` with the
+sections Context, Decision, Use cases, Alternatives rejected, Consequences. A contract item
+missing any of the three goes back to rework, and rework makes a new head: re-prove the gate
+(§ 1) and repeat the acceptance pass and red team (§ 2, § 3) on it. That round counts toward
+the two-round stop in § 3. Never hand off a contract nobody can read the reason for. Nothing under `.brigade/` is committed.
+
+Run `brigade-risk --files <the item's files>` once per item and note every item whose result
+carries `design_review: true` (`design_matches`). The PR body lists those items first, under
+"Needs design review", with the matched category; design review never changes `escalate`.
+Republish the plan view so the page matches the landed state:
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-plan-view" .brigade/dishes/<slug>/PLAN.md`. It stays
+under `.brigade/`; attach or link it, never commit it.
+
 Write the PR body from the configured template and check it before anyone sees it:
 
 ```bash

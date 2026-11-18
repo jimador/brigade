@@ -45,6 +45,25 @@ the duties in the Intensive mode section.
   would have prevented).
 - **Gate honesty** — reports with weak/missing evidence that still advanced; verdicts
   that PASSed something a later stage caught.
+- **Attempts per landed item** — for items that reached `done`, count every attempt in PLAN.md
+  and break the counts down by `model`. Escalations count (`trigger: escalation`, with its
+  `reason`), and so do answer-retries. No price weighting: no artifact records tokens or
+  dollars. Name the item with the most attempts and what its extra attempts bought.
+- **Overrun rate** — cooks: attempts with `cause: turn-limit` or `cause: wrap-up` over all cook
+  attempts (PLAN.md attempts record cook dispatches only). Other roles, scouts and inspectors
+  included: a count, not a rate, because no artifact counts their dispatches. Read
+  `.brigade/state/turn-budget.jsonl`, where each line carries `agent_id`, `agent_type` and
+  `event` (`soft` or `final`, as the turn-budget hook writes them), and count distinct
+  `agent_id` values per `agent_type` with at least one `event: soft` line (a dispatch that hit
+  soft and final counts once). A cook rate above a quarter, or a role with repeat counts, needs
+  a smaller packet or a larger `maxTurns`; say which. A role with no lines is unscored, not zero.
+- **Contract churn** — contract items (`contract: true`) that list a path an earlier contract
+  item listed. Each one is a contract changed after merge; name both items and the path.
+- **Parked reopened** — `## Parked` has no state column, so score what the dish records: rows
+  whose `reopens at` gate was reached by handoff (the named item is `done`, or `implementation`
+  once the plan's `level` is `implementation`, or `handoff`) and rows whose gate was never
+  reached. Count the `cause: blocked-missing-fact` attempts, and name any a parked question
+  should have caught. List the rows, do not score them as answered.
 - **Tier fit.** The dish's PLAN.md records its service tier (`tier:`). Score whether the
   tier earned its cost: a ★★/★★★ dish with zero rework and no escalations may propose
   dropping a star; a ★ dish with heavy rework or repeated escalation may propose raising
