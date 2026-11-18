@@ -99,6 +99,64 @@ function writeMetadata(value, metadata) {
   fs.renameSync(temporary, file)
 }
 
+const USAGE = 'usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|' +
+  'recover-lock|list|watch|preflight|path-acquire|path-release|path-list|hot-files [...]'
+
+// A dish's path leases live next to its dish lease as <dish>.paths. They only count while
+// the dish's .lease exists, so a dish that released or was broken never blocks anyone.
+function pathsFilePath(value) {
+  if (!validDish(value)) fail('dish must match [a-z0-9][a-z0-9._-]*')
+  return path.join(coordinationRoot, `${value}.paths`)
+}
+
+// Turns a path argument into a repo-relative POSIX path. Absolute paths and any `..`
+// segment are refused outright (exit 1) rather than resolved, so a lease always names a
+// file inside the repo the same way every dish spells it.
+function normalizeLeasePath(raw) {
+  if (typeof raw !== 'string' || raw.length === 0) fail('path must be a non-empty string')
+  const slashed = raw.replace(/\\/g, '/')
+  if (slashed.startsWith('/') || /^[A-Za-z]:/.test(slashed) || path.isAbsolute(raw)) {
+    fail(`path must be repo-relative, not absolute: ${raw}`)
+  }
+  const segments = slashed.split('/').filter((s) => s !== '' && s !== '.')
+  if (segments.includes('..')) fail(`path must not contain '..': ${raw}`)
+  if (segments.length === 0) fail(`path names no file: ${raw}`)
+  return segments.join('/')
+}
+
+// Two leased paths collide when they are the same path or one is a folder holding the other.
+function pathsOverlap(a, b) {
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
+}
+
+function readPathsFile(value) {
+  const file = pathsFilePath(value)
+  if (!fs.existsSync(file)) return null
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (!parsed || !Array.isArray(parsed.paths)) throw new Error('paths is not a list')
+    return parsed
+  } catch (error) {
+    return { dish: value, invalid: true, error: error.message }
+  }
+}
+
+function writePathsFile(value, record) {
+  const file = pathsFilePath(value)
+  const temporary = `${file}.tmp-${crypto.randomUUID()}`
+  fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' })
+  fs.renameSync(temporary, file)
+}
+
+function pathsDishes() {
+  if (!fs.existsSync(coordinationRoot)) return []
+  return fs.readdirSync(coordinationRoot)
+    .filter((name) => name.endsWith('.paths'))
+    .map((name) => name.slice(0, -'.paths'.length))
+    .filter(validDish)
+    .sort()
+}
+
 function emit(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
 }
@@ -390,10 +448,11 @@ if (command === 'watch') {
       // A watch tick is never worth crashing the monitor over.
     }
   }, intervalSeconds * 1000)
-} else if (!dish && command !== 'preflight') {
+} else if (!dish && !['preflight', 'path-list', 'hot-files'].includes(command)) {
   // preflight's own usage guard (below) maps a missing dish-slug to exit code 2 per its
-  // contract, so it needs to run instead of this generic exit-1 gate.
-  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|list|watch|preflight [...]')
+  // contract, so it needs to run instead of this generic exit-1 gate. path-list and
+  // hot-files take no dish at all.
+  fail(USAGE)
 }
 
 if (command === 'status') {
@@ -483,10 +542,19 @@ if (command === 'release') {
     } else {
       fs.unlinkSync(lease)
     }
-    return current
+    // The dish's path leases go with the dish lease. Once the lease file is gone a
+    // leftover .paths file can no longer block anyone, so a failed unlink is harmless.
+    let pathsReleased = false
+    try {
+      fs.unlinkSync(pathsFilePath(dish))
+      pathsReleased = true
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error
+    }
+    return { ...current, pathsReleased }
   })
   if (metadata.error) fail(metadata.error, metadata.code)
-  emit({ released: true, dish, runtime: metadata.runtime, owner })
+  emit({ released: true, dish, runtime: metadata.runtime, owner, paths_released: metadata.pathsReleased })
   process.exit(0)
 }
 
@@ -634,6 +702,256 @@ if (command === 'preflight') {
   process.exit(ok ? 0 : 1)
 }
 
+if (command === 'path-acquire') {
+  // Leases repo paths for a dish so no other live dish edits them at the same time. Every
+  // path command runs under one global mutex, because the overlap check reads every other
+  // dish's .paths file and a per-dish mutex would let two dishes claim the same file at once.
+  const owner = process.argv[4]
+  const rawPaths = process.argv.slice(5)
+  if (!owner || rawPaths.length === 0) fail('usage: brigade-coord path-acquire <dish> <owner> <path...>')
+  pathsFilePath(dish)
+  const wanted = [...new Set(rawPaths.map(normalizeLeasePath))]
+  const result = withMutex('paths', () => {
+    const lease = readMetadata(dish)
+    if (!lease) return { error: `no lease for ${dish}; acquire the dish lease first`, code: 2 }
+    if (lease.invalid) return { error: `invalid lease metadata for ${dish}`, code: 2 }
+    if (lease.owner !== owner) return { error: `lease owner mismatch for ${dish}`, code: 2 }
+
+    const conflicts = []
+    for (const other of pathsDishes()) {
+      if (other === dish) continue
+      // A dish with no lease is finished or broken; its leftover paths never block.
+      if (!fs.existsSync(leasePath(other))) continue
+      const held = readPathsFile(other)
+      if (!held) continue
+      if (held.invalid) {
+        // We cannot tell what a live dish holds, so assume the worst.
+        conflicts.push({ dish: other, invalid: true, error: held.error, paths: wanted })
+        continue
+      }
+      const overlap = wanted.filter((p) => held.paths.some((h) => pathsOverlap(p, String(h))))
+      if (overlap.length > 0) conflicts.push({ dish: other, owner: held.owner, paths: overlap })
+    }
+    if (conflicts.length > 0) {
+      return {
+        code: 3,
+        output: {
+          acquired: false,
+          dish,
+          holder: { dish: conflicts[0].dish, owner: conflicts[0].owner },
+          conflicts,
+        },
+      }
+    }
+
+    // Merge with what this owner already holds. A file left by an earlier owner of this
+    // dish (before a break and re-acquire) is replaced, not merged: that owner is fenced out.
+    const existing = readPathsFile(dish)
+    const keep = existing && !existing.invalid && existing.owner === owner
+    const merged = [...new Set([...(keep ? existing.paths.map(String) : []), ...wanted])].sort()
+    const record = {
+      schema: 1,
+      dish,
+      owner,
+      paths: merged,
+      acquired_at: keep && existing.acquired_at ? existing.acquired_at : new Date().toISOString(),
+    }
+    writePathsFile(dish, record)
+    return { code: 0, output: { acquired: true, ...record } }
+  })
+  if (result.error) fail(result.error, result.code)
+  emit(result.output)
+  process.exit(result.code)
+}
+
+if (command === 'path-release') {
+  const owner = process.argv[4]
+  if (!owner) fail('path-release requires the owner token')
+  pathsFilePath(dish)
+  const result = withMutex('paths', () => {
+    const held = readPathsFile(dish)
+    if (!held) return { error: `no path leases for ${dish}`, code: 4 }
+    // An unreadable file carries no owner, so the dish lease's owner speaks for it.
+    const holderOwner = held.invalid ? readMetadata(dish)?.owner : held.owner
+    if (holderOwner !== owner) return { error: `path lease owner mismatch for ${dish}`, code: 2 }
+    fs.unlinkSync(pathsFilePath(dish))
+    return { output: { released: true, dish, owner, paths: held.invalid ? [] : held.paths } }
+  })
+  if (result.error) fail(result.error, result.code)
+  emit(result.output)
+  process.exit(0)
+}
+
+if (command === 'path-list') {
+  const paths = pathsDishes().map((key) => {
+    const held = readPathsFile(key)
+    const live = fs.existsSync(leasePath(key))
+    if (!held || held.invalid) return { dish: key, invalid: true, live }
+    return { dish: key, owner: held.owner, paths: held.paths, acquired_at: held.acquired_at, live }
+  })
+  emit({ paths })
+  process.exit(0)
+}
+
+if (command === 'hot-files') {
+  // Which files have several dishes changed on the main branch lately? Git history does
+  // not record dishes, so a commit counts for a dish only when it can be tied to that
+  // dish's PLAN.md delivery_branch:
+  //   1. a merge commit on the main branch whose subject names the delivery branch
+  //      ("Merge branch 'feat/x'", "Merge pull request #7 from acme/feat/x") credits the
+  //      merge's own diff against its first parent, and every commit it brought in;
+  //   2. a delivery branch that still exists locally and is fully contained in the main
+  //      branch (fast-forwarded or rebased-and-merged) credits the first-parent commits
+  //      between the branch's creation point (its oldest reflog entry) and its tip.
+  // Everything else (squash merges, deleted branches, clones without the reflog) stays
+  // unmapped: those commits are counted, along with how many distinct ticket ids their
+  // subjects carry, but never added to any path's dish count.
+  const flags = process.argv.slice(3)
+  const flagValue = (name, fallback) => {
+    const at = flags.indexOf(name)
+    if (at < 0) return fallback
+    const value = Number(flags[at + 1])
+    if (!Number.isInteger(value) || value < 1) fail(`${name} needs a positive whole number`)
+    return value
+  }
+  const days = flagValue('--days', 30)
+  const min = flagValue('--min', 3)
+  const asJson = flags.includes('--json')
+
+  let mainBranch = 'main'
+  try {
+    const config = fs.readFileSync(path.join(root, '.brigade', 'config.md'), 'utf8')
+    const match = config.match(/^\s*(?:-\s*)?main_branch:\s*([^\s#]+)/m)
+    if (match) mainBranch = unquote(match[1])
+  } catch {
+    // No config: keep the default.
+  }
+
+  const run = (args) => execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const tryRun = (args) => {
+    try {
+      return run(args)
+    } catch {
+      return null
+    }
+  }
+  if (tryRun(['rev-parse', '--verify', '--quiet', `${mainBranch}^{commit}`]) === null) {
+    fail(`main branch ${mainBranch} not found in ${root}`)
+  }
+
+  const commits = new Map()
+  const logOut = run(['log', mainBranch, `--since=${days}.days`, '--name-only',
+    '--format=%x1e%H%x1f%P%x1f%s'])
+  for (const record of logOut.split('\x1e')) {
+    if (!record.trim()) continue
+    const [header, ...rest] = record.split('\n')
+    const [hash, parents, subject] = header.split('\x1f')
+    commits.set(hash, {
+      hash,
+      parents: parents ? parents.split(' ') : [],
+      subject: subject || '',
+      files: rest.map((l) => l.trim()).filter(Boolean),
+    })
+  }
+
+  const dishes = []
+  const dishesRoot = path.join(root, '.brigade', 'dishes')
+  if (fs.existsSync(dishesRoot)) {
+    for (const entry of fs.readdirSync(dishesRoot).sort()) {
+      const plan = path.join(dishesRoot, entry, 'PLAN.md')
+      if (!fs.existsSync(plan)) continue
+      const branch = planDeliveryBranch(plan)
+      if (branch) dishes.push({ dish: planIdentity(plan).dish || entry, branch })
+    }
+  }
+
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const namesBranch = (subject, branch) =>
+    new RegExp(`(^|[\\s'"/:])${escapeRegex(branch)}($|[\\s'"])`).test(subject)
+
+  const owner = new Map()
+  const dishFiles = new Map()
+  const credit = (name, files) => {
+    if (!dishFiles.has(name)) dishFiles.set(name, new Set())
+    for (const f of files) dishFiles.get(name).add(f)
+  }
+
+  for (const c of commits.values()) {
+    if (c.parents.length < 2) continue
+    const match = dishes.find((d) => namesBranch(c.subject, d.branch))
+    if (!match) continue
+    owner.set(c.hash, match.dish)
+    const diff = tryRun(['diff', '--name-only', c.parents[0], c.hash])
+    if (diff) credit(match.dish, diff.split('\n').map((l) => l.trim()).filter(Boolean))
+    const brought = tryRun(['rev-list', `${c.parents[0]}..${c.parents[1]}`]) || ''
+    for (const h of brought.split('\n').filter(Boolean)) {
+      if (commits.has(h) && !owner.has(h)) owner.set(h, match.dish)
+    }
+  }
+
+  for (const d of dishes) {
+    const ref = `refs/heads/${d.branch}`
+    if (tryRun(['rev-parse', '--verify', '--quiet', ref]) === null) continue
+    if (tryRun(['merge-base', '--is-ancestor', ref, mainBranch]) === null) continue
+    const reflog = tryRun(['reflog', 'show', '--format=%H', ref])
+    const entries = reflog ? reflog.split('\n').filter(Boolean) : []
+    if (entries.length === 0) continue
+    const start = entries[entries.length - 1]
+    const range = tryRun(['rev-list', '--first-parent', `${start}..${ref}`]) || ''
+    for (const h of range.split('\n').filter(Boolean)) {
+      const c = commits.get(h)
+      if (!c || owner.has(h)) continue
+      owner.set(h, d.dish)
+      credit(d.dish, c.files)
+    }
+  }
+
+  let unmappedCommits = 0
+  const unknownTickets = new Set()
+  for (const c of commits.values()) {
+    if (owner.has(c.hash) || c.parents.length >= 2) continue
+    unmappedCommits += 1
+    const ticket = c.subject.match(/\b([A-Z][A-Z0-9]*-\d+)\b/)
+    if (ticket) unknownTickets.add(ticket[1])
+  }
+
+  const byPath = new Map()
+  for (const [name, files] of dishFiles) {
+    for (const f of files) {
+      if (!byPath.has(f)) byPath.set(f, [])
+      byPath.get(f).push(name)
+    }
+  }
+  const hot = [...byPath.entries()]
+    .filter(([, names]) => names.length >= min)
+    .map(([file, names]) => ({ path: file, dish_count: names.length, dishes: names.sort() }))
+    .sort((a, b) => b.dish_count - a.dish_count || a.path.localeCompare(b.path))
+
+  const summary = {
+    main_branch: mainBranch,
+    days,
+    min,
+    commits_scanned: commits.size,
+    mapped_dishes: [...dishFiles.keys()].sort(),
+    unmapped_commits: unmappedCommits,
+    unknown_tickets: unknownTickets.size,
+  }
+  if (asJson) {
+    emit({ ...summary, hot_files: hot })
+  } else {
+    for (const h of hot) process.stdout.write(`${h.dish_count}\t${h.path}\t${h.dishes.join(',')}\n`)
+    process.stdout.write(`hot-files: ${hot.length} path(s) changed by ${min}+ dishes on ${mainBranch} ` +
+      `in ${days} days; ${summary.mapped_dishes.length} dish(es) mapped, ${unmappedCommits} commit(s) ` +
+      `unmapped (${unknownTickets.size} unknown ticket(s))\n`)
+  }
+  process.exit(0)
+}
+
 if (command !== 'watch') {
-  fail('usage: brigade-coord key|review-key|acquire|status|heartbeat|release|break|recover-lock|list|watch|preflight [...]')
+  fail(USAGE)
 }

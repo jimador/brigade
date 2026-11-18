@@ -19,6 +19,10 @@ dispatch. Collisions are stop conditions (below); before creating the delivery w
 `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord" preflight <dish-slug> --branch <delivery-branch>`.
 List UNCHECKED entries (offline, no `gh`) in the pre-flight report; never assume them clean.
 
+Then run `brigade-coord hot-files` and take a path lease on every hot file the plan lists:
+`brigade-coord path-acquire <dish-slug> <owner> <paths…>`. Exit 3 is a pre-flight collision:
+report the other dish and stop. `release` at handoff drops the path leases with the dish lease.
+
 Branches become PRs and history: name them for what they deliver, in the repo's own
 convention, never for the process that made them (no "brigade" in any branch or worktree
 name). Pick a short delivery slug at plan time and record it in PLAN.md frontmatter as
