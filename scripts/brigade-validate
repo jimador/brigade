@@ -461,6 +461,86 @@ function sectionLines(body, heading) {
   return out
 }
 
+// --- mechanical checks ---------------------------------------------------------
+//
+// Checks a script can do as well as a reviewer: oversized items, a chain of items on one file,
+// a model name copied from the schema example, a repeated finding id, a red run with no mutation
+// named. All but the finding id are warnings.
+
+const MAX_ITEM_FILES = 4
+const CHAIN_ITEMS = 3
+
+// W1 and W2: an item listing too many files, and a file that 3 or more open items all list.
+function checkItemFiles(items, warnings) {
+  const byFile = new Map()
+  for (const item of items) {
+    const files = [...new Set(item.files)]
+    if (item.files.length > MAX_ITEM_FILES) {
+      warnings.push(`item ${item.slug} lists ${item.files.length} files; the packet bar is 1-3 plus its own test (D13)`)
+    }
+    if (item.status === 'done') continue
+    for (const f of files) {
+      if (!byFile.has(f)) byFile.set(f, [])
+      byFile.get(f).push(item.slug)
+    }
+  }
+  for (const [f, slugs] of byFile) {
+    if (slugs.length >= CHAIN_ITEMS) {
+      warnings.push(`${f} is listed by ${slugs.length} items (${slugs.join(', ')}); make them one slice or split the file (D13)`)
+    }
+  }
+}
+
+// A frontmatter scalar without quotes or a trailing `# comment`.
+function plainValue(fm, key) {
+  const raw = fmValue(fm, key)
+  if (raw === null) return null
+  return raw.replace(/\s+#.*$/, '').replace(/^(["'])(.*)\1$/, '$2').trim()
+}
+
+// W3: the schema examples say `model: haiku` and `model: <model>`. Haiku is a real cook model,
+// so a cook report may say it; on any other role it is almost always the example copied over.
+function checkPlaceholderModel(fm, warnings) {
+  const model = plainValue(fm, 'model')
+  if (model === null) return
+  const role = plainValue(fm, 'role')
+  if (model === '<model>' || (model === 'haiku' && role !== 'cook')) {
+    warnings.push(`model "${model}" looks like the schema placeholder; write the model that produced this file`)
+  }
+}
+
+// The lines of one `## <heading>` section, where a `## ` line inside a fenced block (pasted
+// command output, say) does not end the section.
+function fencedSectionLines(body, heading) {
+  const start = body.findIndex((l) => l.trim() === heading || l.startsWith(`${heading} `))
+  if (start < 0) return null
+  const out = []
+  let fence = null
+  for (let i = start + 1; i < body.length; i++) {
+    const line = body[i]
+    const marker = line.match(/^\s*(`{3,}|~{3,})/)
+    if (marker) {
+      if (fence === null) fence = marker[1][0]
+      else if (marker[1][0] === fence) fence = null
+    } else if (fence === null && line.startsWith('## ')) {
+      break
+    }
+    out.push(line)
+  }
+  return out
+}
+
+// W4: a report whose Evidence claims a red (failing-first) run or a falsification should name
+// the mutation it made on a `mutation:` line, fenced or not, so a reader can repeat it.
+function checkRedRun(body, warnings) {
+  const evidence = fencedSectionLines(body, '## Evidence')
+  if (evidence === null) return
+  const claims = evidence.some((l) => /\bred\b/i.test(l) || /falsif/i.test(l))
+  if (claims && !evidence.some((l) => /^\s*mutation:/.test(l))) {
+    warnings.push('report claims a red run but names no mutation: line')
+  }
+}
+
 // Rows of the dispositions table, keyed `<source>|<id>`. Columns: id, source, ruling, how.
 function dispositionRows(body) {
   const lines = sectionLines(body, '## Plan-check dispositions')
@@ -804,6 +884,7 @@ function validateFile(file, ticketPath = null) {
   }
 
   for (const k of contract.keys) if (!keys.has(k)) problems.push(`missing ${doc} key: ${k}`)
+  if (['report', 'verdict', 'plan_check', 'brief', 'analyst'].includes(doc)) checkPlaceholderModel(fm, warnings)
 
   if (contract.budget !== null) {
     const bodyLines = body.filter((l) => l.trim() !== '').length
@@ -862,6 +943,8 @@ function validateFile(file, ticketPath = null) {
       // below runs exactly as before C1, so a plan without C1 fields validates unchanged; when the
       // parser cannot read the plan, the C1 rules are skipped with one warning, never an error.
       const plan = parsePlan(text)
+      // The parser returns every item it could read even when it reports errors elsewhere.
+      checkItemFiles(plan.items, warnings)
       if (plan.errors.length > 0) {
         warnings.push(`C1 checks skipped: ${plan.errors[0]}`)
       } else {
@@ -983,6 +1066,7 @@ function validateFile(file, ticketPath = null) {
           }
         }
       }
+      checkRedRun(body, warnings)
       break
     }
     case 'verdict': {
@@ -993,6 +1077,12 @@ function validateFile(file, ticketPath = null) {
       }
       if (verdict === 'FAIL' && nestedFieldValues(fm, 'findings', 'severity').length === 0) {
         problems.push('FAIL verdict with no findings')
+      }
+      const ids = new Set()
+      for (const raw of nestedFieldValues(fm, 'findings', 'id')) {
+        const id = raw.replace(/^(["'])(.*)\1$/, '$2')
+        if (ids.has(id)) problems.push(`duplicate finding id: ${id}`)
+        ids.add(id)
       }
       break
     }
