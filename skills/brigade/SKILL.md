@@ -72,8 +72,13 @@ Protect the expensive tokens — you, the Planner, are the most expensive compon
 - Front-load context into packets so cooks never explore — a cheap cook handed exact files, pasted
   contracts, and a verification command produces mergeable code; the same cook told to look
   around produces garbage.
-- Plan once. The planning checkpoint is the only expensive thinking per dish; after it, everything
-  is mechanical dispatch and landing. Never re-derive the plan.
+- Plan each level once. A planning checkpoint is the only expensive thinking at its level; after
+  each approved checkpoint, everything up to the next level is mechanical dispatch and landing.
+  Never re-derive an approved level.
+- Plan one level at a time: contracts first, implementation packets only for merged contracts.
+  Table test: would the answer change the contract? Yes: decide it now. No: park it in
+  `## Parked` with its reopen gate and say "let's table this until <gate>". The rule holds when
+  the operator asks for the detail; rule ids in `DECOMPOSE.md`.
 - Resume mechanically: `brigade-status` and the SessionStart snapshot, not artifact re-reads.
   Keep your own ledger (`state/planner.md`, per `MEMORY.md`) current after every wave so a
   resumed or compacted session inherits verified facts instead of re-deriving them. Batch board
@@ -191,9 +196,10 @@ artifacts live under `.brigade/dishes/<dish-slug>/`, executor worktrees under
 
 ## The dish
 
-A dish is one ticket cooked to completion. It has one planned stop: the planning checkpoint
-at the end of Phase 2. After that approval, run every later phase through handoff without
-asking whether to continue; interrupt only when readiness fails (ask one decision-ready
+A dish is one ticket cooked to completion. It has one planned stop per planning level
+(`DECOMPOSE.md`): a dish with no contract item has exactly one, at the end of Phase 2. After each
+approval, run every phase up to the next level's checkpoint, or through handoff after the last,
+without asking whether to continue; interrupt only when readiness fails (ask one decision-ready
 question or set the ticket `blocked`) or when a stop condition named in `EXECUTE.md` fires.
 Done means: the PR is open (or the branch is handed off), the ticket is in review with a
 plain-language comment, a due retro has run, and the lease is released.
@@ -202,7 +208,7 @@ Copy this checklist into your first message of a dish and check phases off as th
 
 - [ ] 0 Intake — ticket resolved and read once, claimed, intake sweep recorded
 - [ ] 1 Research — a brief on disk for every question that blocks decomposition
-- [ ] 2 Decompose — PLAN.md validates, plan check folded in, operator confirmed once
+- [ ] 2 Decompose — PLAN.md validates, plan check folded in, operator confirmed at each planning level
 - [ ] 3–5 Execute — ledger applied, every done item has report + verdict on disk
 - [ ] 6 Handoff — gate proven at full scope, red team clean on the head, PR body checked, branch handed off, ticket in review, retro if due
 
@@ -274,7 +280,7 @@ adversarial plan check when the tier calls for one. Write `PLAN.md` to the `plan
 packet per item per `templates/work-packet.md`.
 
 **Complete when:** see `DECOMPOSE.md` § Complete when — the operator has confirmed the plan
-once; release the lease before yielding for it.
+at each planning level; release the lease before yielding for a confirmation.
 
 ### Phase 3–5 — Execute
 
@@ -283,7 +289,7 @@ pre-flight the delivery branch — named for what it delivers, never the process
 dispatch, move the source ticket to in-progress. Invoke `brigade-execute`; apply the returned
 ledger from artifact scans (`brigade-validate`, `brigade-status`, frontmatter), never from
 telemetry alone. `EXECUTE.md` names the five stop conditions — nothing else is a reason to
-interrupt between plan approval and handoff.
+interrupt between a level's plan approval and the next checkpoint or handoff.
 
 **Complete when:** see `EXECUTE.md` § Complete when.
 
@@ -358,8 +364,8 @@ source, never the installed copy; and it always compacts the section it touches.
    filesystem over the plan if they disagree, and fix the plan.
 3. Tell the user in two lines where the dish stands, then continue from the current phase.
 
-Never re-plan or re-confirm work that's already merged; the one planning checkpoint happened
-when the plan was first approved. Resuming mid-execute: build `items` from PLAN.md's current
+Never re-plan or re-confirm work that's already merged; each planning level's checkpoint happened
+when that level was first approved. Resuming mid-execute: build `items` from PLAN.md's current
 statuses as-is (`done` items return as `skipped`, not re-cooked) — a `resumeFromRunId` is a
 same-session accelerator only, never the source of truth.
 

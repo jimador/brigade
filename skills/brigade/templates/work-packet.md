@@ -27,6 +27,8 @@ those steps, lifted out of the packet.
 - **files:** the ONLY files you may touch
   - path/to/file.ts (edit)
   - path/to/new-file.test.ts (create)
+  - never a contract-owned path (a `contract: true` item's files); a contract item's packet owns
+    the interface, its contract suite, one thin end-to-end path and the decision record
 
 ### Goal
 
@@ -166,6 +168,8 @@ If the plan declares `writing: <preset>`, write the steps and hazards to the S r
 
 ```bash
 <exact command(s) — e.g. bun test src/foo/registry.test.ts && bun run types>
+<an implementation item also runs the contract suite it depends on; a contract item runs it
+ against its thin end-to-end path>
 ```
 
 ### Acceptance criteria
@@ -199,6 +203,8 @@ adjacent bugs to leave alone (report them instead).
 - Are all contracts/anchors **pasted**, not "see file X"?
 - Is every step unambiguous — no "appropriately", "as needed", "look around"?
 - 1–3 files, ≤ ~150 lines, one behavior, mechanically verifiable?
+- Does an implementation packet's Verify name the contract suite, and do its files exclude
+  every contract-owned path? Run `brigade-scope` on the item's branch before it lands.
 - Does the Verify step actually prove the acceptance criteria, and can it fail? A
   `grep -q` for an identifier's PRESENCE proves nothing — comments and strings satisfy
   it; any workflow-logic criterion is verified by executing the behavior (extract-and-run

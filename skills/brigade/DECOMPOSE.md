@@ -8,7 +8,7 @@ check cites a rule id.
 - Write the plan
 - Writing the packet text
 - P — Verify every premise before it goes in a packet
-- D — Shape the DAG
+- D — Shape the DAG (D1–D12)
 - The haiku bar
 - Heavy flags
 - Research dishes
@@ -88,7 +88,13 @@ scout claim is an inference to re-derive, not a fact to paste.
   inspector PASS needs a re-verdict covering the new content before merge.
 - **D3 — Shared contracts own their blast radius.** An item that edits a shared type, schema,
   or interface names every consumer that must compile against it in its scope, and goes first
-  in the DAG so dependents branch from the merged contract.
+  in the DAG so dependents branch from the merged contract. A contract item (`contract: true`)
+  owns: the interface; a doc comment naming the decision it hides and the use cases it serves;
+  the contract suite every implementation must pass; one thin end-to-end path through the
+  interface; the decision record. Implementation items depend on it, run the suite in Verify,
+  and never list its files; `brigade-scope` flags a contract-owned path in an implementation
+  diff. Changing a merged contract is a new contract item, never an edit from an
+  implementation item.
 - **D4 — Ownership runs the whole call chain.** An item adding a leaf API, callback, or flag
   names each hop the real consumer walks (leaf → panel → section → host; producer → resolver →
   policy) and verifies at the consumer end, not the producer — "the mechanism exists" is not
@@ -105,10 +111,31 @@ scout claim is an inference to re-derive, not a fact to paste.
   boundary goes verbatim into the Verify block of the packet that closes that wave; a gate
   that lives only in plan prose is a gate nobody runs — a promised post-wave production build
   never ran, and a blocking prerender regression survived every per-item gate.
+- **D8 — Plan one level at a time.** `level: contracts` in the PLAN.md frontmatter means only
+  contract items carry packets; `level: implementation` (the default when absent) opens after
+  every contract item is merged. A packet for a non-contract item that depends on an unmerged
+  contract is a plan defect. A question that would not change a contract goes in `## Parked`
+  (`id | question | reopens at | raised`) with its reopen gate; a question that would change it
+  is decided now, or put to the operator as one decision-ready question, before the contract
+  merges. Parking holds when the operator asks for the detail early.
+- **D9 — Depth stop.** Stop planning below the contract: no packets for adapter internals,
+  key schemes, scripts or timers until their contract merges. Sync versus async, error
+  shapes, and ownership of state are contract questions, not detail.
+- **D10 — Two real use cases or no abstraction yet.** Add an interface, port, or plugin seam
+  only when at least two real use cases need it this dish. One use case gets the direct
+  implementation, and the plan records that the general interface waits for the second; when
+  the operator asked for the abstraction, say so and ask before building it.
+- **D11 — Line limits are a backstop.** The haiku bar's size limits catch a packet that grew
+  too big; they never choose where a seam goes. Cut along the contract first, then check size.
+- **D12 — Design-review matches go to the operator.** Run `brigade-risk --json` and read
+  `design_review` and `design_matches` over every contract item's files. A match (public
+  contract, persisted data, security boundary) is shown to the operator at the contract
+  checkpoint with the item named; it never changes `escalate` or the heavy flag.
 
 ## The haiku bar
 
-Whatever model cooks it, a first-attempt packet clears all of this or is **split further**:
+Whatever model cooks it, a first-attempt packet clears all of this or is **split further** (D11:
+these limits are a backstop, not where the seams go):
 
 - Touches **1–3 named files** (plus its own new test file).
 - **≤ ~150 changed lines** expected.
@@ -197,12 +224,16 @@ decomposition costs far more than one sonnet pass, and the tier already priced t
 
 ## The planning checkpoint
 
-Show the user the plan (item titles, DAG edges, wave layout, heavy flags, plan check verdict
-if any) and get one confirmation before creating branches — the single planning checkpoint.
+One checkpoint per planning level, not one per dish. At `level: contracts`, show the operator the
+contract items (interfaces, the questions decided, the `## Parked` table, design-review matches
+per D12) and get one confirmation before creating branches. When the contracts have merged,
+set `level: implementation`, write the implementation packets, and take one more confirmation
+(item titles, DAG edges, wave layout, heavy flags, plan check verdict if any). A dish with no
+contract item has one level and one checkpoint.
 
 ## Complete when
 
 PLAN.md validates (`brigade-validate`), every packet clears the bar above, the plan check
-(when the tier runs one) is folded in with a disposition row per finding, and the operator has confirmed the plan once. Release
-the dish lease before yielding for that confirmation. After it, never re-plan or re-confirm:
+(when the tier runs one) is folded in with a disposition row per finding, and the operator has confirmed the plan at each level. Release
+the dish lease before yielding for a confirmation. After the last one, never re-plan or re-confirm:
 the next stop is handoff, and `EXECUTE.md` names the only conditions that interrupt it.
