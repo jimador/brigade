@@ -2,6 +2,9 @@
 //
 //   W1  a plan item with more than 4 files warns.
 //   W2  a file listed by 3 or more items that are not done warns.
+//   E1  W1 skips done items.
+//   E2  W1 and W2 skip files git marks linguist-generated.
+//   E3  outside a git work tree nothing counts as generated, so the warnings stay.
 //   W3  `model: haiku` on anything but a cook, or the literal `<model>`, warns on reports,
 //       verdicts, plan checks, briefs and analyst reports.
 //   W4  a report whose Evidence claims a red run or a falsification, with no `mutation:` line,
@@ -16,7 +19,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -24,6 +27,17 @@ const VALIDATE = path.join(ROOT, 'scripts', 'brigade-validate')
 
 function run(name, text) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-mech-'))
+  const file = path.join(dir, name)
+  fs.writeFileSync(file, text)
+  const r = spawnSync(process.execPath, [VALIDATE, file], { encoding: 'utf8' })
+  return { code: r.status, out: r.stdout + r.stderr }
+}
+
+// Like run, but inside a fresh git repo whose .gitattributes marks gen/*.js generated.
+function runInGit(name, text) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-mech-git-'))
+  execFileSync('git', ['init', '-q'], { cwd: dir })
+  fs.writeFileSync(path.join(dir, '.gitattributes'), 'gen/*.js linguist-generated=true\n')
   const file = path.join(dir, name)
   fs.writeFileSync(file, text)
   const r = spawnSync(process.execPath, [VALIDATE, file], { encoding: 'utf8' })
@@ -150,6 +164,46 @@ test('W2: done items do not count toward a chain', () => {
     item('three', ['src/hot.js']),
   ]))
   assert.doesNotMatch(r.out, /is listed by/)
+})
+
+test('E1: a done item with 6 files does not warn', () => {
+  const r = runInGit('PLAN.md', plan([item('landed', ['a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'f.js'], 'done')]))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /lists \d+ files/, r.out)
+})
+
+test('E2: 3 source files plus 3 generated files do not warn', () => {
+  const r = runInGit('PLAN.md', plan([item('bundled', ['a.js', 'b.js', 'a.test.js', 'gen/x.js', 'gen/y.js', 'gen/z.js'])]))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /lists \d+ files/, r.out)
+})
+
+test('E2: the W1 count leaves out generated files', () => {
+  const r = runInGit('PLAN.md', plan([item('wide', ['a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'gen/x.js'])]))
+  assert.ok(r.out.includes('item wide lists 5 files; the packet bar is 1-3 plus its own test (D13)'), r.out)
+})
+
+test('E2: 3 open items sharing only a generated file raise no W2', () => {
+  const r = runInGit('PLAN.md', plan([
+    item('one', ['src/a.js', 'gen/x.js']),
+    item('two', ['src/b.js', 'gen/x.js']),
+    item('three', ['src/c.js', 'gen/x.js']),
+  ]))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /is listed by/, r.out)
+})
+
+test('E3: outside a git repo the same plans still warn', () => {
+  const wide = run('PLAN.md', plan([item('bundled', ['a.js', 'b.js', 'a.test.js', 'gen/x.js', 'gen/y.js', 'gen/z.js'])]))
+  assert.equal(wide.code, 0, wide.out)
+  assert.ok(wide.out.includes('item bundled lists 6 files'), wide.out)
+  const chain = run('PLAN.md', plan([
+    item('one', ['src/a.js', 'gen/x.js']),
+    item('two', ['src/b.js', 'gen/x.js']),
+    item('three', ['src/c.js', 'gen/x.js']),
+  ]))
+  assert.equal(chain.code, 0, chain.out)
+  assert.ok(chain.out.includes('gen/x.js is listed by 3 items'), chain.out)
 })
 
 test('W3: model haiku on a verdict warns and exits 0', () => {

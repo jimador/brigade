@@ -470,15 +470,43 @@ function sectionLines(body, heading) {
 const MAX_ITEM_FILES = 4
 const CHAIN_ITEMS = 3
 
+// The files in `paths` that git marks generated (`linguist-generated` set or true), asked in one
+// batched `git check-attr` from the plan's repo. Generated files, like the bundled workflows, are
+// rewritten by a script rather than edited, so they say nothing about an item's size. Without git,
+// or outside a work tree, nothing counts as generated and the lookup never fails the validator.
+function generatedFiles(planFile, paths) {
+  const generated = new Set()
+  if (!planFile || paths.length === 0) return generated
+  let out
+  try {
+    out = execFileSync('git', ['check-attr', '-z', 'linguist-generated', '--', ...paths], {
+      cwd: planRepo(planFile),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return generated
+  }
+  // With -z the output is path, attribute, value, each ended by a NUL.
+  const parts = out.split('\0')
+  for (let i = 0; i + 2 < parts.length; i += 3) {
+    if (parts[i + 2] === 'set' || parts[i + 2] === 'true') generated.add(parts[i])
+  }
+  return generated
+}
+
 // W1 and W2: an item listing too many files, and a file that 3 or more open items all list.
-function checkItemFiles(items, warnings) {
+// Done items cannot act on W1, and generated files count toward neither warning.
+function checkItemFiles(items, warnings, planFile) {
+  const generated = generatedFiles(planFile, [...new Set(items.flatMap((item) => item.files))])
   const byFile = new Map()
   for (const item of items) {
-    const files = [...new Set(item.files)]
-    if (item.files.length > MAX_ITEM_FILES) {
-      warnings.push(`item ${item.slug} lists ${item.files.length} files; the packet bar is 1-3 plus its own test (D13)`)
-    }
     if (item.status === 'done') continue
+    const files = [...new Set(item.files)].filter((f) => !generated.has(f))
+    const count = item.files.filter((f) => !generated.has(f)).length
+    if (count > MAX_ITEM_FILES) {
+      warnings.push(`item ${item.slug} lists ${count} files; the packet bar is 1-3 plus its own test (D13)`)
+    }
     for (const f of files) {
       if (!byFile.has(f)) byFile.set(f, [])
       byFile.get(f).push(item.slug)
@@ -944,7 +972,7 @@ function validateFile(file, ticketPath = null) {
       // parser cannot read the plan, the C1 rules are skipped with one warning, never an error.
       const plan = parsePlan(text)
       // The parser returns every item it could read even when it reports errors elsewhere.
-      checkItemFiles(plan.items, warnings)
+      checkItemFiles(plan.items, warnings, file)
       if (plan.errors.length > 0) {
         warnings.push(`C1 checks skipped: ${plan.errors[0]}`)
       } else {
