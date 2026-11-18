@@ -140,12 +140,15 @@ function quoteEnd(line, from, ch) {
 // wrap onto later lines), `#` comments, and `{ }` / `[ ]` nesting. Text inside a string or a
 // comment never becomes a key, so a summary can never supply or hide an `id` or `severity`.
 //
-// A key is a plain or quoted word followed by `:` and then a space, the end of the line, or
-// (after a quoted key) the value itself. Keys at the entry's own level go in `top`: the
+// A key is a plain or quoted word followed by `:` and then a space, the end of the line,
+// (after a quoted key) the value itself, or (inside braces or brackets) a `[` or `{` that
+// opens the value. Keys at the entry's own level go in `top`: the
 // fields of a block entry, lined up under its first key, or the fields inside a
 // `- { ... }` entry's own braces. Keys nested deeper go in `deep`. Each key keeps its first
 // value as the raw text: a quoted value with its quotes, a `[...]` or `{...}` value as written,
 // and an empty string when the key has no value. A value may start on the line after its key.
+// A `[...]` or `{...}` value is read up to its own closer, even when it holds more brackets,
+// so `severity: { values: [bogus] }` comes back whole and fails the enum check.
 //
 // A deeper `- ` line outside any string or bracket (a nested block list item, such as one
 // of an item's attempts) starts a new part with its own fields, so one part comes back per
@@ -166,7 +169,9 @@ function entryFields(lines) {
   let at = 'item'
   let pending = null // the key whose value comes next: { name, top }
   let quote = null // an open quoted string: { ch, row, col, role }
-  let capture = null // a bracketed value being read: { key, row, col, depth }
+  // The bracketed values being read, innermost last: { key, row, col, depth }. A value that
+  // holds another bracketed value keeps its place here until its own closer.
+  let captures = []
   let flowEntry = null // true for a `- { ... }` entry, false for a block entry
   let outerClosed = false
   let keyCol = null // the column of a block entry's own keys
@@ -267,7 +272,7 @@ function entryFields(lines) {
         deep = new Map()
         stack = []
         at = 'item'
-        capture = null
+        captures = []
         flowEntry = null
         outerClosed = false
         keyCol = null
@@ -317,9 +322,10 @@ function entryFields(lines) {
         if (at === 'value') settle('')
         stack.pop()
         if (flowEntry && stack.length === 0) outerClosed = true
+        const capture = captures.at(-1)
         if (capture && stack.length === capture.depth) {
           record(capture.key, source(capture.row, capture.col, row, i))
-          capture = null
+          captures.pop()
           at = 'after'
         } else {
           at = stack.length > 0 ? 'after' : 'junk'
@@ -328,7 +334,7 @@ function entryFields(lines) {
       }
       if (c === '{' || c === '[') {
         if (at === 'value' && pending) {
-          capture = { key: pending, row, col: i, depth: stack.length }
+          captures.push({ key: pending, row, col: i, depth: stack.length })
           pending = null
         }
         stack.push(c)
@@ -349,7 +355,9 @@ function entryFields(lines) {
       }
       // A plain word or phrase. In braces or brackets it stops at a comma or bracket; on a
       // block line it runs to the end of the line, or to a comma once the line has moved on
-      // to keys after one. It stops at `: ` where a key may stand.
+      // to keys after one. It stops at `: ` where a key may stand, and inside braces or
+      // brackets also at a `:` right before `[` or `{`, which YAML's flow style reads as a
+      // key whose value is that collection: `{ depends_on:[a] }`.
       const stopAtColon = at !== 'value' || stack.at(-1) === '['
       let j = i
       let keyEnd = -1
@@ -358,7 +366,8 @@ function entryFields(lines) {
         if (d === '#' && /\s/.test(line[j - 1])) break
         if (flow && '[]{},'.includes(d)) break
         if (inline && !flow && d === ',') break
-        if (d === ':' && stopAtColon && (j + 1 === line.length || /\s/.test(line[j + 1]))) {
+        const next = line[j + 1]
+        if (d === ':' && stopAtColon && (j + 1 === line.length || /\s/.test(next) || (flow && (next === '[' || next === '{')))) {
           keyEnd = j
           break
         }

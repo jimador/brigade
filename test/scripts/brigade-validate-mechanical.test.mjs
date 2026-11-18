@@ -26,6 +26,10 @@
 //       wrapped string are all read the way YAML reads them.
 //   E3  text inside a string or comment never becomes a key; the plan items corpus reads
 //       exactly the real slugs, statuses, depends_on and triggers.
+//   E1  inside braces or brackets a `:` right before `[` or `{` ends a key, so
+//       `depends_on:[missing]` is read and its unknown slug fails the plan.
+//   E2  a bracketed value keeps its capture until its own closer, so an enum field
+//       (severity, status, trigger) whose value is a collection is reported invalid.
 //   I1  warnings never change the exit code, and clean files get no new message.
 //
 // Each test writes throwaway files and runs the real validator on them.
@@ -461,6 +465,11 @@ const CORPUS = [
     '  - { "summary":"one", id: F1, severity: low }',
     '  - { "summary":"two", "id": F1, severity: low }',
   ], ['F1', 'F1'], ['low', 'low'], 'duplicate finding id: F1'],
+  ['a severity whose value is a collection holding a list', [
+    '  - id: F1',
+    '    severity: { values: [bogus] }',
+    '  - { id: F2, severity: [high] }',
+  ], ['F1', 'F2'], ['{ values: [bogus] }', '[high]'], 'invalid finding severity: { values: [bogus] }'],
 ]
 
 test('adversarial corpus', async (t) => {
@@ -487,14 +496,15 @@ function planLines(lines, slugs) {
     + slugs.map((s) => `\n## Packet: ${s}\n\nDo the thing.\n`).join('')
 }
 
-// Each case is a plan's items list and the slugs, statuses, depends_on and triggers the
-// validator must read from it; every case is a valid plan.
+// Each case is a plan's items list, the slugs, statuses, depends_on and triggers the
+// validator must read from it, and the problem the full validator must report on it
+// (null = a valid plan).
 const PLAN_CORPUS = [
   ['flow items with depends_on: [a, b]', [
     '  - { slug: a, status: done, depends_on: [], files: [a.js], attempts: [{ model: haiku, trigger: initial, result: done }] }',
     '  - { slug: b, status: todo, depends_on: [a], files: [b.js] }',
     '  - { slug: c, status: todo, depends_on: [a, b], files: [c.js], note: "slug: fake, status: bogus" }',
-  ], ['a', 'b', 'c'], ['done', 'todo', 'todo'], ['[]', '[a]', '[a, b]'], ['initial']],
+  ], ['a', 'b', 'c'], ['done', 'todo', 'todo'], ['[]', '[a]', '[a, b]'], ['initial'], null],
   ['block items', [
     '  - slug: a',
     '    status: todo',
@@ -514,11 +524,21 @@ const PLAN_CORPUS = [
     '      - model: sonnet',
     '        trigger: fail-retry',
     '        result: failed',
-  ], ['a', 'b'], ['todo', 'todo'], ['[]', '[a]'], ['initial', 'fail-retry']],
+  ], ['a', 'b'], ['todo', 'todo'], ['[]', '[a]'], ['initial', 'fail-retry'], null],
+  ['depends_on with no space before its flow list', [
+    '  - { slug: a, status: todo, depends_on:[missing], files: [a.js] }',
+    '  - { slug: b, status: todo, depends_on:{ x: y }, files: [b.js] }',
+  ], ['a', 'b'], ['todo', 'todo'], ['[missing]', '{ x: y }'], [], 'depends_on references unknown slug: missing'],
+  ['a status and a trigger whose values are collections', [
+    '  - { slug: a, status: { value: [todo] }, files: [a.js], attempts: [{ model: haiku, trigger: [initial] }] }',
+    '  - slug: b',
+    '    status: [done]',
+    '    files: [b.js]',
+  ], ['a', 'b'], ['{ value: [todo] }', '[done]'], [], ['[initial]'], 'invalid item status: { value: [todo] }'],
 ]
 
 test('plan items corpus', async (t) => {
-  for (const [name, lines, slugs, statuses, deps, triggers] of PLAN_CORPUS) {
+  for (const [name, lines, slugs, statuses, deps, triggers, problem] of PLAN_CORPUS) {
     await t.test(name, () => {
       const fm = ['doc: plan', 'items:', ...lines, 'source: local']
       assert.deepEqual(readField(fm, 'items', 'slug'), slugs)
@@ -526,7 +546,12 @@ test('plan items corpus', async (t) => {
       assert.deepEqual(readField(fm, 'items', 'depends_on'), deps)
       assert.deepEqual(readField(fm, 'items', 'trigger'), triggers)
       const r = run('PLAN.md', planLines(lines, slugs))
-      assert.equal(r.code, 0, r.out)
+      if (problem === null) {
+        assert.equal(r.code, 0, r.out)
+      } else {
+        assert.equal(r.code, 1, r.out)
+        assert.ok(r.out.includes(problem), r.out)
+      }
     })
   }
 })
