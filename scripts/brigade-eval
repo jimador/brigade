@@ -6,13 +6,21 @@
 // model call. This file is the engine: discovery, validation, assertion evaluation
 // (mechanical and semantic), mock mode, the live API path, and the results file.
 //
+// Every run also leaves a record beside the results file, so a result can be checked
+// later: .brigade/evals/eval-<stamp>/<case>/<run>/ holds response.txt (what the model
+// said), files/ (every file the run wrote) and trace.json (tools called with counts,
+// files read, files written). The api and cli backends give the model no tools, so their
+// files/ stays empty and their trace lists only tool calls the reply itself carried.
+//
 // Usage:
 //   brigade-eval [--json] [--only <case-name>] [--list]
 //
 // Env:
 //   ANTHROPIC_API_KEY   set -> calls go straight to the Messages API
 //   BRIGADE_EVAL_MOCK    a directory of canned responses — makes runs hermetic for tests;
-//                        wins over everything else below
+//                        wins over everything else below. Per case: <case>.txt (the reply),
+//                        optionally <case>.tools.json (an array of {"tool", "input"} calls)
+//                        and <case>.files/ (the files the run wrote)
 //   BRIGADE_EVAL_CLAUDE  overrides the `claude` binary path for the CLI fallback backend
 //                        (tests point this at a fake); unset means "look up `claude` on PATH"
 //   CLAUDE_PROJECT_DIR   repo root; falls back to cwd
@@ -279,6 +287,14 @@ async function callMessagesAPI(body) {
   }
 }
 
+// Tool calls a Messages API reply carried, as { tool, input } — its tool_use blocks.
+function extractToolCalls(json) {
+  const blocks = Array.isArray(json && json.content) ? json.content : []
+  return blocks
+    .filter((b) => b && b.type === 'tool_use' && typeof b.name === 'string')
+    .map((b) => ({ tool: b.name, input: b.input ?? {} }))
+}
+
 // ---- backend selection ----
 
 // Which `claude` binary a cli-backend call should spawn — BRIGADE_EVAL_CLAUDE, when set, is
@@ -389,11 +405,16 @@ function runClaudeCli(binary, { model, systemPrompt, prompt }) {
 async function getSubjectResponse(testCase, backend, mockDir, cliBinary, surfaceText, resolvedModel) {
   if (backend === 'mock') {
     const file = path.join(mockDir, `${testCase.name}.txt`)
+    let text
     try {
-      return { text: fs.readFileSync(file, 'utf8') }
+      text = fs.readFileSync(file, 'utf8')
     } catch {
       return { error: `missing mock response file: ${file}` }
     }
+    const calls = readMockToolCalls(path.join(mockDir, `${testCase.name}.tools.json`))
+    if (calls.error) return { error: calls.error }
+    const filesDir = path.join(mockDir, `${testCase.name}.files`)
+    return { text, calls: calls.calls, filesDir: isDirectory(filesDir) ? filesDir : null }
   }
   if (backend === 'cli') {
     return runClaudeCli(cliBinary, {
@@ -409,7 +430,42 @@ async function getSubjectResponse(testCase, backend, mockDir, cliBinary, surface
     messages: [{ role: 'user', content: testCase.prompt }],
   })
   if (result.error) return { error: result.error }
-  return { text: extractText(result.json) }
+  return { text: extractText(result.json), calls: extractToolCalls(result.json) }
+}
+
+function isDirectory(p) {
+  try {
+    return fs.statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+// A mock's optional tool calls: no file means no calls; a file that isn't a JSON array of
+// { tool (or name), input } objects is an error, so a broken fixture never reads as "no tools".
+function readMockToolCalls(file) {
+  let raw
+  try {
+    raw = fs.readFileSync(file, 'utf8')
+  } catch {
+    return { calls: [] }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    return { error: `invalid mock tools file ${file}: ${err.message}` }
+  }
+  if (!Array.isArray(parsed)) return { error: `invalid mock tools file ${file}: must be a JSON array` }
+  const calls = []
+  for (const c of parsed) {
+    const tool = c && (c.tool ?? c.name)
+    if (typeof tool !== 'string' || tool.length === 0) {
+      return { error: `invalid mock tools file ${file}: every entry needs a "tool" name` }
+    }
+    calls.push({ tool, input: c.input ?? {} })
+  }
+  return { calls }
 }
 
 // ---- judge (semantic assertions) ----
@@ -522,13 +578,16 @@ async function runCase(testCase, root, backend, mockDir, cliBinary) {
   const subject = await getSubjectResponse(testCase, backend, mockDir, cliBinary, surfaceText, resolvedModel)
   if (subject.error) {
     return {
-      name: testCase.name,
-      status: 'error',
-      model: resolvedModel,
-      backend,
-      duration_ms: Date.now() - start,
-      assertions: [],
-      detail: subject.error,
+      result: {
+        name: testCase.name,
+        status: 'error',
+        model: resolvedModel,
+        backend,
+        duration_ms: Date.now() - start,
+        assertions: [],
+        detail: subject.error,
+      },
+      subject,
     }
   }
 
@@ -538,13 +597,82 @@ async function runCase(testCase, root, backend, mockDir, cliBinary) {
   }
   const status = assertions.some((a) => a.errored) ? 'error' : assertions.some((a) => !a.pass) ? 'fail' : 'pass'
   return {
-    name: testCase.name,
-    status,
-    model: resolvedModel,
-    backend,
-    duration_ms: Date.now() - start,
-    assertions: assertions.map(({ type, value, pass, detail }) => ({ type, value, pass, detail })),
+    result: {
+      name: testCase.name,
+      status,
+      model: resolvedModel,
+      backend,
+      duration_ms: Date.now() - start,
+      assertions: assertions.map(({ type, value, pass, detail }) => ({ type, value, pass, detail })),
+    },
+    subject,
   }
+}
+
+// ---- run records (what each run said, wrote and did) ----
+
+const READ_TOOLS = new Set(['Read', 'NotebookRead'])
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+
+function toolPath(input) {
+  if (!input || typeof input !== 'object') return null
+  for (const key of ['file_path', 'notebook_path', 'path']) {
+    if (typeof input[key] === 'string' && input[key].length > 0) return input[key]
+  }
+  return null
+}
+
+// The trace summary: how often each tool was called, which files the run read, and which
+// it wrote — the paths its write calls named plus every file actually kept under files/.
+function buildTrace(calls, keptFiles) {
+  const tools = {}
+  const read = new Set()
+  const written = new Set(keptFiles)
+  for (const { tool, input } of calls) {
+    tools[tool] = (tools[tool] || 0) + 1
+    const p = toolPath(input)
+    if (!p) continue
+    if (READ_TOOLS.has(tool)) read.add(p)
+    if (WRITE_TOOLS.has(tool)) written.add(p)
+  }
+  return { tools, files_read: [...read].sort(), files_written: [...written].sort() }
+}
+
+// Every regular file under dir, as sorted forward-slash paths relative to it.
+function listFiles(dir, prefix = '') {
+  const out = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) out.push(...listFiles(path.join(dir, entry.name), rel))
+    else if (entry.isFile()) out.push(rel)
+  }
+  return out.sort()
+}
+
+// A case name as one safe path segment, so a name with a slash can't climb out of the run dir.
+function caseDirName(name) {
+  const safe = name.replace(/[^\w.-]+/g, '-')
+  return safe === '.' || safe === '..' || safe === '' ? '_' : safe
+}
+
+// Writes one run's record under recordRoot/<case>/<run>/ and returns that dir. A run that
+// errored before it got a reply still gets a record, with an empty trace and its error.
+function writeRunRecord(recordRoot, result, subject, run) {
+  const dir = path.join(recordRoot, caseDirName(result.name), String(run))
+  const filesDir = path.join(dir, 'files')
+  fs.mkdirSync(filesDir, { recursive: true })
+  if (typeof subject.text === 'string') fs.writeFileSync(path.join(dir, 'response.txt'), subject.text)
+  if (subject.filesDir) fs.cpSync(subject.filesDir, filesDir, { recursive: true })
+  const trace = {
+    case: result.name,
+    run,
+    backend: result.backend,
+    status: result.status,
+    ...buildTrace(subject.calls || [], listFiles(filesDir)),
+  }
+  if (subject.error) trace.error = subject.error
+  fs.writeFileSync(path.join(dir, 'trace.json'), `${JSON.stringify(trace, null, 2)}\n`)
+  return dir
 }
 
 // ---- results file ----
@@ -553,8 +681,12 @@ function compactTimestamp(d) {
   return d.toISOString().replace(/[-:]/g, '').replace('.', '')
 }
 
+function resultsDir(root) {
+  return path.join(root, '.brigade', 'evals')
+}
+
 function writeResults(root, summary, cases, now) {
-  const dir = path.join(root, '.brigade', 'evals')
+  const dir = resultsDir(root)
   fs.mkdirSync(dir, { recursive: true })
   const doc = { summary, cases }
   const text = `${JSON.stringify(doc, null, 2)}\n`
@@ -612,14 +744,23 @@ async function main() {
     return 0
   }
 
+  // Records go in a folder named like this invocation's results file, right beside it. Each
+  // case runs once today, so every record is run 1.
+  const now = new Date()
+  const recordRoot = path.join(resultsDir(root), `eval-${compactTimestamp(now)}`)
   const results = []
-  for (const c of cases) results.push(await runCase(c, root, backend, mockDir, cliBinary))
+  for (const c of cases) {
+    const { result, subject } = await runCase(c, root, backend, mockDir, cliBinary)
+    const recordDir = writeRunRecord(recordRoot, result, subject, 1)
+    result.record = path.relative(root, recordDir).split(path.sep).join('/')
+    results.push(result)
+  }
   const summary = {
     pass: results.filter((r) => r.status === 'pass').length,
     fail: results.filter((r) => r.status === 'fail').length,
     error: results.filter((r) => r.status === 'error').length,
   }
-  const resultsPath = writeResults(root, summary, results, new Date())
+  const resultsPath = writeResults(root, summary, results, now)
 
   if (json) {
     console.log(JSON.stringify({ summary, cases: results }))
