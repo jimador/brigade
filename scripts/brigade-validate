@@ -107,12 +107,54 @@ function listEntries(fm, listKey) {
 // Pulls one `field: value` per list entry (block or inline style, wrapped lines included).
 // Values are single tokens or bracketed lists; the lookahead stops before the next key so
 // a wrapped entry's following fields are never misread as part of the value.
+// The key is looked for only in real YAML: text inside a quoted string or after a `#`
+// comment is blanked out first, so a summary that says "the id: field" is never read as
+// the id. Blanking keeps every line the same length, so the value is then read from the
+// untouched text at the same spot and a quoted value still comes back with its quotes.
 function nestedFieldValues(fm, listKey, field) {
+  // One line at a time, because entries are joined with spaces and a comment has to end
+  // at its own line. A quote only opens where a YAML value can start, so the apostrophe
+  // in an unquoted `don't` is just text.
+  const blank = (line) => {
+    const out = line.split('')
+    let quote = null
+    // Whether a quote here would open a value: true at the start of the line and after
+    // `:`, `[`, `{`, `,` or a list dash, false once any other text has appeared.
+    let valueStart = true
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i]
+      if (quote === null && c !== '"' && c !== "'" && c !== '#' && !/\s/.test(c)) {
+        valueStart = ':[{,'.includes(c) || (c === '-' && (i === 0 || /\s/.test(line[i - 1])))
+        continue
+      }
+      if (quote === '"') {
+        if (c === '\\') { out[i] = '_'; if (i + 1 < line.length) out[++i] = '_'; continue }
+        if (c === '"') { quote = null; valueStart = false; continue }
+        out[i] = '_'
+      } else if (quote === "'") {
+        if (c === "'" && line[i + 1] === "'") { out[i] = out[i + 1] = '_'; i++; continue }
+        if (c === "'") { quote = null; valueStart = false; continue }
+        out[i] = '_'
+      } else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+        for (let j = i; j < line.length; j++) out[j] = '_'
+        break
+      } else if (c === '"' || c === "'") {
+        if (valueStart) quote = c
+        else valueStart = false
+      }
+    }
+    return out.join('')
+  }
+  const key = new RegExp(`(?:^|[\\s{,])${field}:`)
+  const value = /^\s*(\[[^\]]*\]|"[^"]*"|[^,}\s]+)/
+  const raw = listEntries(fm, listKey)
+  const masked = listEntries(fm.map(blank), listKey)
   const values = []
-  const pattern = new RegExp(`(?:^|[\\s{,])${field}:\\s*(\\[[^\\]]*\\]|"[^"]*"|[^,}\\s]+)`)
-  for (const entry of listEntries(fm, listKey)) {
-    const m = entry.match(pattern)
-    if (m && m[1]) values.push(m[1].trim())
+  for (let n = 0; n < raw.length; n++) {
+    const m = masked[n].match(key)
+    if (!m) continue
+    const v = raw[n].slice(m.index + m[0].length).match(value)
+    if (v && v[1]) values.push(v[1].trim())
   }
   return values
 }
@@ -543,14 +585,19 @@ function fencedSectionLines(body, heading) {
   const start = body.findIndex((l) => l.trim() === heading || l.startsWith(`${heading} `))
   if (start < 0) return null
   const out = []
+  // The open fence's run of backticks or tildes. As in CommonMark, only a bare run of the
+  // same character at least as long closes it, so ``` inside a ```` block is just content.
   let fence = null
   for (let i = start + 1; i < body.length; i++) {
     const line = body[i]
-    const marker = line.match(/^\s*(`{3,}|~{3,})/)
-    if (marker) {
-      if (fence === null) fence = marker[1][0]
-      else if (marker[1][0] === fence) fence = null
-    } else if (fence === null && line.startsWith('## ')) {
+    const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/)
+    if (fence !== null) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && marker[2].trim() === '') {
+        fence = null
+      }
+    } else if (marker) {
+      fence = marker[1]
+    } else if (line.startsWith('## ')) {
       break
     }
     out.push(line)

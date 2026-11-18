@@ -10,6 +10,10 @@
 //   W4  a report whose Evidence claims a red run or a falsification, with no `mutation:` line,
 //       warns.
 //   P1  a verdict that repeats a finding id fails.
+//   E1  finding fields are read from the real key, never from `id:` text inside a quoted
+//       string or a `#` comment.
+//   E2  a fence closes only on a bare line of the same character, at least as long as the
+//       opener, so a three-backtick line inside a four-backtick block is content.
 //   I1  warnings never change the exit code, and clean files get no new message.
 //
 // Each test writes throwaway files and runs the real validator on them.
@@ -98,7 +102,7 @@ Nothing.
 function verdict({ model = 'claude-opus-5-5', findings = [] } = {}) {
   const list = findings.length === 0
     ? 'findings: []'
-    : 'findings:\n' + findings.map((id) => `  - { id: ${id}, severity: low, summary: nit }`).join('\n')
+    : 'findings:\n' + findings.map((f) => `  - ${f.startsWith('{') ? f : `{ id: ${f}, severity: low, summary: nit }`}`).join('\n')
   return `---
 doc: verdict
 schema: 1
@@ -116,7 +120,7 @@ ${list}
 PASS.
 
 ## Findings
-${findings.length === 0 ? 'None.' : findings.map((id) => `- ${id}: nit.`).join('\n')}
+${findings.length === 0 ? 'None.' : findings.map((f) => `- ${f}: nit.`).join('\n')}
 
 ## Evidence check
 Gate re-run, all green.
@@ -256,6 +260,50 @@ test('P1: a repeated finding id fails with the exact text', () => {
   const r = run('widget-verdict.md', verdict({ findings: ['F1', 'F2', 'F1'] }))
   assert.equal(r.code, 1, r.out)
   assert.ok(r.out.includes('duplicate finding id: F1'), r.out)
+})
+
+test('E1: "id:" inside a quoted summary is not read as the finding id', () => {
+  const r = run('widget-verdict.md', verdict({
+    findings: [
+      '{ summary: "The id: field is wrong here", id: F1, severity: low }',
+      '{ summary: \'The id: field is also odd\', id: F2, severity: low }',
+    ],
+  }))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /duplicate finding id/, r.out)
+})
+
+test('E1: "id:" after a # comment is not read either, and a real duplicate still fails', () => {
+  const ok = run('widget-verdict.md', verdict({
+    findings: ['{ # id: F9\n      id: F1, severity: low }', '{ # id: F9\n      id: F2, severity: low }'],
+  }))
+  assert.equal(ok.code, 0, ok.out)
+  const dup = run('widget-verdict.md', verdict({
+    findings: ['{ summary: "id: X", id: F1, severity: low }', '{ summary: "id: Y", id: F1, severity: low }'],
+  }))
+  assert.equal(dup.code, 1, dup.out)
+  assert.ok(dup.out.includes('duplicate finding id: F1'), dup.out)
+})
+
+test('E1: severity comes from the real field, not from quoted text', () => {
+  const r = run('widget-verdict.md', verdict({
+    findings: ['{ summary: "The severity: bogus", id: F1, severity: low }'],
+  }))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /invalid finding severity/, r.out)
+})
+
+const G3 = 'Red run:\n````\n```js\nconst a = 1\n## quoted heading\n````\nmutation: flipped'
+
+test('E2: a three-backtick line inside a four-backtick block does not close it', () => {
+  const r = run('widget-cook.md', report({ evidence: G3 }))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /red run/, r.out)
+})
+
+test('E2: the same report without the mutation line still warns', () => {
+  const r = run('widget-cook.md', report({ evidence: G3.replace('\nmutation: flipped', '') }))
+  assert.ok(r.out.includes(RED), r.out)
 })
 
 test('I1: clean files get no new message', () => {
