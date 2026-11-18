@@ -2,7 +2,9 @@
 // else that describes a verdict agrees with it. One test per guarantee:
 //   E1  brigade-validate takes severities, verdict values, keys, budget and sections from the module
 //   E2  the workflows get the same doc text and return schema, and the bundler catches drift
-//   E3  SCHEMAS.md's verdict section matches the module, and stops matching when either side moves
+//   E3  SCHEMAS.md's verdict section matches the module, and stops matching when either side moves;
+//       its body-section list must equal the module's list exactly, so an added, dropped or
+//       reordered section on either side fails
 //   I1  scripts/brigade-bundle --check passes on the committed tree
 // Set BRIGADE_SCHEMAS_MODULE to a scratch copy of the module to see the checks against it.
 // Run with `node --test test/scripts/*.test.mjs`.
@@ -42,6 +44,24 @@ function verdictSection(md) {
   return md.slice(start, next < 0 ? md.length : next)
 }
 
+// The backticked `## …` names in the "Body sections, in order:" sentence, in the order written.
+// The sentence ends at the first full stop outside parentheses, so the notes in brackets after
+// each name stay part of it. Takes prose with its whitespace already collapsed.
+function bodySections(prose) {
+  const lead = 'Body sections, in order:'
+  const start = prose.indexOf(lead)
+  if (start < 0) return []
+  let depth = 0
+  let end = prose.length
+  for (let i = start + lead.length; i < prose.length; i++) {
+    const c = prose[i]
+    if (c === '(') depth++
+    else if (c === ')') depth = Math.max(0, depth - 1)
+    else if (c === '.' && depth === 0) { end = i; break }
+  }
+  return [...prose.slice(start, end).matchAll(/`(## [^`]+)`/g)].map((m) => m[1])
+}
+
 // Everything in SCHEMAS.md's verdict section that disagrees with the module, one line each.
 function mismatches(mod, md) {
   const out = []
@@ -64,11 +84,9 @@ function mismatches(mod, md) {
   }
   const prose = section.replace(/\s+/g, ' ')
   if (!prose.includes(`Budget: ≤ ${mod.VERDICT.budget} lines.`)) out.push(`budget ${mod.VERDICT.budget} not stated in SCHEMAS.md`)
-  let from = 0
-  for (const s of mod.VERDICT.sections) {
-    const at = prose.indexOf('`' + s + '`', from)
-    if (at < 0) out.push(`section ${s} missing or out of order in SCHEMAS.md`)
-    else from = at
+  const listed = bodySections(prose)
+  if (JSON.stringify(listed) !== JSON.stringify(mod.VERDICT.sections)) {
+    out.push(`sections: SCHEMAS.md has ${listed.join(',')}, module has ${mod.VERDICT.sections.join(',')}`)
   }
   if (!section.includes(mod.VERDICT.doc)) out.push('VERDICT.doc does not appear verbatim in SCHEMAS.md\'s verdict section')
   return out
@@ -157,11 +175,20 @@ test('E3 the comparison fails when either side changes', () => {
   assert.ok(mismatches(otherBudget, SCHEMAS_MD).some((m) => m.startsWith('budget')))
   const otherDoc = mutated({ VERDICT: { ...VERDICT, doc: VERDICT.doc.replace('Analyst.', 'Analyst, Scout.') } })
   assert.ok(mismatches(otherDoc, SCHEMAS_MD).some((m) => m.startsWith('VERDICT.doc')))
+  const droppedSection = mutated({ VERDICT: { ...VERDICT, sections: VERDICT.sections.slice(0, -1) } })
+  assert.ok(mismatches(droppedSection, SCHEMAS_MD).some((m) => m.startsWith('sections')))
+  const extraSection = mutated({ VERDICT: { ...VERDICT, sections: [...VERDICT.sections, '## Notes'] } })
+  assert.ok(mismatches(extraSection, SCHEMAS_MD).some((m) => m.startsWith('sections')))
+  const swappedSections = mutated({ VERDICT: { ...VERDICT, sections: [VERDICT.sections[1], VERDICT.sections[0], ...VERDICT.sections.slice(2)] } })
+  assert.ok(mismatches(swappedSections, SCHEMAS_MD).some((m) => m.startsWith('sections')))
 
   const mdSeverity = SCHEMAS_MD.replace('severity: blocking|high|medium|low', 'severity: blocking|high|low')
   assert.ok(mismatches(schemas, mdSeverity).some((m) => m.startsWith('severities')))
   const mdKey = SCHEMAS_MD.replace('reran_gate: true ', 'reran: true ')
   assert.ok(mismatches(schemas, mdKey).some((m) => m.startsWith('keys')))
+  const mdDroppedSection = SCHEMAS_MD.replace(', `## Evidence\ncheck` (what was re-run, verbatim result tail)', '')
+  assert.notEqual(mdDroppedSection, SCHEMAS_MD)
+  assert.ok(mismatches(schemas, mdDroppedSection).some((m) => m.startsWith('sections')))
 })
 
 test('I1 scripts/brigade-bundle --check passes', () => {
