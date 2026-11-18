@@ -66,6 +66,22 @@ Two rules that are easy to miss:
 - **Fail loudly with the exact path or id.** A silently skipped ticket with an unknown
   status is worse than a stopped run.
 
+## OpenSpec changes as ticket input (experimental)
+
+A ticket may point at an OpenSpec change folder, `openspec/changes/<name>/`. Brigade reads the
+files as plain markdown and needs no CLI and no adapter:
+
+- `proposal.md`: `## Why` and `## What Changes` become the ticket's Goal.
+- Delta specs (`specs/<capability>/spec.md`): each `#### Scenario:` with its **WHEN** / **THEN**
+  bullets is an acceptance criterion and a contract-test case.
+- `tasks.md`: a hint for the plan's `## Proposed breakdown`, never a second plan. `PLAN.md`
+  stays the one plan.
+- `design.md`: its Decisions are input to the decision record.
+
+Brigade never runs `openspec archive`; the operator does, because the merge rules for deltas
+exist only in the CLI. Formats as of OpenSpec 2.1.0, which churns (2.0.0 replaced command files
+with skills): see E-016 in [`experiments.md`](experiments.md).
+
 ## Comments are for humans
 
 Everything brigade posts to a board is read by people who are not in the session: plain

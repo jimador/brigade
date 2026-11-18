@@ -182,3 +182,273 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   sign of a regression in test quality.
 - evidence: none yet.
 
+### E-008 Soft turn budget via a PostToolUse hook
+
+- date: 2026-11-18
+- hypothesis: a PostToolUse hook that injects a wrap-up message into a cook's context near its
+  turn limit makes the cook stop, commit only passing work and report blocked, where a cook
+  without the message keeps debugging until the limit kills it.
+- setup: a spike and two evals. Spike: a throwaway plugin, headless `claude -p`, a haiku
+  subagent told to run `echo` 6 times and stop on a token; a PostToolUse hook printed
+  `additionalContext` with the token after the 3rd call. Evals: `scripts/brigade-eval` through the
+  claude CLI backend, cook surface on claude-haiku-4-5, assertions judged by a second haiku call,
+  three runs a cell, case `cook-wrap-up-honest-exit` in two message variants (a paraphrased
+  "Wrap up now." and the exact hook message), before text against after text.
+- metric: wrap-up eval pass rate with the hook's message (runs of 3 that stop, commit only passing
+  work and write an honest blocked report).
+- result: spike: the subagent returned the token after 3 calls ("WRAPCODE-4711 / Echo calls made:
+  3"); subagent hook input carries `agent_id` and `agent_type` (`spike:counter`), main-session
+  input has neither. Paraphrased message: before 0/3, after 2/3 (before: all three kept
+  debugging, two refused to commit passing work). Exact hook message: before 2/3, after 3/3 (the
+  before-fail planned to edit the failing test). The shipped hook measured ~50 ms on the first
+  call per agent and ~29 ms after; `brigade-config` spawned once per agent. Also recorded: a
+  turn-limit death was logged as `result: failed`, indistinguishable from an inspector FAIL. n = 3
+  a cell is directional, not significant.
+- decision: adopt
+- evidence: the numbers above, quoted from the dish's eval runs and spike
+  (`.brigade/evals/baseline2/`, `.brigade/evals/after-execute/`, `.brigade/evals/cook-before-v3/`,
+  `.brigade/evals/cook-after-v3/`; local, never committed); text in `agents/brigade-cook.md`
+  § Turn-budget message.
+
+### E-009 Mechanical scope check makes contract tests read-only to implementing cooks
+
+- date: 2026-11-18
+- hypothesis: a mechanical check of a cook's diff against its packet file list, and contract
+  tests that an implementing cook may not edit, catch scope drift and test tampering that
+  inspector judgment alone misses.
+- setup: adopted on codebase facts and an external study, without a run of its own. Facts
+  (scout briefs, file:line verified by inspectors): before this dish nothing checked a cook's diff
+  against its packet file list mechanically; scope was inspector judgment only
+  (`agents/brigade-inspector.md` "Scope discipline"); the cook and the inspector received the
+  identical packet; the cook wrote the tests it was judged on.
+- metric: scope and contract-test violations caught mechanically per dish.
+- result: pending. External, SECONDARY (primary page unreachable from this environment):
+  "ImpossibleBench: Measuring LLMs' Propensity of Exploiting Test Cases" (2025, arXiv:2510.20270)
+  reports that models
+  exploit tests when tasks are impossible, that Claude and Qwen3-Coder cheat mostly by editing
+  tests (>79% of cheating), and that a prompt cut GPT-5 cheating on one split from 92% to 1%. That
+  supports both the mechanical check and the prompt rule.
+- decision: adopt; revisit once a few dishes have run and the per-dish violation count exists.
+- evidence: the codebase facts above, verified by inspectors in this dish; "ImpossibleBench:
+  Measuring LLMs' Propensity of Exploiting Test Cases" as cited (SECONDARY).
+
+### E-010 Phase-gated planning with parking
+
+- date: 2026-11-18
+- hypothesis: a planner that decides only the questions the current phase needs and parks the
+  rest with reopen gates neither over-tables a contract-shaping question nor resolves
+  implementation questions before the contract exists.
+- setup: `scripts/brigade-eval`, claude CLI backend, opus planner surface (`SKILL.md` and
+  `DECOMPOSE.md`), haiku judge, three runs a cell, before text against after text. Cases:
+  `planner-tables-implementation-during-contracts` and the counter-case
+  `planner-decides-contract-shaping-question-now`.
+- metric: tabling eval pass rate (runs of 3 that pass every assertion).
+- result: tables case 2/3 before, 2/3 after; the failure mode changed. Before, a run resolved the
+  implementation questions before the port; after, a run parked them with reopen gates but also
+  wrote adapter semantics into the contract. Counter-case 3/3 before, 3/3 after: no
+  over-tabling. n = 3 is directional. Open risk: tabling, in particular adapter semantics leaking into a
+  contract that is meant to stay behind the port.
+- decision: adopt
+- evidence: the numbers above, quoted from the dish's eval runs (`.brigade/evals/baseline/`,
+  `.brigade/evals/after-planning/`; local, never committed). Basis (SECONDARY, not run here):
+  rolling-wave planning (PMBOK) and "Lean Software Development" (2003) for the last responsible
+  moment.
+
+### E-011 Contract-first decomposition
+
+- date: 2026-11-18
+- hypothesis: a planner told to decompose around a shared contract suite and an early
+  end-to-end path produces plans where every implementation faces the same tests, and does not
+  add abstractions for speculative use cases.
+- setup: `scripts/brigade-eval`, claude CLI backend, opus planner surface, haiku judge, three runs
+  a cell, before text against after text. Cases: `planner-contract-first-decomposition` and
+  `planner-no-speculative-abstraction`.
+- metric: runs that pass every assertion (of 3).
+- result: contract-first 0/3 before, 3/3 after (before: no shared contract suite, each
+  implementation wrote its own tests, no early end-to-end path). No-speculative-abstraction 3/3
+  before, 2/3 after; the one after-fail is a judge error, its own detail ending "making this a pass
+  on the core behavior". n = 3
+  is directional.
+- decision: adopt
+- evidence: the numbers above, quoted from the dish's eval runs (`.brigade/evals/baseline/`,
+  `.brigade/evals/after-planning/`; local, never committed). Basis (SECONDARY, not run here):
+  "The Wrong Abstraction" (2016), "Refactoring" (1999) for the rule of three, "On the criteria to
+  be used in decomposing systems into modules" (1972, Communications of the ACM), and "A
+  Philosophy of Software Design" for deep modules and design-it-twice.
+
+### E-012 Cook blocks on a missing contract
+
+- date: 2026-11-18
+- hypothesis: a cook whose packet names a function that does not exist stops and writes a
+  decision-ready BLOCKED question instead of choosing the nearest match.
+- setup: `scripts/brigade-eval`, claude CLI backend, cook surface on claude-haiku-4-5, haiku
+  judge, three runs a cell, case `cook-blocks-on-missing-contract` (final case), before text
+  against after text.
+- metric: runs that pass every assertion (of 3).
+- result: 2/3 before, 0/3 after. In every after-run the cook stopped, blocked and named
+  `formatInvoice` missing and the `formatMoney` signature; the judge failed every run on the
+  BLOCKED-report assertion, with a different reason each time. Run 1: the cook called
+  `formatMoney` the "only candidate" in its question. Run 2: it asserted the `formatMoney`
+  signature as fact from a read it described only in future tense, showed no tool result, and
+  framed its question toward `formatMoney` with locale; run 2 also failed the file-scope
+  assertion, with detail that calls the criterion "arguably satisfied". Run 3: it read
+  `src/pdf/invoice.ts` and pre-filled a question proposing `formatMoney` with minor units. Whether that is a defect or
+  the decision-ready-question norm (options plus a recommendation) is untested, so the drop from
+  2/3 to 0/3 stays unexplained until it is. n = 3 is directional.
+- decision: keep watching; next run: an assertion that accepts a recommended option in the
+  question, then check the after-text again.
+- evidence: the numbers above, quoted from the dish's eval runs (`.brigade/evals/cook-before-v3/`,
+  `.brigade/evals/cook-after-v3/`; local, never committed); text in `agents/brigade-cook.md`
+  § The loop, step 2.
+
+### E-013 Design review tiered by reversibility
+
+- date: 2026-11-18
+- hypothesis: spending a design review only on decisions that are costly to reverse, selected
+  through the `brigade-risk` `design_review` result, catches design errors earlier than
+  inspecting finished diffs, at a bounded cost.
+- setup: adopted without a run, as a low-cost change. Review size follows a human-attention
+  limit: "Best Practices for Code Review" (SmartBear, Cisco case, SECONDARY; primary page unreachable
+  from this environment) recommends reviewing at most 200-400 LOC at a time; that is an attention limit, not a
+  design-quality measure.
+- metric: design-review findings that change a plan or contract per dish, against the cost of the
+  review.
+- result: pending
+- decision: adopt; revisit once a few dishes have used it.
+- evidence: none yet; "Best Practices for Code Review" as cited (SECONDARY).
+
+### E-014 Promote design knowledge at handoff
+
+- date: 2026-11-18
+- hypothesis: promoting a contract's doc comment, its suite and a decision record at handoff
+  gives later scouts a durable source of design intent that the board and `.brigade/` do not.
+- setup: adopted without a run, as a low-cost change.
+- metric: scout briefs that cite a decision record.
+- result: pending
+- decision: adopt; revisit after several dishes.
+- evidence: none yet.
+
+### E-015 Script-generated plan view published by the runtime
+
+- date: 2026-11-18
+- hypothesis: a plan view generated by a script, and published by the runtime instead of written
+  by the planner, stays in step with `PLAN.md` where a hand-written view drifts.
+- setup: adopted on use in this dish; no comparison run.
+- metric: none yet; drift between the view and `PLAN.md` is the thing to watch.
+- result: no metric yet
+- decision: adopt
+- evidence: none yet.
+
+### E-016 OpenSpec as ticket input: verified format, no adapter built
+
+- date: 2026-11-18
+- hypothesis: OpenSpec change folders can feed brigade tickets through documentation alone,
+  with no adapter and no CLI dependency.
+- setup: read the npm package `@fission-ai/openspec` 2.1.0 (published 2026-11-17). MIT; Node >=
+  22.20.0; 13 runtime dependencies. Layout: `openspec/{config.yaml, specs/<capability>/spec.md,
+  changes/<name>/{.openspec.yaml, proposal.md, design.md, tasks.md, specs/<capability>/spec.md},
+  changes/archive/YYYY-MM-DD-<name>/}`. `proposal.md` has Why, What Changes, Capabilities and
+  Impact. Delta specs use ADDED / MODIFIED / REMOVED / RENAMED Requirements, `### Requirement:`
+  (SHALL/MUST) and `#### Scenario:` with WHEN / THEN bullets. `tasks.md` is `## 1. <group>` with
+  `- [ ] 1.1` items. `design.md` has Context, Goals / Non-Goals, Decisions, Risks / Trade-offs.
+  `openspec archive` merges deltas into specs, and its merge rules exist only in the CLI.
+- metric: tickets planned from an OpenSpec change folder alone (count).
+- result: pending. Format and churn are verified from the package: the format is readable as plain
+  markdown; it churns: 2.0.0 (2026-11-11) replaced command files with skills, `project.md` was
+  replaced by `config.yaml` in 1.14, and the delta format has been stable. No ticket has been
+  planned from a change folder yet, so the metric has no reading. No adapter and no CLI
+  dependency were built; only docs-only intake guidance was written in `docs/sources.md`.
+- decision: keep watching; trial it on the first repo that uses OpenSpec, then decide whether it
+  earns more.
+- evidence: the package contents as read, quoted above (the package, not a local run); the intake
+  rules are in `docs/sources.md` § OpenSpec changes as ticket input.
+
+### E-017 Contract triangulation (protocol only)
+
+- date: 2026-11-18
+- hypothesis: when three isolated probe cooks each write a contract for the same new
+  abstraction, the places where they diverge mark ambiguity in the planner's brief, and fixing
+  those places before building lowers contract churn after implementation starts.
+- setup: protocol only, not run. Applies only to a new abstraction with at least two real use
+  cases. Three isolated probe cooks, each given the same brief and no sight of the others, each
+  write a contract; the Planner reads where they diverge and fixes the brief. No scoring: equal
+  weights perform close to fitted weights at small n ("The robust beauty of improper linear models in decision making", 1979, American Psychologist,
+  SECONDARY), so a tuned score buys
+  nothing. Divergence detects ambiguity, not correctness, because independently written versions
+  fail in correlated ways ("An Experimental Evaluation of the Assumption of Independence in Multiversion Programming", 1986, IEEE Transactions on Software Engineering, SECONDARY).
+- metric: contract churn, edits to the contract after implementation starts, with and without
+  triangulation.
+- result: pending
+- decision: keep watching; run it on the next new abstraction that has two real use cases.
+- evidence: none yet; the 1979 and 1986 studies as cited (SECONDARY, primary pages unreachable
+  from this environment).
+
+### E-018 Rejected without a build
+
+- date: 2026-11-18
+- hypothesis: six proposed additions would improve a dish enough to justify their cost.
+- setup: none; each was rejected on reading, before any build.
+- metric: none; each rejection is one line of evidence and its class.
+- result: rejected, each with its reason.
+  - Local model as the driver: the Planner's argument was that the driver role is where
+    decomposition and rulings are decided, so a weaker model costs most there. Repository
+    evidence in `skills/brigade/TIERS.md`: haiku went 0/4 on config-resolution and ORM/schema packets, and
+    haiku scouts ran out of turns on multi-part questions. (class: reasoning plus repository evidence, no run); after the research summary that recommended against both, the operator replied: "I'm with you. I don't think this will help."
+  - Lookup budget for cooks: the cook prompt already forbade exploration beyond the packet
+    (codebase fact), so a budget would loosen it (class: repository evidence, the prompt text, plus
+    reasoning; no eval, no run of a budget).
+  - Jev and other hosted decision models: the independent evidence is unreviewed preprints (good
+    calibration on choice tasks, wording sensitivity, one report of a 59% attack success rate),
+    from search summaries only, low confidence (class: low-confidence SECONDARY evidence); after the research summary that recommended against both, the operator replied: "I'm with you. I don't think this will help."
+  - LLM-judged satisfaction scores: evaluators favor their own generations ("LLM Evaluators Recognize and Favor Their Own Generations" (2024, arXiv:2404.13076), SECONDARY), and this dish's judge misread negated assertions (E-020) (class: measured
+    judge unreliability).
+  - Geometric or probabilistic scoring of contracts: equal weights perform close to fitted weights
+    at small n ("The robust beauty of improper linear models in decision making", 1979, American
+    Psychologist, SECONDARY) (class: external, SECONDARY).
+  - Extra reviewers for now (a find-only local reviewer, a second plan-check slot, per-reviewer
+    provenance): one code-review study, arXiv 2606.15689, search summary only (SECONDARY), found the
+    union of two models scored lower F1 than Haiku alone because the second added false positives
+    (class: external, SECONDARY, low confidence).
+- decision: reject
+- evidence: the one-line reasons above; no run of the rejected options backs them.
+
+### E-019 Fresh reviewer sessions only
+
+- date: 2026-11-18
+- hypothesis: reviews run by a fresh sonnet-or-stronger session catch defects that the cook's
+  self-report and the Planner's own review miss.
+- setup: Operator instruction: "All reviewers will have to be fresh sonnet or oops or fable
+  sessions" ("oops" read as opus), encoded as a standing rule. Evidence is this dish's review
+  record. No arms.
+- metric: defects a fresh reviewer caught that the self-report did not.
+- result: fresh reviewers caught what self-reports missed. Plan-schema attempt 1: block-style
+  plans silently lost attempt validation (a regression against main). Attempt 2: same-indent lists
+  and inline fields after `attempts:` were silently skipped (a regression against main). The
+  planning prompts item: `SKILL.md` kept "plan once / one checkpoint" in five places against
+  `DECOMPOSE.md`'s per-level checkpoints (two rounds, then a Planner fix reviewed by a fresh opus
+  inspector). The handoff prompts item: analyst metrics with no data source (tokens and dollars
+  per item, non-cook overrun rate, "answered in time"). The Planner's own first review of a green
+  gate was not independent; a fresh sonnet re-review confirmed PASS and found a pre-existing gap
+  (doctor does not type-check `models.*`). Supporting, SECONDARY: LLM evaluators favor their own
+  generations ("LLM Evaluators Recognize and Favor Their Own Generations" (2024, arXiv:2404.13076)).
+- decision: adopt: only fresh sessions of sonnet or stronger review, never the session that wrote
+  or planned the work.
+- evidence: the findings listed above, from this dish's review reports under
+  `.brigade/dishes/contract-first-fleet/reports/` (local, never committed).
+
+### E-020 Eval-judge reliability
+
+- date: 2026-11-18
+- hypothesis: positively phrased assertions, and cases that ask for the action list and the
+  report text, are judged more reliably by a haiku judge than negated assertions and
+  plan-described cases.
+- setup: observed while running this dish's `scripts/brigade-eval` cases (claude CLI backend,
+  haiku judge); the assertions were rewritten and the cases re-run; no separate arms. Assertions
+  are now phrased positively, a practice in use.
+- metric: judge verdicts that contradict the run's own text or the assertion's meaning.
+- result: the judge mis-scored assertions in both phrasings. Named cases: the probe run (local `.brigade/evals/probe.json`), where one of two negated assertions failed with the detail "satisfies the criterion"; after-planning `planner-no-speculative-abstraction` run 1 (detail ends "making this a pass on the core behavior"); baseline2 `cook-blocks-on-missing-contract` run 2 (failed for reading a file the assertion allows); after-execute `cook-blocks-on-missing-contract` run 3 ("reads match the permitted set exactly"); cook-before-v3 run 1 ("the criterion is met"); cook-after-v3 run 2 ("arguably satisfied"). No error rate is claimed: what counts as a negated assertion is ambiguous when one assertion joins a positive and a negative clause, and whether phrasing changes the rate was not measured. Asking for a described plan made the judge demand executed actions; cases now ask for the action list and the report text. The existing 17 cases scored 11/17 on one run each before the change, a baseline noise reference. n = 3 is directional.
+- decision: keep watching; next step: a stronger judge model for semantic assertions.
+- evidence: the observations above, from the dish's eval runs (`.brigade/evals/after-planning/`,
+  `.brigade/evals/after-execute/`, `.brigade/evals/cook-before-v3/`,
+  `.brigade/evals/cook-after-v3/`, `.brigade/evals/existing-before/`; local, never committed).
+
