@@ -266,5 +266,86 @@
         "value": "the response explains its decision about the interface rather than silently ignoring the request"
       }
     ]
+  },
+  {
+    "name": "pr-sweep-rules-every-comment",
+    "surface": "skills/brigade/HANDOFF.md",
+    "max_tokens": 4096,
+    "prompt": "You are the Planner. The dish's PR #12 came back with review comments and the ticket is now in rework. The packet names `cartTotal()` and its `total` field as part of the public API that callers depend on. The PR has three comments: (a) inline on `src/cart.js:40`: \"this should round half up, not truncate\"; (b) top-level: \"why does the retry loop sleep 5s?\"; (c) inline on `src/cart.js:12`: \"rename `total` to `sum` everywhere\" — renaming would break that public API. Before any code changes, give the plan's `## PR feedback` table (one row per comment, ids PR1, PR2, PR3 in that order) and then the ordered list of actions you take.",
+    "assertions": [
+      {
+        "type": "regex",
+        "value": "\\|\\s*PR1\\s*\\|"
+      },
+      {
+        "type": "regex",
+        "value": "\\|\\s*PR3\\s*\\|"
+      },
+      {
+        "type": "contains",
+        "value": "accept"
+      },
+      {
+        "type": "contains",
+        "value": "clarify"
+      },
+      {
+        "type": "contains",
+        "value": "push-back"
+      },
+      {
+        "type": "semantic",
+        "value": "the response posts a reply on each comment's own thread before making any code change"
+      }
+    ]
+  },
+  {
+    "name": "followup-ticket-has-criteria",
+    "surface": "skills/brigade/HANDOFF.md",
+    "max_tokens": 4096,
+    "prompt": "You are the Planner at handoff. The current ticket is `acme-42` on a local markdown board. One cook report's `## Out of scope` section says: \"noticed: `parseDate` in src/util/date.js accepts Feb 30\". The inspector confirmed it is a real defect outside this dish's scope. Give the plan's `## Follow-ups` row for it (id FU1) and the full text of the new ticket file you create.",
+    "assertions": [
+      {
+        "type": "regex",
+        "value": "\\|\\s*FU1\\s*\\|[^\\n]*filed",
+        "flags": "i"
+      },
+      {
+        "type": "contains",
+        "value": "Acceptance criteria"
+      },
+      {
+        "type": "contains",
+        "value": "acme-42"
+      },
+      {
+        "type": "semantic",
+        "value": "the new ticket has backlog status and a related link to acme-42"
+      }
+    ]
+  },
+  {
+    "name": "ticket-test-plan-carried",
+    "surface": "skills/brigade/DECOMPOSE.md",
+    "max_tokens": 4096,
+    "prompt": "You are the Planner writing the plan for ticket `acme-7`: \"Saving the settings form twice writes duplicate audit entries; save should be idempotent.\" The ticket has this section:\n\n## Test plan\n- run `npm test`\n- open /settings and save twice\n- the audit log shows one entry\n\nWrite the plan's `## Dish` section.",
+    "assertions": [
+      {
+        "type": "regex",
+        "value": "TP1\\.\\s+run"
+      },
+      {
+        "type": "regex",
+        "value": "TP2\\.\\s+open /settings"
+      },
+      {
+        "type": "regex",
+        "value": "TP3\\.\\s+the audit log"
+      },
+      {
+        "type": "contains",
+        "value": "### Ticket test plan"
+      }
+    ]
   }
 ]
