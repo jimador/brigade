@@ -1832,7 +1832,7 @@ const runtime = {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 const fn = new AsyncFunction(...Object.keys(runtime), src)
 fn(...Object.values(runtime)).then((ledger) => {
-  const bad = ledger.items.filter((it) => it.status !== 'blocked' || it.attempts.some((a) => a.result !== 'failed'))
+  const bad = ledger.items.filter((it) => it.status !== 'blocked' || it.attempts.some((a) => a.result !== 'failed' || a.cause !== 'no-result'))
   if (bad.length) { console.error('unexpected ledger: ' + JSON.stringify(ledger)); process.exit(1) }
   if (ledger.stoppedEarly !== true || !/StructuredOutput/.test(String(ledger.reason))) {
     console.error('breaker did not trip on the StructuredOutput failure: ' + JSON.stringify({ stoppedEarly: ledger.stoppedEarly, reason: ledger.reason })); process.exit(1)
@@ -2297,6 +2297,1164 @@ After the packet: the Grep tool and a task here are not checked.
 EOF
 }
 
+test_validate_plan_contract_fields() {
+  fixture="$TMP_ROOT/validate-plan-contract"
+  mkdir -p "$fixture/.brigade/dishes/sample/reports"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  # write_cplan <level line> <impl file> <impl extras> <parked section> <impl attempts> <iface status>
+  write_cplan() {
+    cat >"$plan" <<PLAN_EOF
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-11-18T00:00:00Z
+ticket: TEST-1
+source: local
+$1
+items:
+  - { slug: iface, status: ${6:-done}, depends_on: [], heavy: false, contract: true, files: [src/api.ts], attempts: [] }
+  - { slug: impl, status: todo, depends_on: [iface], heavy: false, $3files: [$2], attempts: [$5] }
+---
+
+## Dish
+Fixture.
+
+## Waves
+- Wave 1: iface, impl
+$4
+## Packet: iface
+Contract.
+
+## Packet: impl
+Implementation.
+PLAN_EOF
+  }
+  run_cplan() { CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$plan" 2>&1; }
+  expect_cplan_fail() { # $1 = message fragment
+    if output="$(run_cplan)"; then fail "plan validated clean, expected: $1: $output"; fi
+    printf '%s\n' "$output" | grep -Fq "$1" || fail "no violation containing '$1': $output"
+  }
+
+  # A plan with none of the new fields validates exactly as before.
+  cat >"$plan" <<'PLAN_EOF'
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-11-18T00:00:00Z
+ticket: TEST-1
+source: local
+items:
+  - { slug: alpha, status: done, depends_on: [], heavy: false, files: [src/a.ts], attempts: [{ model: haiku, trigger: initial, result: done }] }
+---
+
+## Dish
+Fixture.
+
+## Packet: alpha
+Done.
+PLAN_EOF
+  printf -- '---\ndoc: verdict\n---\n' >"$fixture/.brigade/dishes/sample/reports/alpha-verdict.md"
+  printf -- '---\ndoc: verdict\n---\n' >"$fixture/.brigade/dishes/sample/reports/iface-verdict.md"
+  output="$(run_cplan)" || fail "a plan without the contract fields failed: $output"
+  printf '%s\n' "$output" | grep -Fq '1 checked, 0 nonconforming' || fail "plan without contract fields was checked differently: $output"
+
+  # A clean contract plan validates, including every new field value.
+  write_cplan "level: contracts" "src/impl.ts" "" "" "{ model: haiku, trigger: initial, result: failed, cause: turn-limit }, { model: sonnet, trigger: escalation, reason: slip, result: failed, cause: inspector-fail }, { model: sonnet, trigger: answer-retry, result: done }"
+  output="$(run_cplan)" || fail "a clean contract plan failed validation: $output"
+  printf '%s\n' "$output" | grep -Fq 'warn' && fail "a clean contract plan warned: $output"
+
+  write_cplan "level: sideways" "src/impl.ts" "" "" ""
+  expect_cplan_fail 'invalid plan level: sideways'
+  write_cplan "" "src/impl.ts" "contract: maybe, " "" ""
+  expect_cplan_fail 'contract must be true or false'
+  write_cplan "" "src/impl.ts" "" "" "{ model: haiku, trigger: retry, result: failed }"
+  expect_cplan_fail 'invalid attempt trigger: retry'
+  write_cplan "" "src/impl.ts" "" "" "{ model: haiku, trigger: initial, result: failed, cause: vibes }"
+  expect_cplan_fail 'invalid attempt cause: vibes'
+  write_cplan "" "src/impl.ts" "" "" "{ model: haiku, trigger: escalation, reason: laziness, result: failed }"
+  expect_cplan_fail 'invalid attempt reason: laziness'
+  write_cplan "" "src/impl.ts" "" "" "{ model: haiku, trigger: initial, reason: slip, result: failed }"
+  expect_cplan_fail 'reason is only for trigger escalation'
+  # An invalid cause after a valid attempt is still found: every attempt gets the C1 checks.
+  write_cplan "" "src/impl.ts" "" "" "{ model: haiku, trigger: initial, result: failed }, { model: haiku, trigger: initial, result: failed, cause: vibes }"
+  expect_cplan_fail 'invalid attempt cause: vibes'
+
+  write_cplan "" "src/api.ts" "" "" ""
+  expect_cplan_fail 'item impl lists src/api.ts owned by contract item iface; change a merged contract through a new contract item'
+
+  write_cplan "" "src/impl.ts" "" "" "" done
+  run_cplan | grep -Fq 'unmerged contract' && fail "a merged contract was flagged as unmerged"
+  write_cplan "" "src/impl.ts" "" "" "" todo
+  expect_cplan_fail 'packet impl plans implementation for unmerged contract iface; park it until iface merges'
+
+  write_cplan "" "src/impl.ts" "" "
+## Parked
+| id | question | reopens at | raised |
+|----|----------|------------|--------|
+| Q1 | which store? |  | 2026-11-18 |
+" ""
+  expect_cplan_fail 'parked Q1 has an empty "reopens at"'
+  write_cplan "" "src/impl.ts" "" "
+## Parked
+| id | question | reopens at | raised |
+|----|----------|------------|--------|
+| Q1 | which store? | impl | 2026-11-18 |
+| Q1 | which queue? | handoff | 2026-11-18 |
+" ""
+  expect_cplan_fail 'duplicate parked id: Q1'
+
+  write_cplan "" "src/impl.ts" "" "
+## Parked
+| id | question | reopens at | raised |
+|----|----------|------------|--------|
+| Q1 | which store? | ghost | 2026-11-18 |
+| Q2 | which queue? | implementation | 2026-11-18 |
+" ""
+  output="$(run_cplan)" || fail "an unknown reopens-at slug failed the plan (should warn): $output"
+  printf '%s\n' "$output" | grep -Fq 'parked Q1 reopens at "ghost", which is not an item' || fail "no unknown reopens-at warning: $output"
+
+  write_cplan "" "src/impl.ts" "" "" "{ model: haiku, trigger: initial, result: maybe }"
+  output="$(run_cplan)" || fail "an odd attempt result failed the plan (should warn): $output"
+  printf '%s\n' "$output" | grep -Fq 'attempt result "maybe"' || fail "no odd-result warning: $output"
+
+  # Block-style items: every rule above fires identically when attempts and files are
+  # nested list entries (the inspector's repro: a block item whose attempt has trigger: nope).
+  # write_bplan <level line> <impl extras> <impl files block> <impl attempts block> <iface status>
+  write_bplan() {
+    cat >"$plan" <<PLAN_EOF
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-11-18T00:00:00Z
+ticket: TEST-1
+source: local
+$1
+items:
+  - slug: iface
+    status: ${5:-done}
+    depends_on: []
+    heavy: false
+    contract: true
+    files:
+      - src/api.ts
+    attempts:
+      - model: haiku
+        trigger: initial
+        result: done
+  - slug: impl
+    status: todo
+    depends_on: [iface]
+$2
+    files:
+$3
+    attempts:
+$4
+---
+
+## Dish
+Fixture.
+
+## Packet: iface
+Contract.
+
+## Packet: impl
+Implementation.
+PLAN_EOF
+  }
+  ok_files="      - src/impl.ts"
+  ok_att="      - { model: haiku, trigger: initial, result: failed }"
+  base="    heavy: false"
+  write_bplan "level: contracts" "    contract: false" "$ok_files" "$ok_att"
+  output="$(run_cplan)" || fail "a clean block-style plan failed validation: $output"
+  printf '%s\n' "$output" | grep -Eq 'C1 checks skipped|attempt result' && fail "a clean block-style plan drew a C1 warning: $output"
+  write_bplan "" "$base" "$ok_files" "      - model: haiku
+        trigger: initial
+        result: failed
+        cause: turn-limit
+      - model: sonnet
+        trigger: escalation
+        reason: slip
+        result: done"
+  output="$(run_cplan)" || fail "a clean fully block-style plan failed validation: $output"
+
+  write_bplan "level: sideways" "$base" "$ok_files" "$ok_att"
+  expect_cplan_fail 'invalid plan level: sideways'
+  write_bplan "" "    contract: maybe" "$ok_files" "$ok_att"
+  expect_cplan_fail 'item impl contract must be true or false, got: maybe'
+  # The inspector's repro, in both attempt shapes.
+  write_bplan "" "$base" "$ok_files" "      - { model: haiku, trigger: nope, result: failed, cause: bad }"
+  expect_cplan_fail 'invalid attempt trigger: nope (allowed: initial|fail-retry|escalation|answer-retry)'
+  expect_cplan_fail 'invalid attempt cause: bad (allowed: inspector-fail|turn-limit|wrap-up|blocked-missing-fact|blocked-other|no-result)'
+  write_bplan "" "$base" "$ok_files" "      - model: haiku
+        trigger: nope
+        result: failed
+        cause: bad"
+  expect_cplan_fail 'invalid attempt trigger: nope (allowed: initial|fail-retry|escalation|answer-retry)'
+  expect_cplan_fail 'invalid attempt cause: bad (allowed: inspector-fail|turn-limit|wrap-up|blocked-missing-fact|blocked-other|no-result)'
+  write_bplan "" "$base" "$ok_files" "      - model: haiku
+        trigger: initial
+        result: failed
+      - model: haiku
+        trigger: bogus
+        result: failed"
+  expect_cplan_fail 'invalid attempt trigger: bogus'
+  write_bplan "" "$base" "$ok_files" "      - model: haiku
+        trigger: escalation
+        reason: laziness
+        result: failed"
+  expect_cplan_fail 'invalid attempt reason: laziness'
+  write_bplan "" "$base" "$ok_files" "      - model: haiku
+        trigger: initial
+        reason: slip
+        result: failed"
+  expect_cplan_fail 'item impl has an attempt with reason slip but trigger initial; reason is only for trigger escalation'
+  write_bplan "" "$base" "$ok_files" "      - model: haiku
+        trigger: initial
+        result: weird"
+  output="$(run_cplan)" || fail "an odd block-style attempt result failed the plan (should warn): $output"
+  printf '%s\n' "$output" | grep -Fq 'attempt result "weird"' || fail "no odd-result warning for a block-style attempt: $output"
+
+  # Contract ownership and the unmerged-contract packet rule read block-style files and deps.
+  write_bplan "" "$base" "      - src/impl.ts
+      - src/api.ts" "$ok_att"
+  expect_cplan_fail 'item impl lists src/api.ts owned by contract item iface; change a merged contract through a new contract item'
+  write_bplan "" "$base" "$ok_files" "$ok_att" todo
+  expect_cplan_fail 'packet impl plans implementation for unmerged contract iface; park it until iface merges'
+  write_bplan "" "$base" "$ok_files" "$ok_att" done
+  run_cplan | grep -Fq 'unmerged contract' && fail "a merged block-style contract was flagged as unmerged"
+
+  # An old-style block plan with none of the new fields validates as before.
+  cat >"$plan" <<'PLAN_EOF'
+---
+doc: plan
+schema: 1
+dish: sample
+role: planner
+model: haiku
+created: 2026-11-18T00:00:00Z
+ticket: TEST-1
+source: local
+items:
+  - slug: alpha
+    status: done
+    depends_on: []
+    heavy: false
+    files:
+      - src/a.ts
+    attempts:
+      - { model: haiku, trigger: initial, result: done }
+---
+
+## Dish
+Fixture.
+
+## Packet: alpha
+Done.
+PLAN_EOF
+  output="$(run_cplan)" || fail "an old-style block plan failed validation: $output"
+  printf '%s\n' "$output" | grep -Fq '1 checked, 0 nonconforming' || fail "old-style block plan was checked differently: $output"
+}
+
+# Plan items are read by scripts/lib/plan.mjs, so every YAML layout a planner writes is checked
+# the same way. Each case below once slipped past the validator's own line matching: entries at
+# their key's indent, inline fields after `attempts:`, items indented unlike their siblings.
+test_validate_plan_layouts() {
+  fixture="$TMP_ROOT/validate-plan-layouts"
+  mkdir -p "$fixture/.brigade/dishes/sample/reports"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  printf -- '---\ndoc: verdict\n---\n' >"$fixture/.brigade/dishes/sample/reports/iface-verdict.md"
+  # write_lplan <items block> <packet slug>...
+  write_lplan() {
+    items="$1"
+    shift
+    {
+      printf -- '---\ndoc: plan\nschema: 1\ndish: sample\nrole: planner\nmodel: haiku\n'
+      printf -- 'created: 2026-11-18T00:00:00Z\nticket: TEST-1\nsource: local\nitems:\n%s\n---\n\n## Dish\nFixture.\n' "$items"
+      for slug in "$@"; do printf -- '\n## Packet: %s\nWork.\n' "$slug"; done
+    } >"$plan"
+  }
+  run_lplan() { CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$plan" 2>&1; }
+  expect_lplan_fail() { # $1 = message fragment
+    if output="$(run_lplan)"; then fail "plan validated clean, expected: $1: $output"; fi
+    printf '%s\n' "$output" | grep -Fq "$1" || fail "no violation containing '$1': $output"
+  }
+  expect_lplan_clean() { # $1 = what the plan shows
+    output="$(run_lplan)" || fail "$1 failed validation: $output"
+    printf '%s\n' "$output" | grep -Fq '1 checked, 0 nonconforming' || fail "$1 was not clean: $output"
+  }
+
+  # Attempt entries at the indent of their `attempts:` key are still attempts.
+  write_lplan "  - slug: a
+    status: todo
+    files:
+    - src/a.ts
+    attempts:
+    - model: haiku
+      trigger: nope
+      cause: bad" a
+  expect_lplan_fail 'invalid attempt trigger: nope (allowed: initial|fail-retry|escalation|answer-retry)'
+  expect_lplan_fail 'invalid attempt cause: bad (allowed: inspector-fail|turn-limit|wrap-up|blocked-missing-fact|blocked-other|no-result)'
+
+  # File entries at the indent of their `files:` key are paths, never the token `-`.
+  write_lplan "  - slug: iface
+    status: done
+    contract: true
+    files:
+    - src/api.ts
+    attempts:
+    - { model: haiku, trigger: initial, result: done }
+  - slug: impl
+    status: todo
+    files:
+    - src/impl.ts" iface impl
+  expect_lplan_clean 'a plan with same-indent file lists'
+  write_lplan "  - slug: iface
+    status: done
+    contract: true
+    files:
+    - src/api.ts
+    attempts:
+    - { model: haiku, trigger: initial, result: done }
+  - slug: impl
+    status: todo
+    files:
+    - src/api.ts" iface impl
+  expect_lplan_fail 'item impl lists src/api.ts owned by contract item iface; change a merged contract through a new contract item'
+
+  # Inline items: fields after `attempts: [...]` are read like any other field.
+  write_lplan "  - { slug: iface, status: done, contract: true, files: [src/api.ts], attempts: [{ model: haiku, trigger: initial, result: done }] }
+  - { slug: impl, status: todo, attempts: [{ model: haiku, trigger: initial, result: failed }], depends_on: [iface], files: [src/api.ts] }" iface impl
+  expect_lplan_fail 'item impl lists src/api.ts owned by contract item iface; change a merged contract through a new contract item'
+  write_lplan "  - { slug: iface, status: todo, contract: true, files: [src/api.ts] }
+  - { slug: impl, attempts: [{ model: haiku, trigger: initial, result: failed }], status: todo, depends_on: [iface], files: [src/impl.ts] }" iface impl
+  expect_lplan_fail 'packet impl plans implementation for unmerged contract iface; park it until iface merges'
+  write_lplan "  - { slug: a, status: todo, attempts: [{ model: haiku, trigger: initial, result: done }], contract: maybe, files: [src/a.ts] }" a
+  expect_lplan_fail 'item a contract must be true or false, got: maybe'
+
+  # A plan the shared parser cannot read skips the C1 checks with one warning naming the line,
+  # never an error, and never charges an item's fields to the item above it; the checks that
+  # predate C1 run as before.
+  expect_lplan_skipped() { # $1 = the parse error the warning names
+    output="$(run_lplan)" || fail "a plan the parser cannot read failed validation: $output"
+    printf '%s\n' "$output" | grep -Fq "C1 checks skipped: $1" || fail "no C1-skipped warning naming '$1': $output"
+    [ "$(printf '%s\n' "$output" | grep -c 'C1 checks skipped')" -eq 1 ] || fail "more than one C1-skipped warning: $output"
+  }
+  write_lplan "  - { slug: a, status: todo, files: [src/a.ts] }
+    - { slug: b, status: todo, contract: maybe, files: [src/b.ts] }" a b
+  expect_lplan_skipped 'frontmatter line 12 is not under any key at its indent: - { slug: b'
+  printf '%s\n' "$output" | grep -Fq 'item a contract' && fail "item b's field was charged to item a: $output"
+  write_lplan "  - { slug: a, status: todo, files: [src/a.ts]" a
+  expect_lplan_skipped 'frontmatter line 11: unclosed { mapping'
+
+  # Keys set four columns past the dash, at every level, still belong to their entry.
+  write_lplan "    - slug: iface
+        status: done
+        contract: true
+        files:
+            - src/api.ts
+        attempts:
+            - model: haiku
+                trigger: initial
+                result: done
+    - slug: impl
+        status: todo
+        depends_on: [iface]
+        files: [src/impl.ts]" iface impl
+  expect_lplan_clean 'a plan with keys four columns past the dash'
+}
+
+test_validate_plan_yaml_scalars() {
+  fixture="$TMP_ROOT/validate-plan-yaml"
+  mkdir -p "$fixture/.brigade/dishes/sample"
+  plan="$fixture/.brigade/dishes/sample/PLAN.md"
+  # write_yplan <frontmatter lines after the fixed head>: items a and b need packets.
+  write_yplan() {
+    {
+      printf -- '---\ndoc: plan\nschema: 1\ndish: sample\nrole: planner\nmodel: haiku\n'
+      printf -- 'created: 2026-11-18T00:00:00Z\nticket: TEST-1\nsource: local\n%s\n---\n\n## Dish\nFixture.\n' "$1"
+      printf -- '\n## Packet: a\nWork.\n\n## Packet: b\nWork.\n'
+    } >"$plan"
+  }
+  run_yplan() { CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$plan" 2>&1; }
+  expect_yplan_fail() { # $1 = message fragment
+    if output="$(run_yplan)"; then fail "plan validated clean, expected: $1: $output"; fi
+    printf '%s\n' "$output" | grep -Fq "$1" || fail "no violation containing '$1': $output"
+  }
+  expect_yplan_ghost() { # the plan parses whole: item b's unknown dependency is its only problem
+    expect_yplan_fail 'depends_on references unknown slug: ghost'
+    printf '%s\n' "$output" | grep -Fq 'C1 checks skipped' && fail "a quote or comment broke the frontmatter: $output"
+    return 0
+  }
+  expect_yplan_clean() { # $1 = what the plan shows
+    output="$(run_yplan)" || fail "$1 failed validation: $output"
+    printf '%s\n' "$output" | grep -Fq '1 checked, 0 nonconforming' || fail "$1 was not clean: $output"
+  }
+  items='items:
+  - { slug: a, status: todo, depends_on: [], files: [src/a.ts] }
+  - { slug: b, status: todo, depends_on: [a], files: [src/b.ts] }'
+
+  # A quote inside a plain scalar is text: it never swallows the closing brace or later lines.
+  write_yplan "intake:
+  - { ticket: T1, decision: leave, note: the cook's branch was stale }
+$items"
+  expect_yplan_clean "an apostrophe in an intake note"
+  write_yplan "intake:
+  - { ticket: T1, decision: leave, note: a 6\" pipe }
+$items"
+  expect_yplan_clean "a double quote in an intake note"
+  write_yplan "items:
+  - { slug: a, status: todo, depends_on: [], files: [src/a.ts], note: it's fine }
+  - { slug: b, status: todo, depends_on: [ghost], files: [src/b.ts] }"
+  expect_yplan_ghost
+  # Escapes inside quotes: '' in single quotes, \" in double quotes.
+  write_yplan "items:
+  - { slug: a, status: todo, depends_on: [], files: [src/a.ts], note: 'it''s', why: the cook's }
+  - { slug: b, status: todo, depends_on: [ghost], files: [src/b.ts] }"
+  expect_yplan_ghost
+  write_yplan "items:
+  - { slug: a, status: todo, depends_on: [], files: [src/a.ts], note: \"say \\\"hi } now\" }
+  - { slug: b, status: todo, depends_on: [ghost], files: [src/b.ts] }"
+  expect_yplan_ghost
+
+  # A plain scalar continued on deeper lines folds; block scalars take indentation indicators.
+  write_yplan "summary: a long plain
+  scalar that continues
+notes: |2
+    kept text
+gist: >-2
+  folded text
+$items"
+  expect_yplan_clean "a multi-line plain scalar and indicated block scalars"
+  # A deeper key line under a plain scalar is still unowned: the C1 checks are skipped.
+  write_yplan "summary: plain
+  status: oops
+$items"
+  output="$(run_yplan)" || fail "an unowned key line failed the plan (should warn): $output"
+  printf '%s\n' "$output" | grep -Fq 'C1 checks skipped: frontmatter line 11 is not under any key at its indent: status: oops' \
+    || fail "no C1-skipped warning for an unowned key line: $output"
+
+  # A comment inside a wrapped inline item ends at its line: the next line's keys are read.
+  write_yplan "items:
+  - { slug: a, status: todo,  # wrapped with a comment
+      depends_on: [ghost], files: [src/a.ts] }
+  - { slug: b, status: todo, depends_on: [a], files: [src/b.ts] }"
+  expect_yplan_ghost
+
+  # A block item whose first value wraps keeps its later keys (b1, b5); so does a block intake
+  # entry whose first note folds onto a second line (b2).
+  write_yplan "items:
+  - slug: a
+    status: todo
+    files: [x]
+  - depends_on: [a,
+      ghost]
+    slug: b
+    status: todo"
+  expect_yplan_ghost
+  write_yplan "items:
+  - files: [src/a.ts,
+            src/b.ts]
+    slug: a
+    status: todo
+  - slug: b
+    status: todo
+    depends_on: [a, ghost]"
+  expect_yplan_ghost
+  write_yplan "intake:
+  - note: a long note that the planner
+      wrapped onto a second line
+    ticket: T1
+    decision: leave
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }"
+  expect_yplan_ghost
+  # An indented --- inside a block scalar is text: the items after it are still read (a25).
+  write_yplan "intake:
+  - ticket: T1
+    decision: leave
+    note: |
+      first line
+      ---
+      after a rule
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }"
+  expect_yplan_ghost
+  # A ' #' in an inline intake note is a YAML comment that eats the closing brace: the old
+  # checks still run, and the C1 checks are skipped with a warning naming that line (a26).
+  write_yplan "intake:
+  - { ticket: T1, decision: leave, note: see PR #12 }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }"
+  expect_yplan_fail 'depends_on references unknown slug: ghost'
+  printf '%s\n' "$output" | grep -Fq 'C1 checks skipped: frontmatter line 11: unclosed { mapping (the text after " #" on that line is a YAML comment)' \
+    || fail "no C1-skipped warning naming the # line: $output"
+  printf '%s\n' "$output" | grep -Fq 'plan has no items' && fail "a # in an intake note hid the items: $output"
+  # level is read as YAML: a trailing comment and quotes are not part of it.
+  write_yplan "level: contracts  # c
+$items"
+  expect_yplan_clean 'a level with a trailing comment'
+  write_yplan "level: \"contracts\"
+$items"
+  expect_yplan_clean 'a quoted level'
+  write_yplan "level: sideways  # c
+$items"
+  expect_yplan_fail 'invalid plan level: sideways (allowed: contracts|implementation)'
+}
+
+# Plans without C1 fields validate exactly as before C1: the validator as it stood before C1
+# and this one report the same problems on every static plan in this file and on the parser
+# fixtures below (quotes, comments, wrapped values, block scalars, odd layouts). Warnings may
+# differ only by "C1 checks skipped". A plan that uses a C1 field is left out of the comparison.
+test_validate_plan_matches_pre_c1() {
+  base=3104d54 # the last commit that changed scripts/brigade-validate before C1
+  dir="$TMP_ROOT/pre-c1"
+  mkdir -p "$dir/plans"
+  if ! git -C "$ROOT" show "$base:scripts/brigade-validate" >"$dir/validate.mjs" 2>/dev/null; then
+    echo "skip: pre-C1 validator $base is not in this clone" >&2
+    return 0
+  fi
+  # Static plans: heredocs this file writes with cat that open a plan and expand nothing.
+  awk -v d="$dir/plans" -v q="'" '
+    !inh && /cat >/ && match($0, "<<-?[" q "\"]?[A-Za-z_]+[" q "\"]?") {
+      tag = substr($0, RSTART, RLENGTH); quoted = (tag ~ "[" q "\"]"); dash = (tag ~ /^<<-/)
+      gsub("[<" q "\"-]", "", tag); inh = 1; buf = ""; next
+    }
+    inh {
+      line = $0
+      if (dash) sub(/^\t+/, "", line)
+      if (line == tag) {
+        inh = 0
+        if (buf ~ /^---\n/ && buf ~ /\ndoc: plan\n/ && (quoted || buf !~ /[$`]/)) {
+          n++; f = sprintf("%s/static-%02d.md", d, n); printf "%s", buf > f; close(f)
+        }
+        next
+      }
+      buf = buf $0 "\n"
+    }' "$ROOT/test/regression.sh"
+  # Parser fixtures: `@@@ <name> [head] [tail]`; head and tail are the shared opening lines
+  # and body.
+  awk -v d="$dir/plans" \
+    -v head='---\ndoc: plan\nschema: 1\ndish: d\nrole: planner\nmodel: opus\ncreated: 2026-11-18T00:00:00Z\nticket: t\nsource: local\ntier: two-star\n' \
+    -v tail='\n## Dish\n\nx\n\n## Packet: a\n\nx\n\n## Packet: b\n\nx\n' '
+    function done_file() { if (f != "") { if (t) printf "%s", tail > f; close(f) } }
+    /^@@@ / {
+      done_file(); f = d "/" $2; h = 0; t = 0
+      for (i = 3; i <= NF; i++) { if ($i == "head") h = 1; if ($i == "tail") t = 1 }
+      if (h) printf "%s", head > f; else printf "" > f
+      next
+    }
+    { print > f }
+    END { done_file() }' <<'NOC1_FIXTURES'
+@@@ a01-url-frag.md head tail
+ticket_url: https://acme.example/t/1#comment-3
+delivery_branch: feat/x  # the PR branch
+intake:
+  - { ticket: T1, decision: cross-reference, note: see https://acme.example/w#sec-2 }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [docs/a.md] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a02-windows.md head tail
+items:
+  - { slug: a, status: todo, depends_on: [], files: [C:\repo\src\a.ts, 'D:\x\y.ts'] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: ["C:\\repo\\b.ts"] }
+---
+@@@ a03-emoji.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: ship it 🚀 — café naïve “smart” ’quotes’ }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [docs/🚀.md] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a04-long-wrap-note.md head tail
+intake:
+  - { ticket: T1, decision: leave,
+      note: a very long note that wraps over the line because the planner
+        writes prose here, with commas and alex's apostrophe }
+  - { ticket: T2, decision: absorb, note: short }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a07-empty-lists.md head tail
+intake: []
+items:
+  - { slug: a, status: done, depends_on: [], files: [], attempts: [] }
+  - { slug: b, status: todo, depends_on: [ ], files: [ ], heavy: false }
+---
+@@@ a08-trailing-spaces.md head tail
+intake:   
+  - { ticket: T1, decision: leave, note: x }   
+items:  
+  - { slug: a, status: todo, depends_on: [], files: [x] }  
+  - { slug: b, status: todo  , depends_on: [a, ghost] , files: [y] }   
+---
+@@@ a09-comments-after.md head tail
+items:   # the DAG
+  - { slug: a, status: todo, depends_on: [], files: [x] }   # first
+  # a full-line comment between items
+  - { slug: b, status: nope, depends_on: [a], files: [y] }  # second, status bad
+---
+@@@ a10-braces-quoted.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: "use {a, b} and [c] # not a comment" }
+  - { ticket: T2, decision: leave, note: 'it''s {x}: [y]' }
+items:
+  - { slug: a, status: todo, depends_on: [], files: ["src/{a,b}.ts", "src/[id].tsx"] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: ['src/#gen/x.ts'] }
+---
+@@@ a11-block-intake-plain.md head tail
+intake:
+  - ticket: T1
+    decision: leave
+    note: keep {a} and [b] apart, alex's call: later
+  - ticket: T2
+    decision: absorb
+    note: >-
+      folded note with "quotes" and #hash
+      over lines
+items:
+  - slug: a
+    status: todo
+    files: [x]
+  - slug: b
+    status: todo
+    depends_on: [a, ghost]
+    files: [y]
+---
+@@@ a12-hash-no-space.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: fixes issue#12 and c#/f# code }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [src/c#/x.cs] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a13-quoted-values.md head tail
+ticket: "ACME-1: fix #3"
+delivery_branch: 'feat/alex''s-fix'
+items:
+  - { slug: "a", status: 'todo', depends_on: [], files: [x] }
+  - { slug: 'b', status: "done", depends_on: ["a", 'ghost'], files: [y] }
+---
+@@@ a14-block-files-comments.md head tail
+items:
+  - slug: a
+    status: todo
+    files:
+      - src/x.ts  # main file
+      - "src/#gen/y.ts"
+      - 'docs/alex''s notes.md'
+      - docs/a b.md
+  - slug: b
+    status: todo
+    depends_on:
+      - a   # needs a
+      - ghost
+    files:
+      - z
+---
+@@@ a15-tab-after-colon.md head tail
+items:
+  - { slug: a, status:	todo, depends_on: [], files: [x] }
+  - slug: b
+    status:	todo
+    depends_on: [a, ghost]
+    files: [y]
+---
+@@@ a16-dq-escapes.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: "say \"no\" then } and ] \u00e9" }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a17-sq-with-dq.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: 'say "no" { then' }
+  - { ticket: T2, decision: leave, note: "alex's [call" }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a18-blank-lines.md head tail
+items:
+
+  - slug: a
+    status: todo
+
+    files: [x]
+
+  - slug: b
+    status: todo
+    depends_on: [a, ghost]
+    files: [y]
+---
+@@@ a19-colon-in-plain.md head tail
+ticket_url: https://acme.example:8443/t/1?q=a:b
+intake:
+  - { ticket: T1, decision: leave, note: ratio 3:1 at 10:30 }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a20-done-verdict-attempts-block.md head tail
+items:
+  - slug: a
+    status: done   # merged
+    files: [x]
+    attempts:
+      - { model: sonnet, trigger: initial, result: done }
+  - slug: b
+    status: done
+    depends_on: [a]
+    files: [y]
+---
+@@@ a21-wrapped-depends.md head tail
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo,
+      depends_on: [a,
+                   ghost],   # wraps
+      files: [y, z] }
+---
+@@@ a22-apos-end-word.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: the cooks' branches, alex' notes }
+  - { ticket: T2, decision: leave, note: rock 'n' roll }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a23-block-note-quote-start-plain.md head tail
+intake:
+  - ticket: T1
+    decision: leave
+    note: "quoted" is the word
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a25-indented-dashes-in-block.md head tail
+intake:
+  - ticket: T1
+    decision: leave
+    note: |
+      first line
+      ---
+      after a rule
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a26-hash-space-in-flow-note.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: see PR #12 }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a27-block-seq-at-key-indent.md head tail
+items:
+- slug: a
+  status: todo
+  files:
+  - x
+  attempts:
+  - model: sonnet
+    trigger: initial
+    result: done
+- slug: b
+  status: todo
+  depends_on:
+  - a
+  - ghost
+  files:
+  - y
+---
+@@@ a28-multiline-dq-top.md head tail
+summary: "a quoted summary
+  that wraps, with alex's apostrophe
+  and a # hash"
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a29-multiline-plain-in-flow-item-path.md head tail
+items:
+  - { slug: a, status: todo, depends_on: [],
+      files: [docs/very/long/path/that/wraps.md,
+              docs/another one.md] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a30-comment-after-quoted-in-flow.md head tail
+items:
+  - { slug: a, status: "todo", depends_on: [], files: ["x"] }  # it's "first"
+  - { slug: b, status: 'todo', depends_on: ['a', ghost], files: [y] } # b's {deps}
+---
+@@@ a31-block-plain-apos-hash.md head tail
+intake:
+  - ticket: T1
+    decision: leave
+    note: alex's # comment with it's quote
+  - ticket: T2
+    decision: leave
+    note: it's 'quoted' mid and "more"
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ a32-plain-continuation-with-colon.md head tail
+summary: the plan covers alex's work
+  and continues: with a colon inside
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ b1-block-first-key-wrapped-flow.md head tail
+items:
+  - slug: a
+    status: todo
+    files: [x]
+  - depends_on: [a,
+      ghost]
+    slug: b
+    status: todo
+    files: [y]
+---
+@@@ b2-block-intake-first-note-multiline.md head tail
+intake:
+  - note: a long note that the planner
+      wrapped onto a second line
+    ticket: T1
+    decision: leave
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ b3-block-slug-comment.md head tail
+items:
+  - slug: a   # the api
+    status: todo
+    files: [x]
+  - slug: b   # it's the impl
+    status: todo
+    depends_on: [a, ghost]
+    files: [y]
+---
+@@@ b5-files-first-wrapped.md head tail
+items:
+  - files: [src/a.ts,
+            src/b.ts]
+    slug: a
+    status: todo
+  - slug: b
+    status: todo
+    depends_on: [a, ghost]
+    files: [y]
+---
+@@@ f1a-apos-intake.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: alex's call, the cook's branch was stale }
+  - { ticket: T2, decision: absorb, note: don't touch it }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a, ghost], files: [y] }
+---
+@@@ f1b-dq-mid.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: alex said "leave it" for now }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: wrong, depends_on: [a], files: [y] }
+---
+@@@ f2a-multiline.md head tail
+summary: a long plain
+  scalar that continues
+  over three lines
+notes: |2
+    indented text
+  base text
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [ghost], files: [y] }
+---
+@@@ f3a-comment-flow.md head tail
+items:
+  - { slug: a, status: todo,  # first item
+      depends_on: [ghost], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p01-blockscalar-top.md head tail
+goal: |
+  first line
+  second: line # not a comment
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p02-folded.md head tail
+goal: >-
+  folded text
+  more
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p03-blockscalar-in-item.md head tail
+items:
+  - slug: a
+    status: todo
+    note: |
+      a note: with colon
+      - and a dash line
+    files: [x]
+  - slug: b
+    status: todo
+    depends_on: [a]
+    files: [y]
+---
+@@@ p04-comments-quotes.md head tail
+# leading comment
+ticket_url: https://acme.example/t/1 # the ticket
+intake:
+  # a comment line
+  - { ticket: "ACME-1: fix #3", decision: absorb, note: "a: b # c" } # trailing
+items:
+  # comment between
+  - { slug: a, status: todo, depends_on: [], files: [x] }   # one
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p05-apostrophe-intake.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: the cook's branch was stale }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p06-apostrophe-intake2.md head tail
+intake:
+  - { ticket: T1, decision: leave, note: don't absorb }
+  - { ticket: T2, decision: absorb, note: fine }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p07-apostrophe-item.md head tail
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x], note: it's fine }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p08-multiline-plain.md head tail
+summary: a long plain
+  scalar that continues
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p09-wrapped-comment.md head tail
+items:
+  - { slug: a, status: done,  # wrapped with a comment
+      depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p10-quoted-top.md head tail
+ticket_title: "Fix: the #1 bug"
+ticket_ref: 'it''s quoted'
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p11-quoted-comment.md head tail
+ticket_title: "Fix" # comment after quote
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p12-tab-indent.md head tail
+items:
+	- { slug: a, status: todo, depends_on: [], files: [x] }
+	- { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p13-tab-separators.md head tail
+ticket_title:	tabbed value
+items:
+  - { slug: a,	status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }  	
+---
+@@@ p14-bracket-title.md head tail
+title: [WIP] rework
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p15-block-comments.md head tail
+items:
+  - slug: a
+    status: todo
+    files:
+      - x  # main file
+      - "y # not comment"
+  - slug: b
+    status: todo
+    depends_on:
+      - a
+    files: []
+---
+@@@ p16-flow-items.md head tail
+items: [{ slug: a, status: todo, files: [x] }, { slug: b, status: todo, depends_on: [a], files: [y] }]
+---
+@@@ p17-tight-braces.md head tail
+items:
+  - {slug: a, status: todo, depends_on: [], files: [x]}
+  - {slug: b, status: todo, depends_on: [a], files: [y]}
+---
+@@@ p18-empty-val.md head tail
+ticket_url: null
+writing:
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p19-braces-in-quoted.md head tail
+items:
+  - { slug: a, status: todo, depends_on: [], files: ["src/{a,b}.ts"] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p20-brackets-in-path.md head tail
+items:
+  - { slug: a, status: todo, depends_on: [], files: [src/[id]/page.tsx] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p21-other-list.md head tail
+notes:
+  - plain string entry
+  - another: thing
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ p22-key-chars.md head tail
+Ticket-Ref: X
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+@@@ q01-dq-intake.md head
+intake:
+  - { ticket: T1, decision: leave, note: say "hi" to the cook }
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q02-sq-escape.md head
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x], note: 'it''s } fine' }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q03-dq-escape.md head
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x], note: "a \"} b" }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q04-indicator.md head
+summary: |2
+    indented text
+    more
+notes: >-2
+  folded
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q05-item-multiline.md head
+items:
+  - slug: a
+    status: todo
+    summary: a plain
+      continued line
+    depends_on: []
+    files: [x]
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q06-misindented-key.md head
+summary: plain
+  status: oops
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q07-ghost-apos.md head
+items:
+  - { slug: a, status: todo, depends_on: [ghost], files: [x], note: the cook's }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q08-quoted-multiline.md head
+ticket_title: "a quoted
+  title"
+items:
+  - { slug: a, status: todo, depends_on: [], files: [x] }
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+@@@ q09-apos-block.md head
+items:
+  - slug: a
+    status: todo
+    note: the cook's branch # c
+    depends_on: [ghost]
+    files: [x]
+  - { slug: b, status: todo, depends_on: [a], files: [y] }
+---
+body
+NOC1_FIXTURES
+  for f in "$dir"/plans/*.md; do
+    if grep -Eq '(^|[ {,])(level|contract|cause|reason):|answer-retry|^## Parked' "$f"; then rm -f "$f"; fi
+  done
+  statics=$(find "$dir/plans" -name 'static-*.md' | wc -l | tr -d ' ')
+  total=$(find "$dir/plans" -name '*.md' | wc -l | tr -d ' ')
+  [ "$statics" -ge 5 ] || fail "found only $statics static plans in test/regression.sh"
+  [ "$total" -ge 70 ] || fail "found only $total plans to compare"
+  set -- "$dir"/plans/*.md
+  node "$dir/validate.mjs" --json "$@" >"$dir/before.json" 2>/dev/null || true
+  CLAUDE_PROJECT_DIR="$dir" "$ROOT/scripts/brigade-validate" --json "$@" >"$dir/after.json" 2>/dev/null || true
+  node - "$dir/before.json" "$dir/after.json" <<'NODE_EOF' || fail "a plan without C1 fields validates differently from before C1"
+const fs = require('fs')
+const [before, after] = process.argv.slice(2).map((p) => JSON.parse(fs.readFileSync(p, 'utf8')).results)
+const byFile = new Map(after.map((r) => [r.file, r]))
+let bad = 0
+for (const b of before) {
+  const a = byFile.get(b.file)
+  const warn = (r) => (r ? r.warnings.filter((w) => !w.startsWith('C1 checks skipped: ')) : [])
+  const same = (x, y) => JSON.stringify(x) === JSON.stringify(y)
+  if (!a || !same(b.problems, a.problems) || !same(b.warnings, warn(a))) {
+    bad++
+    console.error(`${b.file}\n  before: ${JSON.stringify(b)}\n  after:  ${JSON.stringify(a)}`)
+  }
+}
+if (before.length !== after.length || before.length === 0) bad++
+process.exit(bad ? 1 : 0)
+NODE_EOF
+}
+
 test_validate_writing_checks() {
   fixture="$TMP_ROOT/validate-writing"
   mkdir -p "$fixture/home" "$fixture/.brigade/dishes/sample"
@@ -2335,10 +3493,11 @@ $output"
 
   # A sibling brigade-config that fails, prints the wrong thing or hangs gives one
   # warning and nothing else. The validator finds its sibling next to itself, so a copy
-  # in a fixture folder picks up the fake.
+  # in a fixture folder picks up the fake. The copy takes the plan library it imports along.
   bin="$fixture/bin"
-  mkdir -p "$bin"
+  mkdir -p "$bin/lib"
   cp "$ROOT/scripts/brigade-validate" "$bin/brigade-validate"
+  cp "$ROOT/scripts/lib/plan.mjs" "$bin/lib/plan.mjs"
   calls="$fixture/calls"
   skipped="warn  $rel: writing checks skipped: could not resolve writing config"
   write_writing_plan "writing: ste-80" "$plan"
@@ -5052,4 +6211,8 @@ test_planner_model_config
 test_skill_surface_budgets
 test_status_planner_ledger
 test_board_libraries
+test_validate_plan_contract_fields
+test_validate_plan_layouts
+test_validate_plan_yaml_scalars
+test_validate_plan_matches_pre_c1
 echo "PASS: brigade operational regressions"

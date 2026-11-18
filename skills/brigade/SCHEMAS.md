@@ -113,26 +113,50 @@ ticket_url: <url|null>
 delivery_branch: feat/<slug>       # delivery-named (repo's own convention); becomes the PR — never brigade/*
 source: notion                     # which adapter
 tier: two-star                     # service tier the dish is cooked at — three-star|two-star|one-star (TIERS.md)
+level: implementation              # optional: contracts|implementation — the dish's planning level; absent means implementation
 kind: build                        # optional: build (default) | research — research dishes carry no packets; each item's board ticket is its contract, and items take a research depth (see the research type)
 writing: ste-80                    # optional: the writing preset the packets are checked against (see packet); leave it out and no writing check runs
 intake:                            # reconciliation decisions from the intake sweep
   - { ticket: <id>, decision: absorb|cross-reference|leave, note: <one line> }
 items:                             # the DAG, one entry per work item
   - { slug: <item-slug>, status: todo|dispatched|in_review|rework|done|blocked,
-      depends_on: [<slug>...], heavy: false, files: [<path>...],
-      attempts: [{ model: haiku|sonnet|opus|frontier|planner, trigger: initial|fail-retry|escalation,
-                   result: done|failed|blocked }] }
+      depends_on: [<slug>...], heavy: false, contract: false, files: [<path>...],
+      attempts: [{ model: haiku|sonnet|opus|frontier|planner,
+                   trigger: initial|fail-retry|escalation|answer-retry,
+                   result: done|failed|blocked,
+                   cause: inspector-fail|turn-limit|wrap-up|blocked-missing-fact|blocked-other|no-result,
+                   reason: slip|framework-semantics|other }] }
 ```
+
+Optional additions (schema stays 1; a plan without them validates as before):
+
+- `level` — the dish's current planning level. `contracts` plans contract items only;
+  `implementation` (the default when absent) plans the rest.
+- `contract: true|false` on an item (default false) — the item defines a contract: the
+  interface, its doc comment, the contract test suite every implementation must pass, one thin
+  end-to-end path, and its decision record. A non-contract item may not list a path a contract
+  item lists, whatever that item's status; change a merged contract through a new contract item.
+- `cause` on an attempt — why it ended, when `result` is not `done`.
+- `reason` on an attempt — only when `trigger: escalation`: why the ladder moved up.
+- `trigger: answer-retry` — re-dispatch on the same rung after the Planner answered a
+  `blocked-missing-fact`.
 
 `tier` records the service tier so resume and the analyst score against the right
 expectations. `rework` = runnable again after an inspector FAIL (same branch, escalation ladder).
 `attempts` is the dispatch record — one entry per Cook dispatch of the item (who ran it,
 why, how it ended); it is where escalation history lives, so the analyst scores from the
 plan instead of re-reading report trails.
+Items may also be written block style (`- slug: a` with its keys on the lines below; list
+entries nested under their key or at its indent), and inline fields come in any order.
+`brigade-validate` runs its older checks unchanged and reads the contract-first (C1) fields
+(`level`, `contract`, `cause`, `reason`, contract-owned paths, `## Parked`) through
+`scripts/lib/plan.mjs`. When that parser cannot read the frontmatter, the C1 checks are skipped
+with one warning, `C1 checks skipped: <first parse error>`, and the plan does not fail on it;
+never indent one item unlike its siblings.
 
 Body sections, in order: `## Dish` (goal + acceptance criteria from the ticket),
 `## Waves` (planned dispatch order), `## Plan-check dispositions` (when a plan check ran),
-then one `## Packet: <slug>` per item (see `packet`) — build dishes only; a `kind: research`
+`## Parked` (when questions are held), then one `## Packet: <slug>` per item (see `packet`) — build dishes only; a `kind: research`
 plan has no packet sections.
 
 `## Plan-check dispositions` is a table with columns `id | source | ruling | how`: one row per
@@ -142,6 +166,12 @@ bullet under a scout brief's `## Risks` (id `R<k>`, source the brief's file stem
 holds it; `how` names the test), or `accepted` (`how` gives the reason). `brigade-validate`
 fails the plan while a plan-check id has no row or an unknown ruling, and warns for a missing
 Risks row. Dropped plan-check findings came back as the rework round in four dishes running.
+`## Parked` is a table with columns `id | question | reopens at | raised`: questions held until
+a later point. `id` is `Q<k>`, unique. `reopens at` is never empty: a contract item slug,
+`implementation`, or `handoff`. `brigade-validate` fails the plan on an empty `reopens at` or a
+duplicate id, and warns when `reopens at` names a slug that is not an item. It also fails a
+`## Packet: <slug>` for a non-contract item that depends directly on a contract item that is
+not `done`: park that implementation until the contract merges.
 The `items` list in frontmatter is the machine state; body packets carry the detail. Keep
 frontmatter `status` current at every transition — resume trusts it.
 

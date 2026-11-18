@@ -535,13 +535,13 @@ async function runItem(item, promises) {
     }
 
     if (!cookResult) {
-      attempts.push({ agentType, result: 'failed' })
+      attempts.push({ agentType, result: 'failed', cause: 'no-result' })
       blog('cook', `cook attempt ${i + 1} for ${item.slug} returned no result`)
       continue
     }
 
     if (cookResult.status === 'blocked') {
-      attempts.push({ agentType, result: 'blocked' })
+      attempts.push({ agentType, result: 'blocked', cause: 'blocked-other' })
       status = 'blocked'
       blockedReason = cookResult.blockedReason || 'cook reported blocked'
       blog('blocked', `blocked ${item.slug}: ${blockedReason}`)
@@ -567,14 +567,14 @@ async function runItem(item, promises) {
     ))
 
     if (!verdictResult) {
-      attempts.push({ agentType, result: 'failed' })
+      attempts.push({ agentType, result: 'failed', cause: 'no-result' })
       recordInspectorFail(item.slug)
       blog('inspector', `inspector returned no result for ${item.slug} attempt ${i + 1}`)
       continue
     }
 
     if (verdictResult.verdict === 'FAIL' && !verdictResult.trivialOnly) {
-      attempts.push({ agentType, result: 'failed' })
+      attempts.push({ agentType, result: 'failed', cause: 'inspector-fail' })
       findingsHistory.push({ agentType, attempt: i, findings: verdictResult.findings || [] })
       recordInspectorFail(item.slug)
       blog('inspector', `verdict FAIL for ${item.slug} attempt ${i + 1}: ${(verdictResult.findings || []).length} findings`)

@@ -22,10 +22,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { parsePlan } from './lib/plan.mjs'
 
 const STATUSES = ['todo', 'dispatched', 'in_review', 'rework', 'done', 'blocked']
 const SEVERITIES = ['blocking', 'high', 'medium', 'low']
-const ATTEMPT_TRIGGERS = ['initial', 'fail-retry', 'escalation']
+const ATTEMPT_TRIGGERS = ['initial', 'fail-retry', 'escalation', 'answer-retry']
+const ATTEMPT_RESULTS = ['done', 'failed', 'blocked']
+const ATTEMPT_CAUSES = ['inspector-fail', 'turn-limit', 'wrap-up', 'blocked-missing-fact', 'blocked-other', 'no-result']
+const ATTEMPT_REASONS = ['slip', 'framework-semantics', 'other']
+const PLAN_LEVELS = ['contracts', 'implementation']
 const TIERS = ['three-star', 'two-star', 'one-star']
 const CONTEXT_TIERS = ['bare', 'documented', 'tracked']
 const RESEARCH_BUDGETS = { light: 150, medium: 250, heavy: 400 }
@@ -471,6 +476,76 @@ function dispositionRows(body) {
   return rows
 }
 
+// The contract-first (C1) plan rules over a plan parsePlan read without errors: plan level,
+// item contract flags, attempt cause/reason/result, paths owned by contract items, packets
+// planned against an unmerged contract, and the `## Parked` table. Attempt triggers are checked
+// with the other item fields in validateFile.
+function checkContractRules(plan, problems, warnings) {
+  const items = plan.items
+  const slugs = new Set(items.map((i) => i.slug))
+  const has = (rec, key) => Object.prototype.hasOwnProperty.call(rec.raw, key)
+  const given = (rec, key) => (has(rec, key) && rec.raw[key] !== '' ? rec.raw[key] : null)
+  const listed = (v) => v.filter((x) => x !== 'none')
+  const level = plan.frontmatter.level
+  if (level && !PLAN_LEVELS.includes(level)) {
+    problems.push(`invalid plan level: ${level} (allowed: ${PLAN_LEVELS.join('|')})`)
+  }
+  for (const item of items) {
+    const contract = has(item, 'contract') ? item.raw.contract : null
+    if (contract !== null && contract !== 'true' && contract !== 'false') {
+      problems.push(`item ${item.slug} contract must be true or false, got: ${contract}`)
+    }
+    for (const a of item.attempts) {
+      const trigger = given(a, 'trigger')
+      const cause = given(a, 'cause')
+      const reason = given(a, 'reason')
+      const result = given(a, 'result')
+      if (cause !== null && !ATTEMPT_CAUSES.includes(cause)) {
+        problems.push(`invalid attempt cause: ${cause} (allowed: ${ATTEMPT_CAUSES.join('|')})`)
+      }
+      if (reason !== null) {
+        if (!ATTEMPT_REASONS.includes(reason)) {
+          problems.push(`invalid attempt reason: ${reason} (allowed: ${ATTEMPT_REASONS.join('|')})`)
+        } else if (trigger !== 'escalation') {
+          problems.push(`item ${item.slug} has an attempt with reason ${reason} but trigger ${trigger}; reason is only for trigger escalation`)
+        }
+      }
+      if (result !== null && !ATTEMPT_RESULTS.includes(result)) {
+        warnings.push(`item ${item.slug} attempt result "${result}" is not one of ${ATTEMPT_RESULTS.join('|')}`)
+      }
+    }
+  }
+  const isContract = (i) => has(i, 'contract') && i.raw.contract === 'true'
+  const contractItems = items.filter(isContract)
+  for (const item of items) {
+    if (isContract(item)) continue
+    for (const file of listed(item.files)) {
+      const owner = contractItems.find((c) => listed(c.files).includes(file))
+      if (owner) {
+        problems.push(`item ${item.slug} lists ${file} owned by contract item ${owner.slug}; change a merged contract through a new contract item`)
+      }
+    }
+    if (plan.packets.includes(item.slug)) {
+      for (const dep of listed(item.depends_on)) {
+        const c = contractItems.find((x) => x.slug === dep)
+        if (c && c.status !== 'done') {
+          problems.push(`packet ${item.slug} plans implementation for unmerged contract ${c.slug}; park it until ${c.slug} merges`)
+        }
+      }
+    }
+  }
+  const ids = new Set()
+  for (const row of plan.parked) {
+    if (ids.has(row.id)) problems.push(`duplicate parked id: ${row.id}`)
+    ids.add(row.id)
+    if (row.reopensAt === '') {
+      problems.push(`parked ${row.id} has an empty "reopens at"`)
+    } else if (!['implementation', 'handoff'].includes(row.reopensAt) && !slugs.has(row.reopensAt)) {
+      warnings.push(`parked ${row.id} reopens at "${row.reopensAt}", which is not an item`)
+    }
+  }
+}
+
 function readFrontmatterAndBody(file) {
   try {
     const parts = splitFrontmatter(fs.readFileSync(file, 'utf8'), file)
@@ -608,6 +683,15 @@ function validateFile(file) {
         if (!ATTEMPT_TRIGGERS.includes(t)) {
           problems.push(`invalid attempt trigger: ${t} (allowed: ${ATTEMPT_TRIGGERS.join('|')})`)
         }
+      }
+      // Contract-first (C1) rules read the plan through the shared parser. Every check above and
+      // below runs exactly as before C1, so a plan without C1 fields validates unchanged; when the
+      // parser cannot read the plan, the C1 rules are skipped with one warning, never an error.
+      const plan = parsePlan(text)
+      if (plan.errors.length > 0) {
+        warnings.push(`C1 checks skipped: ${plan.errors[0]}`)
+      } else {
+        checkContractRules(plan, problems, warnings)
       }
       const kind = fmValue(fm, 'kind')
       if (kind && !['build', 'research'].includes(kind)) {
