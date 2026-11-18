@@ -97,13 +97,85 @@ test('a leftover paths file whose dish has no lease never blocks', () => {
   const alpha = lease(dir, 'alpha')
   assert.equal(coord(dir, 'path-acquire', 'alpha', alpha, 'src/shared.js').code, 0)
   assert.equal(coord(dir, 'break', 'alpha', '--force').code, 0)
-  assert.equal(fs.existsSync(pathsFile(dir, 'alpha')), true)
+  // break archives the paths file now, so put a leftover back by hand to cover the
+  // case where one survives anyway (a crash, or a file from an older script).
+  fs.writeFileSync(pathsFile(dir, 'alpha'), JSON.stringify({ schema: 1, dish: 'alpha', owner: alpha, paths: ['src/shared.js'] }))
   const listed = coord(dir, 'path-list')
   assert.equal(listed.code, 0)
   assert.equal(listed.json.paths[0].live, false)
   const beta = lease(dir, 'beta')
   const r = coord(dir, 'path-acquire', 'beta', beta, 'src/shared.js')
   assert.equal(r.code, 0, r.stdout + r.stderr)
+})
+
+test('break archives the paths file next to the lease and reports where (E1)', () => {
+  const dir = project()
+  const alpha = lease(dir, 'alpha')
+  assert.equal(coord(dir, 'path-acquire', 'alpha', alpha, 'src/shared.js').code, 0)
+  const r = coord(dir, 'break', 'alpha', '--force')
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(fs.existsSync(pathsFile(dir, 'alpha')), false)
+  assert.equal(typeof r.json.paths_archived_at, 'string')
+  assert.match(path.basename(r.json.paths_archived_at), /^alpha\.paths\.broken-[0-9TZ-]+-[0-9a-f-]{36}$/)
+  const archived = JSON.parse(fs.readFileSync(r.json.paths_archived_at, 'utf8'))
+  assert.equal(archived.owner, alpha)
+  assert.deepEqual(archived.paths, ['src/shared.js'])
+  assert.deepEqual(coord(dir, 'path-list').json, { paths: [] })
+  // With no paths file, break still works and says so with null.
+  lease(dir, 'alpha')
+  const bare = coord(dir, 'break', 'alpha', '--force')
+  assert.equal(bare.code, 0, bare.stderr)
+  assert.equal(bare.json.paths_archived_at, null)
+})
+
+test('break refuses with exit 5 and changes nothing while the paths mutex is busy (E1)', () => {
+  const dir = project()
+  const alpha = lease(dir, 'alpha')
+  assert.equal(coord(dir, 'path-acquire', 'alpha', alpha, 'a.js').code, 0)
+  const pathsMutex = path.join(dir, '.brigade', 'coordination', 'paths.mutex')
+  fs.mkdirSync(pathsMutex)
+  const r = coord(dir, 'break', 'alpha', '--force')
+  assert.equal(r.code, 5)
+  assert.equal(coord(dir, 'status', 'alpha').json.held, true)
+  assert.equal(fs.existsSync(pathsFile(dir, 'alpha')), true)
+  assert.equal(fs.existsSync(path.join(dir, '.brigade', 'coordination', 'alpha.mutex')), false,
+    'the dish mutex is not left behind')
+  fs.rmdirSync(pathsMutex)
+  assert.equal(coord(dir, 'break', 'alpha', '--force').code, 0)
+})
+
+test('a broken and reacquired lease does not revive the old owner\'s paths (E1, E2)', () => {
+  const dir = project()
+  const tokA = lease(dir, 'alpha')
+  assert.equal(coord(dir, 'path-acquire', 'alpha', tokA, 'src/shared.js').code, 0)
+  assert.equal(coord(dir, 'break', 'alpha', '--force').code, 0)
+  const tokB = lease(dir, 'alpha')
+  assert.notEqual(tokA, tokB)
+  const beta = lease(dir, 'beta')
+  const r = coord(dir, 'path-acquire', 'beta', beta, 'src/shared.js')
+  assert.equal(r.code, 0, r.stdout + r.stderr)
+  // The new owner's own claims still block.
+  assert.equal(coord(dir, 'path-acquire', 'alpha', tokB, 'src/other.js').code, 0)
+  assert.equal(coord(dir, 'path-acquire', 'beta', beta, 'src/other.js').code, 3)
+})
+
+test('a stale record from a previous owner is ignored and the new owner can clear it (E2, E3)', () => {
+  const dir = project()
+  const tokA = lease(dir, 'alpha')
+  assert.equal(coord(dir, 'break', 'alpha', '--force').code, 0)
+  const tokB = lease(dir, 'alpha')
+  fs.writeFileSync(pathsFile(dir, 'alpha'), JSON.stringify({ schema: 1, dish: 'alpha', owner: tokA, paths: ['src/shared.js'] }))
+  const beta = lease(dir, 'beta')
+  const r = coord(dir, 'path-acquire', 'beta', beta, 'src/shared.js')
+  assert.equal(r.code, 0, r.stdout + r.stderr)
+  // A stranger still cannot clear it.
+  assert.equal(coord(dir, 'path-release', 'alpha', 'claude-someone-else').code, 2)
+  const released = coord(dir, 'path-release', 'alpha', tokB)
+  assert.equal(released.code, 0, released.stderr)
+  assert.equal(released.json.released, true)
+  assert.equal(released.json.owner, tokB)
+  assert.equal(released.json.previous_owner, tokA)
+  assert.equal(fs.existsSync(pathsFile(dir, 'alpha')), false)
 })
 
 test('path-list reports every dish with owner, paths, time and liveness', () => {

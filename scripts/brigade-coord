@@ -58,14 +58,16 @@ function mutexPath(value) {
   return path.join(coordinationRoot, `${value}.mutex`)
 }
 
-function withMutex(value, operation) {
+// Runs the operation under a mutex, or returns BUSY without running it when someone else
+// holds that mutex. Use it when a second mutex is taken inside a first one: exiting from in
+// there would skip the outer mutex's cleanup and leave it stuck.
+const BUSY = Symbol('busy')
+function tryWithMutex(value, operation) {
   fs.mkdirSync(coordinationRoot, { recursive: true })
   try {
     fs.mkdirSync(mutexPath(value))
   } catch (error) {
-    if (error && error.code === 'EEXIST') {
-      fail(`coordination operation already active for ${value}`, 5)
-    }
+    if (error && error.code === 'EEXIST') return BUSY
     throw error
   }
   try {
@@ -73,6 +75,12 @@ function withMutex(value, operation) {
   } finally {
     fs.rmdirSync(mutexPath(value))
   }
+}
+
+function withMutex(value, operation) {
+  const result = tryWithMutex(value, operation)
+  if (result === BUSY) fail(`coordination operation already active for ${value}`, 5)
+  return result
 }
 
 function metadataPath(value) {
@@ -103,7 +111,8 @@ const USAGE = 'usage: brigade-coord key|review-key|acquire|status|heartbeat|rele
   'recover-lock|list|watch|preflight|path-acquire|path-release|path-list|hot-files [...]'
 
 // A dish's path leases live next to its dish lease as <dish>.paths. They only count while
-// the dish's .lease exists, so a dish that released or was broken never blocks anyone.
+// the dish's .lease exists and is held by the owner the file names, so a dish that released
+// or was broken never blocks anyone, even after someone new takes the dish lease.
 function pathsFilePath(value) {
   if (!validDish(value)) fail('dish must match [a-z0-9][a-z0-9._-]*')
   return path.join(coordinationRoot, `${value}.paths`)
@@ -560,16 +569,36 @@ if (command === 'release') {
 
 if (command === 'break') {
   if (process.argv[4] !== '--force') fail('break requires explicit --force')
+  pathsFilePath(dish)
   const result = withMutex(dish, () => {
     const metadata = readMetadata(dish)
     if (!metadata) return null
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const archive = path.join(coordinationRoot, `${dish}.broken-${stamp}-${crypto.randomUUID()}`)
-    fs.renameSync(leasePath(dish), archive)
-    return { metadata, archive }
+    const suffix = `broken-${stamp}-${crypto.randomUUID()}`
+    const archive = path.join(coordinationRoot, `${dish}.${suffix}`)
+    // The lease and its path leases are archived together under the paths mutex, so a
+    // path command never sees one gone and the other still in place. If a path command
+    // is running, nothing is touched and break exits 5 like any other busy operation.
+    const moved = tryWithMutex('paths', () => {
+      fs.renameSync(leasePath(dish), archive)
+      const paths = pathsFilePath(dish)
+      if (!fs.existsSync(paths)) return null
+      const pathsArchive = path.join(coordinationRoot, `${dish}.paths.${suffix}`)
+      fs.renameSync(paths, pathsArchive)
+      return pathsArchive
+    })
+    if (moved === BUSY) return { busy: true }
+    return { metadata, archive, pathsArchive: moved }
   })
   if (!result) fail(`no lease for ${dish}`, 4)
-  emit({ broken: true, dish, previous: result.metadata, archived_at: result.archive })
+  if (result.busy) fail('coordination operation already active for paths', 5)
+  emit({
+    broken: true,
+    dish,
+    previous: result.metadata,
+    archived_at: result.archive,
+    paths_archived_at: result.pathsArchive,
+  })
   process.exit(0)
 }
 
@@ -721,9 +750,14 @@ if (command === 'path-acquire') {
     for (const other of pathsDishes()) {
       if (other === dish) continue
       // A dish with no lease is finished or broken; its leftover paths never block.
-      if (!fs.existsSync(leasePath(other))) continue
+      const otherLease = readMetadata(other)
+      if (!otherLease) continue
       const held = readPathsFile(other)
       if (!held) continue
+      // A record written by an earlier owner of a dish that was broken and taken again
+      // belongs to someone who is fenced out, so it never blocks. When the lease itself
+      // is unreadable we cannot tell who owns the dish, so the record still counts.
+      if (!held.invalid && !otherLease.invalid && held.owner !== otherLease.owner) continue
       if (held.invalid) {
         // We cannot tell what a live dish holds, so assume the worst.
         conflicts.push({ dish: other, invalid: true, error: held.error, paths: wanted })
@@ -771,11 +805,19 @@ if (command === 'path-release') {
   const result = withMutex('paths', () => {
     const held = readPathsFile(dish)
     if (!held) return { error: `no path leases for ${dish}`, code: 4 }
-    // An unreadable file carries no owner, so the dish lease's owner speaks for it.
-    const holderOwner = held.invalid ? readMetadata(dish)?.owner : held.owner
-    if (holderOwner !== owner) return { error: `path lease owner mismatch for ${dish}`, code: 2 }
+    // The record's own owner may release it. So may whoever holds the dish lease now: that
+    // covers an unreadable file, which names no owner, and a record left behind by an
+    // earlier owner before the lease was broken and taken again.
+    const lease = readMetadata(dish)
+    const leaseOwner = lease && !lease.invalid ? lease.owner : undefined
+    const recordOwner = held.invalid ? undefined : held.owner
+    if (owner !== recordOwner && owner !== leaseOwner) {
+      return { error: `path lease owner mismatch for ${dish}`, code: 2 }
+    }
     fs.unlinkSync(pathsFilePath(dish))
-    return { output: { released: true, dish, owner, paths: held.invalid ? [] : held.paths } }
+    const output = { released: true, dish, owner, paths: held.invalid ? [] : held.paths }
+    if (recordOwner !== undefined && recordOwner !== owner) output.previous_owner = recordOwner
+    return { output }
   })
   if (result.error) fail(result.error, result.code)
   emit(result.output)
