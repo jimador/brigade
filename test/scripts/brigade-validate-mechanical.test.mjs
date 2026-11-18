@@ -21,6 +21,11 @@
 //   E1  a quote opens only where a value starts: after `key:`, after a line-leading dash,
 //       or after `[` or `,` in a `[...]` list; a comma or `{` alone never opens one.
 //   E2  so the adversarial corpus reads exactly the real ids and severities.
+//   E2  each entry is read by a scanner that tracks quoted strings, comments and brackets,
+//       so a value on the line after its key, a quoted key, and a dash line inside a
+//       wrapped string are all read the way YAML reads them.
+//   E3  text inside a string or comment never becomes a key; the plan items corpus reads
+//       exactly the real slugs, statuses, depends_on and triggers.
 //   I1  warnings never change the exit code, and clean files get no new message.
 //
 // Each test writes throwaway files and runs the real validator on them.
@@ -413,6 +418,49 @@ const CORPUS = [
     '    id: F1',
     '    severity: bogus',
   ], ['F1'], ['bogus'], 'invalid finding severity: bogus'],
+  ['P1: a quoted summary on the line after its key', [
+    '  - summary:',
+    '      "mentions severity: low in text"',
+    '    id: F1',
+    '    severity: bogus',
+  ], ['F1'], ['bogus'], 'invalid finding severity: bogus'],
+  ['P2: a quoted key with no space before its quoted value', [
+    '  - { "summary":"mentions severity: low in text", id: F1, severity: bogus }',
+  ], ['F1'], ['bogus'], 'invalid finding severity: bogus'],
+  ['a comment that says id: F9', [
+    '  - id: F1 # id: F9',
+    '    # id: F9, severity: bogus',
+    '    severity: low',
+    '  - { # id: F9',
+    '      id: F2, severity: high }',
+  ], ['F1', 'F2'], ['low', 'high'], null],
+  ['a summary holding } and ,', [
+    '  - { summary: "closes } early, id: F9", id: F1, severity: high }',
+    '  - summary: "a } and , then id: F9"',
+    '    id: F2',
+    '    severity: low',
+  ], ['F1', 'F2'], ['high', 'low'], null],
+  ["a single-quoted summary with ''", [
+    "  - { summary: 'it''s the id: F9, severity: bogus', id: F1, severity: medium }",
+    "  - summary: 'it''s wrapped, id: F9",
+    "      and ''closes'' here', id: F2, severity: low",
+  ], ['F1', 'F2'], ['medium', 'low'], null],
+  ['a dash line inside a wrapped quoted summary', [
+    '  - summary: "a list that wraps',
+    '      - id: F9, severity: low"',
+    '    id: F1',
+    '    severity: bogus',
+  ], ['F1'], ['bogus'], 'invalid finding severity: bogus'],
+  ['a nested severity before the real one', [
+    '  - detail:',
+    '      severity: low',
+    '    id: F1',
+    '    severity: bogus',
+  ], ['F1'], ['bogus'], 'invalid finding severity: bogus'],
+  ['a real duplicate id with quoted keys', [
+    '  - { "summary":"one", id: F1, severity: low }',
+    '  - { "summary":"two", "id": F1, severity: low }',
+  ], ['F1', 'F1'], ['low', 'low'], 'duplicate finding id: F1'],
 ]
 
 test('adversarial corpus', async (t) => {
@@ -429,6 +477,56 @@ test('adversarial corpus', async (t) => {
         assert.equal(r.code, 1, r.out)
         assert.ok(r.out.includes(problem), r.out)
       }
+    })
+  }
+})
+
+// A plan whose items list is given line by line, with a packet section for each slug.
+function planLines(lines, slugs) {
+  return plan([]).replace('items:\n', `items:\n${lines.join('\n')}`)
+    + slugs.map((s) => `\n## Packet: ${s}\n\nDo the thing.\n`).join('')
+}
+
+// Each case is a plan's items list and the slugs, statuses, depends_on and triggers the
+// validator must read from it; every case is a valid plan.
+const PLAN_CORPUS = [
+  ['flow items with depends_on: [a, b]', [
+    '  - { slug: a, status: done, depends_on: [], files: [a.js], attempts: [{ model: haiku, trigger: initial, result: done }] }',
+    '  - { slug: b, status: todo, depends_on: [a], files: [b.js] }',
+    '  - { slug: c, status: todo, depends_on: [a, b], files: [c.js], note: "slug: fake, status: bogus" }',
+  ], ['a', 'b', 'c'], ['done', 'todo', 'todo'], ['[]', '[a]', '[a, b]'], ['initial']],
+  ['block items', [
+    '  - slug: a',
+    '    status: todo',
+    '    depends_on: []',
+    '    note: "slug: fake, status: bogus, depends_on: [nope]"',
+    '    files:',
+    '      - a.js',
+    '      - a.test.js',
+    '  - slug: b',
+    '    status: todo',
+    '    depends_on: [a]',
+    '    files: [b.js]',
+    '    attempts:',
+    '      - model: haiku',
+    '        trigger: initial',
+    '        result: failed',
+    '      - model: sonnet',
+    '        trigger: fail-retry',
+    '        result: failed',
+  ], ['a', 'b'], ['todo', 'todo'], ['[]', '[a]'], ['initial', 'fail-retry']],
+]
+
+test('plan items corpus', async (t) => {
+  for (const [name, lines, slugs, statuses, deps, triggers] of PLAN_CORPUS) {
+    await t.test(name, () => {
+      const fm = ['doc: plan', 'items:', ...lines, 'source: local']
+      assert.deepEqual(readField(fm, 'items', 'slug'), slugs)
+      assert.deepEqual(readField(fm, 'items', 'status'), statuses)
+      assert.deepEqual(readField(fm, 'items', 'depends_on'), deps)
+      assert.deepEqual(readField(fm, 'items', 'trigger'), triggers)
+      const r = run('PLAN.md', planLines(lines, slugs))
+      assert.equal(r.code, 0, r.out)
     })
   }
 })
