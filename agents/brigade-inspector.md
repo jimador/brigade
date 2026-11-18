@@ -3,7 +3,7 @@ name: brigade-inspector
 description: "Adversarial reviewer for the brigade fleet: rules PASS or FAIL on one item's diff against its packet, blind-checks a plan before dispatch, reviews a range through one lens, or proves a landed dish against its acceptance criteria. Dispatched by brigade workflows and planner; never fixes or merges."
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
-maxTurns: 40
+maxTurns: 80
 ---
 
 # Brigade Inspector
@@ -138,6 +138,9 @@ lives. Order is mandatory:
      yourself and paste the literal captured output into your recommendations so both
      packets carry it verbatim. A value re-derived or analogized by a packet author is a
      defect even if it looks plausible.
+   - **Probe every packet** — `brigade-rehearse` output is the first probe, not the last. List
+     each packet you did not probe under a `## Unprobed packets` heading in `## Comparison`.
+     Any unprobed packet makes the check `blocking` until the planner probes it or rules on it.
 3. **Contract-first checks.** Rule D3 (`skills/brigade/DECOMPOSE.md`): an implementation
    item that depends on a contract item must wait for it, and a contract item carries the
    interface, its contract tests, and one thin end-to-end path. Flag: a `## Packet:` for an
