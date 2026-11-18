@@ -258,18 +258,25 @@ function readConfigMarkdown(text) {
   if (end === -1) end = lines.length
   const section = lines.slice(start + 1, end)
   const data = {}
+  // A bullet's value: drop a trailing ` # comment` (the template annotates the allowed values
+  // that way), trim, then drop one pair of matching surrounding quotes, so `"main"` reads as
+  // `main` and git gets a branch name it can find.
+  const bulletValue = (raw) => {
+    const value = raw.replace(/\s#.*$/, '').trim()
+    const quoted = value.match(/^(["'])(.*)\1$/)
+    return quoted ? quoted[2] : value
+  }
   for (let i = 0; i < section.length; i++) {
     const tier = section[i].match(/^- tier:(.*)$/)
     if (tier) {
-      // Drop a trailing ` # comment` (the template annotates the allowed values that way).
-      const value = tier[1].replace(/\s#.*$/, '').trim()
+      const value = bulletValue(tier[1])
       if (value) data.tier = value
       continue
     }
     const mainBranch = section[i].match(/^- main_branch:(.*)$/)
     if (mainBranch) {
-      // Same comment rule as tier; a `<...>` value is the template's unfilled placeholder.
-      const value = mainBranch[1].replace(/\s#.*$/, '').trim()
+      // A `<...>` value is the template's unfilled placeholder.
+      const value = bulletValue(mainBranch[1])
       if (value && !value.startsWith('<')) data.mainBranch = value
       continue
     }

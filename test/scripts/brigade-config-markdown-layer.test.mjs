@@ -4,7 +4,8 @@
 // One test per guarantee:
 //   R1  only the `## Repo` section is read, up to the next `## ` heading
 //   E1  `- tier: <value>` sets tier, trailing ` # comment` dropped, an empty value sets nothing;
-//       `- main_branch: <value>` sets mainBranch the same way, a `<placeholder>` sets nothing
+//       `- main_branch: <value>` sets mainBranch the same way, a `<placeholder>` sets nothing;
+//       one pair of surrounding `"` or `'` quotes is dropped from either value
 //   E2  `- verification_gate:` plus indented `- <command>` lines set gate in order, `#` kept,
 //       `<placeholder>` commands skipped
 //   E3  provenance says `config.md` for what it set; a JSON layer setting the same key wins
@@ -164,4 +165,26 @@ test('E1: a main_branch bullet sets mainBranch, and a JSON layer still wins', (t
     assert.equal(fallback.config.mainBranch, 'main')
     assert.equal(fallback.provenance.mainBranch, 'defaults')
   }
+})
+
+test('E1: one pair of surrounding quotes is dropped from main_branch and tier', (t) => {
+  const cases = [
+    ['- main_branch: "main"', 'main'],
+    ["- main_branch: 'develop'", 'develop'],
+    ['- main_branch: main # comment', 'main'],
+    ['- main_branch: "trunk"   # quoted, with a comment', 'trunk'],
+  ]
+  for (const [line, want] of cases) {
+    const dir = fixture({ '.brigade/config.md': configMd([line]) })
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+    const out = resolve(dir)
+    assert.equal(out.config.mainBranch, want, line)
+    assert.equal(out.provenance.mainBranch, 'config.md', line)
+  }
+
+  const tier = fixture({ '.brigade/config.md': configMd(['- tier: "two-star"']) })
+  t.after(() => fs.rmSync(tier, { recursive: true, force: true }))
+  const out = resolve(tier)
+  assert.equal(out.config.tier, 'two-star')
+  assert.equal(out.provenance.tier, 'config.md')
 })
