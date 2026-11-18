@@ -92,17 +92,20 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
      gate violation — the Inspector treats a missing check as a failed one.
 5. **Commit** on your branch — it is your own wip branch, so repo rules saying "stage but
    never commit" or "the developer commits" apply to protected branches (`main`/`master`),
-   never to yours. Staged-but-uncommitted work cannot be landed, so `done` without a commit
-   is a failed attempt. Make small, coherent commits; messages state intent, not file lists.
+   never to yours. `done` without a commit is a failed attempt, except after a policy
+   refusal (below). Make small, coherent commits; messages state intent, not file lists.
    Stage only the packet's files (`git add <paths>`, never `-A`), then confirm with
-   `git log --oneline -1` that the commit exists before reporting. A policy guard (a
-   classifier or hook block, not a signing prompt) denying `git commit` is a blocker: report
-   `status: blocked` quoting the denial verbatim; never bypass a signing prompt.
+   `git log --oneline -1` that the commit exists before reporting. If a policy guard (a
+   classifier or hook block, not a signing prompt) refuses `git commit`, do not retry it
+   another way: leave exactly the packet's files staged, report `status: done` with
+   `committed: false`, and quote the refusal verbatim in `## Evidence`. The pipeline commits
+   staged work. Never bypass a signing prompt; a signing prompt you cannot answer is
+   `status: blocked`.
 6. **Report** (write to the given path) as a `report`-type artifact — schema block in
    your dispatch prompt (from the brigade plugin's `SCHEMAS.md`). Frontmatter: `doc:
-   report`, `status: done|blocked`, `attempt`, `branch`, `files_changed` (must be a
-   subset of the packet's file list), `commands` (every Verify command run). Body, in
-   order:
+   report`, `status: done|blocked`, `attempt`, `branch`, `committed` (true;
+   `committed: false` only after a refused commit), `files_changed` (must be a subset of the
+   packet's file list), `commands` (every Verify command run). Body, in order:
    - `## Summary` — what changed and why, ≤ 5 lines.
    - `## Evidence` — the Verify commands' actual output (tail is fine, verdict line must
      be visible). Paste real output; "it should pass" is worthless. Evidence hygiene:
