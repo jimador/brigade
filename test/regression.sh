@@ -2068,7 +2068,11 @@ for (const [type, spec] of Object.entries(fixtures)) {
 }
 NODE
 
-  # Run brigade-validate on each extracted example and assert clean ok line.
+  # Run brigade-validate on each extracted example. Each one must pass with no FAIL
+  # line and print either its clean "(<type>)" ok line or only the placeholder-model
+  # warning: the schema examples use `model: haiku` on non-cook roles, which the
+  # validator flags on purpose so real files name the model that wrote them.
+  w3_warn='looks like the schema placeholder; write the model that produced this file'
   for type in brief report verdict ledger; do
     case "$type" in
       brief)
@@ -2085,10 +2089,21 @@ NODE
         ;;
     esac
 
-    output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)"
-    printf '%s\n' "$output" | grep -Fq "ok" &&
-      printf '%s\n' "$output" | grep -Fq "($type)" ||
+    status=0
+    output="$(CLAUDE_PROJECT_DIR="$fixture" "$ROOT/scripts/brigade-validate" "$file" 2>&1)" || status=$?
+    [ "$status" -eq 0 ] ||
+      fail "brigade-validate exited $status for $type example: $output"
+    if printf '%s\n' "$output" | grep -q '^FAIL'; then
+      fail "brigade-validate reported a problem for $type example: $output"
+    fi
+    if printf '%s\n' "$output" | grep -q "^ok .*($type)\$"; then
+      continue
+    fi
+    printf '%s\n' "$output" | grep -q '^warn' ||
       fail "brigade-validate did not report ok for $type example: $output"
+    other_warns="$(printf '%s\n' "$output" | grep '^warn' | grep -Fv "$w3_warn" || true)"
+    [ -z "$other_warns" ] ||
+      fail "brigade-validate warned on $type example beyond the placeholder model: $other_warns"
   done
 }
 
