@@ -58,14 +58,31 @@ function mutexPath(value) {
   return path.join(coordinationRoot, `${value}.mutex`)
 }
 
+// The one mutex every path-lease command shares. Its name starts with a dot, which the dish
+// rule above rejects, so no dish's own mutex can ever land on the same directory (a dish
+// called "paths" used to). Callers pass the symbol, so nothing typed on the command line can
+// reach it through withMutex; recover-lock accepts the name so an operator can still clear it.
+const PATHS_MUTEX = Symbol('path-leases mutex')
+const PATHS_MUTEX_NAME = '.path-leases'
+const PATHS_MUTEX_DIR = path.join(coordinationRoot, `${PATHS_MUTEX_NAME}.mutex`)
+
+function mutexDir(value) {
+  return value === PATHS_MUTEX ? PATHS_MUTEX_DIR : mutexPath(value)
+}
+
+function mutexLabel(value) {
+  return value === PATHS_MUTEX ? 'path leases' : value
+}
+
 // Runs the operation under a mutex, or returns BUSY without running it when someone else
 // holds that mutex. Use it when a second mutex is taken inside a first one: exiting from in
 // there would skip the outer mutex's cleanup and leave it stuck.
 const BUSY = Symbol('busy')
 function tryWithMutex(value, operation) {
+  const dir = mutexDir(value)
   fs.mkdirSync(coordinationRoot, { recursive: true })
   try {
-    fs.mkdirSync(mutexPath(value))
+    fs.mkdirSync(dir)
   } catch (error) {
     if (error && error.code === 'EEXIST') return BUSY
     throw error
@@ -73,13 +90,13 @@ function tryWithMutex(value, operation) {
   try {
     return operation()
   } finally {
-    fs.rmdirSync(mutexPath(value))
+    fs.rmdirSync(dir)
   }
 }
 
 function withMutex(value, operation) {
   const result = tryWithMutex(value, operation)
-  if (result === BUSY) fail(`coordination operation already active for ${value}`, 5)
+  if (result === BUSY) fail(`coordination operation already active for ${mutexLabel(value)}`, 5)
   return result
 }
 
@@ -579,7 +596,7 @@ if (command === 'break') {
     // The lease and its path leases are archived together under the paths mutex, so a
     // path command never sees one gone and the other still in place. If a path command
     // is running, nothing is touched and break exits 5 like any other busy operation.
-    const moved = tryWithMutex('paths', () => {
+    const moved = tryWithMutex(PATHS_MUTEX, () => {
       fs.renameSync(leasePath(dish), archive)
       const paths = pathsFilePath(dish)
       if (!fs.existsSync(paths)) return null
@@ -591,7 +608,7 @@ if (command === 'break') {
     return { metadata, archive, pathsArchive: moved }
   })
   if (!result) fail(`no lease for ${dish}`, 4)
-  if (result.busy) fail('coordination operation already active for paths', 5)
+  if (result.busy) fail(`coordination operation already active for ${mutexLabel(PATHS_MUTEX)}`, 5)
   emit({
     broken: true,
     dish,
@@ -604,7 +621,8 @@ if (command === 'break') {
 
 if (command === 'recover-lock') {
   if (process.argv[4] !== '--force') fail('recover-lock requires explicit --force')
-  const mutex = mutexPath(dish)
+  // The shared path-lease mutex is not a dish, so it is named outright to recover it.
+  const mutex = dish === PATHS_MUTEX_NAME ? PATHS_MUTEX_DIR : mutexPath(dish)
   if (!fs.existsSync(mutex)) fail(`no operation lock for ${dish}`, 4)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const archive = path.join(coordinationRoot, `${dish}.mutex-broken-${stamp}-${crypto.randomUUID()}`)
@@ -740,7 +758,7 @@ if (command === 'path-acquire') {
   if (!owner || rawPaths.length === 0) fail('usage: brigade-coord path-acquire <dish> <owner> <path...>')
   pathsFilePath(dish)
   const wanted = [...new Set(rawPaths.map(normalizeLeasePath))]
-  const result = withMutex('paths', () => {
+  const result = withMutex(PATHS_MUTEX, () => {
     const lease = readMetadata(dish)
     if (!lease) return { error: `no lease for ${dish}; acquire the dish lease first`, code: 2 }
     if (lease.invalid) return { error: `invalid lease metadata for ${dish}`, code: 2 }
@@ -802,7 +820,7 @@ if (command === 'path-release') {
   const owner = process.argv[4]
   if (!owner) fail('path-release requires the owner token')
   pathsFilePath(dish)
-  const result = withMutex('paths', () => {
+  const result = withMutex(PATHS_MUTEX, () => {
     const held = readPathsFile(dish)
     if (!held) return { error: `no path leases for ${dish}`, code: 4 }
     // The record's own owner may release it. So may whoever holds the dish lease now: that

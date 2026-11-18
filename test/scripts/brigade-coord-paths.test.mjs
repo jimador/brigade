@@ -132,7 +132,7 @@ test('break refuses with exit 5 and changes nothing while the paths mutex is bus
   const dir = project()
   const alpha = lease(dir, 'alpha')
   assert.equal(coord(dir, 'path-acquire', 'alpha', alpha, 'a.js').code, 0)
-  const pathsMutex = path.join(dir, '.brigade', 'coordination', 'paths.mutex')
+  const pathsMutex = path.join(dir, '.brigade', 'coordination', '.path-leases.mutex')
   fs.mkdirSync(pathsMutex)
   const r = coord(dir, 'break', 'alpha', '--force')
   assert.equal(r.code, 5)
@@ -142,6 +142,32 @@ test('break refuses with exit 5 and changes nothing while the paths mutex is bus
     'the dish mutex is not left behind')
   fs.rmdirSync(pathsMutex)
   assert.equal(coord(dir, 'break', 'alpha', '--force').code, 0)
+})
+
+test('a dish named paths can acquire, take path leases and be broken (E2)', () => {
+  const dir = project()
+  const owner = lease(dir, 'paths')
+  const held = coord(dir, 'path-acquire', 'paths', owner, 'src/a.js')
+  assert.equal(held.code, 0, held.stderr)
+  assert.deepEqual(held.json.paths, ['src/a.js'])
+  const broken = coord(dir, 'break', 'paths', '--force')
+  assert.equal(broken.code, 0, broken.stderr)
+  assert.equal(coord(dir, 'status', 'paths').json.held, false)
+  assert.notEqual(broken.json.paths_archived_at, null)
+  const coordination = path.join(dir, '.brigade', 'coordination')
+  assert.equal(fs.existsSync(path.join(coordination, 'paths.mutex')), false)
+  assert.equal(fs.existsSync(path.join(coordination, '.path-leases.mutex')), false)
+})
+
+test('recover-lock clears a stuck path-lease mutex by its name', () => {
+  const dir = project()
+  const stuck = path.join(dir, '.brigade', 'coordination', '.path-leases.mutex')
+  fs.mkdirSync(stuck, { recursive: true })
+  const r = coord(dir, 'recover-lock', '.path-leases', '--force')
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(fs.existsSync(stuck), false)
+  assert.equal(coord(dir, 'acquire', '.path-leases', 'claude').code, 1,
+    'the mutex name is still not a dish')
 })
 
 test('a broken and reacquired lease does not revive the old owner\'s paths (E1, E2)', () => {
