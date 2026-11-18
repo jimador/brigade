@@ -78,6 +78,12 @@ scout claim is an inference to re-derive, not a fact to paste.
   its doc comment; if you still want one, the item note cites the existing handler as extended
   or bypassed, and why. An uncited new mechanism is an unfinished plan — one Planner drafted
   four duplicate mechanisms across two dishes on one branch, every one caught downstream.
+- **P8 — A ticket's own test plan is copied, not paraphrased.** When the ticket has a
+  `Validation`, `Test plan` or `Testing` section, copy each item word for word into `## Dish`
+  under `### Ticket test plan` as a `TP<k>` line (`SCHEMAS.md` § plan), give each one to at
+  least one packet's acceptance criteria, and never drop one or make it optional without the
+  operator's words. On a markdown board, run `brigade-validate --ticket <ticket file> <PLAN.md>`;
+  it fails when the counts differ. The author's test plan is what the human will check.
 
 ## D — Shape the DAG
 

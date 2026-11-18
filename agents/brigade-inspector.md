@@ -193,7 +193,10 @@ run instructions when the deliverable runs, and the verdict output path
 (`reports/acceptance-verdict.md`).
 
 There is no packet here: you are proving that the assembled dish meets its ticket, which per-item
-reviews are structurally blind to. For every criterion produce exactly one ruling:
+reviews are structurally blind to. Every `TP<k>` line under `### Ticket test plan` in
+PLAN.md is a criterion of its own: rule it by its id, and a `TP<k>` without VERIFIED or
+COVERED-BY-GATE is NOT VERIFIED, however the packets covered it. For every criterion produce
+exactly one ruling:
 
 - **VERIFIED** — you exercised it yourself (a command, a request, a rendered check a human could
   reopen) and paste the evidence.

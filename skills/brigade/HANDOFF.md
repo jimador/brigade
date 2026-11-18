@@ -42,8 +42,8 @@ writer/consumer boundary. Its dispatch prompt demands the section 2 evidence tab
 
 ## 2. The acceptance pass
 
-Build the checklist (one row per acceptance criterion across all items, plus ticket-level
-success criteria) and dispatch `brigade-inspector` in Mode 4 with it, the delivery worktree,
+Build the checklist (one row per acceptance criterion across all items, one row per `TP<k>`
+ticket test plan item by id, plus ticket-level success criteria) and dispatch `brigade-inspector` in Mode 4 with it, the delivery worktree,
 the gate commands, stage or run instructions when the deliverable runs, and the output path
 `reports/acceptance-verdict.md`. Never run the pass yourself. The prompt requires:
 
