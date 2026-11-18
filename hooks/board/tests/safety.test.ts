@@ -116,9 +116,20 @@ test('a session starts without waiting for the board scan', { plugins: [watch] }
     }),
   )
   const started = $.session.start({ cwd: ROOT }).then(() => 'started')
-  const late = new Promise(resolve => setTimeout(resolve, 500, 'waited on the scan'))
-  expect(await Promise.race([started, late])).toBe('started')
-  release()
+  // The disk stays held until after the check, so a start that waited on the scan could never
+  // finish. The ten-second timer is only a backstop that turns such a hang into a failure; a
+  // healthy start beats it by a wide margin even on a busy machine.
+  let giveUp = () => {}
+  const late = new Promise(resolve => {
+    giveUp = () => resolve('waited on the scan')
+  })
+  const backstop = setTimeout(giveUp, 10_000)
+  try {
+    expect(await Promise.race([started, late])).toBe('started')
+  } finally {
+    clearTimeout(backstop)
+    release()
+  }
 })
 
 test('a session starts even when registering the command fails', { plugins: [watch] }, async ($, on) => {

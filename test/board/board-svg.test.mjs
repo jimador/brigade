@@ -509,7 +509,36 @@ function bestOf(times, fn) {
   return best
 }
 
-test('cost grows in step with the cells: 240 rows take at most 12 times as long as 30', () => {
+// Counts the work in a picture: how long its source is and how many elements it holds. Neither
+// depends on how busy the machine is, so the scaling check below gives the same answer every run.
+function workIn(source) {
+  let count = 0
+  for (const _ of walk(parseXml(source))) count++
+  return { length: source.length, count }
+}
+
+test('the picture grows in step with the rows: doubling the rows at most doubles the work', () => {
+  // Sixteen columns keeps 240 rows under the cap, so every size here is drawn in full.
+  const sizes = [30, 60, 120, 240].map((height) => {
+    const pic = pictureOf({ rows: generated(height, 16), columns: 16 })
+    assert.ok(!pic.source.includes('Board too large to draw'), `${height} rows hit the cap`)
+    return { height, ...workIn(pic.source) }
+  })
+  // A tenth of slack per doubling allows for rows that merge a little differently; anything
+  // superlinear overshoots it quickly.
+  for (let i = 1; i < sizes.length; i++) {
+    const [a, b] = [sizes[i - 1], sizes[i]]
+    assert.ok(b.length <= a.length * 2.2, `${b.height} rows: ${b.length} chars, ${a.height} rows: ${a.length} chars`)
+    assert.ok(b.count <= a.count * 2.2, `${b.height} rows: ${b.count} elements, ${a.height} rows: ${a.count} elements`)
+  }
+  const [first, last] = [sizes[0], sizes.at(-1)]
+  assert.ok(last.length <= first.length * 8 * 1.1, `240 rows: ${last.length} chars, 30 rows: ${first.length} chars`)
+  assert.ok(last.count <= first.count * 8 * 1.1, `240 rows: ${last.count} elements, 30 rows: ${first.count} elements`)
+})
+
+// Wall-clock timing flakes when many test runs share the machine, so it runs only on request:
+// BRIGADE_PERF=1 node --test test/board/board-svg.test.mjs
+test('cost grows in step with the cells: 240 rows take at most 12 times as long as 30', { skip: process.env.BRIGADE_PERF !== '1' && 'set BRIGADE_PERF=1 to time it' }, () => {
   const small = generated(30, 160)
   const large = generated(240, 160)
   // Warm up both shapes first so the JIT is not part of the measurement.
