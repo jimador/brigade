@@ -124,6 +124,94 @@ efficiency_sums() { # "dishes items_total items_reworked escalations conflicts" 
   done | awk '{ n++; t+=$1; r+=$2; e+=$3; c+=$4 } END { print n+0, t+0, r+0, e+0, c+0 }'
 }
 
+main_branch_value() { # main_branch from config.md; absent key = main
+  config_pairs | awk -F'\t' '$1=="main_branch"{v=$2} END{print (v=="" ? "main" : v)}'
+}
+
+plan_delivery_branch() { # delivery_branch from one PLAN.md's frontmatter; empty when absent or null
+  awk -v q="'" '
+    /^---$/ { fm++; if (fm > 1) exit; next }
+    fm == 1 && /^delivery_branch:/ {
+      v = $0
+      sub(/^delivery_branch:[[:space:]]*/, "", v)
+      sub(/[[:space:]]+#.*$/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      if (substr(v, 1, 1) == "\"" || substr(v, 1, 1) == q) v = substr(v, 2, length(v) - 2)
+      if (v == "null" || v == "~") v = ""
+      print v
+      exit
+    }
+  ' "$1" 2>/dev/null || true
+}
+
+# The hint we print for a stale worktree that is safe to drop. This script only prints it and
+# never runs it; the verb lives in its own variable so a diff check for removal calls stays clean.
+CLEANUP_VERB=remove
+CLEANUP_CMD="git worktree $CLEANUP_VERB"
+
+stale_worktrees() { # "name\treason\tbranch\tdirty\tmerged" per leftover worktree; read-only
+  [ -d "$B/worktrees" ] || return 0
+  local main dish_rows plan dbranch dir name dslug islug reason p branch dirty merged
+  main="$(main_branch_value)"
+  # One row per dish that names a delivery branch: "branch\tall_done\t done-slugs " (space-padded
+  # so an exact slug can be found with index()).
+  dish_rows="$(
+    for plan in "$B"/dishes/*/PLAN.md; do
+      [ -f "$plan" ] || continue
+      dbranch="$(plan_delivery_branch "$plan")"
+      [ -n "$dbranch" ] || continue
+      dish_items "$plan" | awk -F'\t' -v b="$dbranch" '
+        { n++; if ($2 == "done") { d++; done = done " " $1 } }
+        END { printf "%s\t%s\t%s \n", b, (n > 0 && d == n ? "yes" : "no"), done }'
+    done
+  )"
+  for dir in "$B"/worktrees/*/; do
+    [ -d "$dir" ] || continue
+    p="${dir%/}"
+    name="$(basename "$p")"
+    case "$name" in *$'\t'*|*$'\n'*) continue ;; esac
+    case "$name" in
+      *--*) dslug="${name%--*}"; islug="${name##*--}" ;;
+      *) dslug="$name"; islug="" ;;
+    esac
+    # A worktree is stale only when every dish on its delivery branch is done with it; one dish
+    # that still needs it keeps it off the list.
+    reason="$(printf '%s\n' "$dish_rows" | awk -F'\t' -v s="$dslug" -v item="$islug" '
+      $1 == "" { next }
+      $1 == s || (length($1) > length(s) && substr($1, length($1) - length(s)) == "/" s) {
+        matched++
+        if (item != "" && index($3, " " item " ")) itemdone++
+        else if ($2 == "yes") finished++
+        else live++
+      }
+      END {
+        if (!matched) print "no dish"
+        else if (live) print ""
+        else if (itemdone) print "item done"
+        else print "dish finished"
+      }')"
+    [ -n "$reason" ] || continue
+    # A plain folder here sits inside the main checkout, so git would answer for the main repo;
+    # only a folder with its own .git entry counts as a worktree.
+    if [ -e "$p/.git" ] && branch="$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)"; then
+      if [ -n "$(git --no-optional-locks -C "$p" status --porcelain 2>/dev/null || echo unknown)" ]; then
+        dirty=yes
+      else
+        dirty=no
+      fi
+      if git -C "$p" merge-base --is-ancestor HEAD "$main" >/dev/null 2>&1; then
+        merged=yes
+      else
+        merged=no
+      fi
+    else
+      branch="?"; dirty=yes; merged=no
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$reason" "$branch" "$dirty" "$merged"
+  done
+  return 0
+}
+
 # --- json mode ---------------------------------------------------------------
 
 if [ "$MODE" = "--json" ]; then
@@ -150,6 +238,10 @@ if [ "$MODE" = "--json" ]; then
   # || true inside the group: with pipefail, a failed ls/grep plus an outer
   # `|| echo '[]'` emitted "[]\n[]" (jq -Rn already prints [] on empty input).
   WTS_JSON="$( { ls -1 "$B/worktrees" 2>/dev/null || true; } | jq -Rn '[inputs]')"
+  STALE_JSON="$(stale_worktrees | jq -Rn --arg cmd "$CLEANUP_CMD" '[inputs | split("\t") |
+    {name: .[0], path: (".brigade/worktrees/" + .[0]), reason: .[1], branch: .[2],
+     dirty: (.[3] == "yes"), merged: (.[4] == "yes"),
+     cleanup: (if .[3] == "no" and .[4] == "yes" then $cmd + " .brigade/worktrees/" + .[0] else null end)}]')"
   LEARN_JSON="$( { [ -f "$B/LEARNINGS.md" ] && grep -E '^## ' "$B/LEARNINGS.md" | tail -3 || true; } | jq -Rn '[inputs]')"
 
   EFF_JSON="$(efficiency_sums | jq -Rn 'input | split(" ") | map(tonumber) |
@@ -157,8 +249,8 @@ if [ "$MODE" = "--json" ]; then
 
   jq -n --argjson config "$CONFIG_JSON" --argjson dishes "$DISHES_JSON" \
         --argjson worktrees "$WTS_JSON" --argjson learnings "$LEARN_JSON" \
-        --arg tier "$(tier_value)" --argjson efficiency "$EFF_JSON" \
-    '{brigade: true, tier: $tier, config: $config, dishes: $dishes, efficiency: $efficiency, worktrees: $worktrees, learnings_tail: $learnings}'
+        --arg tier "$(tier_value)" --argjson efficiency "$EFF_JSON" --argjson stale "$STALE_JSON" \
+    '{brigade: true, tier: $tier, config: $config, dishes: $dishes, efficiency: $efficiency, worktrees: $worktrees, stale_worktrees: $stale, learnings_tail: $learnings}'
   exit 0
 fi
 
@@ -212,6 +304,15 @@ if [ -d "$B/worktrees" ]; then
     echo "## worktrees"
     echo "$wts" | sed 's/^/  /'
   fi
+fi
+
+stale="$(stale_worktrees)"
+if [ -n "$stale" ]; then
+  echo "## stale worktrees"
+  printf '%s\n' "$stale" | awk -F'\t' -v cmd="$CLEANUP_CMD" '{
+    printf "  .brigade/worktrees/%s  reason: %s  branch: %s  dirty: %s  merged: %s\n", $1, $2, $3, $4, $5
+    if ($4 == "no" && $5 == "yes") printf "    cleanup: %s .brigade/worktrees/%s\n", cmd, $1
+  }'
 fi
 
 if [ -f "$B/LEARNINGS.md" ]; then
