@@ -335,6 +335,80 @@ test('a missing tool is skipped, the next one takes its place, and none at all s
   assert.match(none.out, /no review tool is installed; stop, leave the PR in draft/)
 })
 
+test('a red team with no Claude session is refused; Claude alone, or Claude with Codex, is accepted', () => {
+  const { dir } = fixture()
+  // bareToolPath holds only node and git, so the stubs added here are the only review tools.
+  const only = (...bins) => {
+    const bin = bareToolPath()
+    for (const name of bins) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    return bin
+  }
+  const codexOnly = pr(dir, ['redteam'], { PATH: only('codex') })
+  assert.equal(codexOnly.code, 1)
+  assert.match(codexOnly.out, /neither pass runs in a Claude session/)
+  const noClaude = pr(dir, ['redteam'], { PATH: only('codex', 'agent') })
+  assert.equal(noClaude.code, 1)
+  assert.match(noClaude.out, /neither pass runs in a Claude session/)
+  const claudeOnly = pr(dir, ['redteam'], { PATH: only('claude') })
+  assert.equal(claudeOnly.code, 0)
+  assert.match(claudeOnly.out, /warning: only one review tool is installed/)
+  assert.equal(pr(dir, ['redteam'], { PATH: only('codex', 'claude') }).code, 0)
+})
+
+test('a Claude session is decided by the command that runs, never by the reviewer id', () => {
+  const stubs = (dir, ...bins) => ({ PATH: stubPath(dir, bins) })
+  const verifyCmd = '{findings} {base} {head} {brief}'
+  // id `opus` with bin claude and claude commands counts, even with the `claude` entry switched off.
+  const alias = fixture({ team: { review: { redTeam: { reviewers: {
+    claude: { enabled: false },
+    opus: { name: 'Opus', bin: 'claude', find: 'claude -p --model opus "find {base}...{head}"', verify: `claude -p --model opus "verify ${verifyCmd}"` },
+  } } } } })
+  const ok = pr(alias.dir, ['redteam'], stubs(alias.dir, 'codex', 'claude'))
+  assert.equal(ok.code, 0, ok.out)
+  // an env assignment before the executable does not hide it
+  const env = fixture({ team: { review: { redTeam: { reviewers: {
+    claude: { find: 'CLAUDE_X=1 claude -p "find {base}...{head}"', verify: 'CLAUDE_X=1 claude -p "verify {findings}"' },
+  } } } } })
+  assert.equal(pr(env.dir, ['redteam'], stubs(env.dir, 'claude')).code, 0)
+  // id `claude` with bin codex and codex commands is Codex alone: refused
+  const fooled = fixture({ team: { review: { redTeam: { reviewers: {
+    claude: { name: 'Fake', bin: 'codex', find: 'codex review --base {base}', verify: 'codex exec "verify {findings}"' },
+  } } } } })
+  const refused = pr(fooled.dir, ['redteam'], stubs(fooled.dir, 'codex'))
+  assert.equal(refused.code, 1)
+  assert.match(refused.out, /neither pass runs in a Claude session/)
+  // the default claude entry with its commands overridden to codex is refused the same way
+  const swapped = fixture({ team: { review: { redTeam: { reviewers: {
+    claude: { find: 'codex review --base {base}', verify: 'codex exec "verify {findings}"' },
+  } } } } })
+  const swappedOut = pr(swapped.dir, ['redteam'], stubs(swapped.dir, 'codex', 'claude'))
+  assert.equal(swappedOut.code, 1)
+  assert.match(swappedOut.out, /neither pass runs in a Claude session/)
+})
+
+test('runsClaude accepts real Claude invocations behind wrappers and refuses look-alikes', () => {
+  const accepted = [
+    'claude -p x', 'timeout 600 claude -p x', 'timeout -k 5 -s KILL 600 claude -p x', 'env FOO=1 claude -p x',
+    'env -u HOME FOO=1 claude -p x', 'FOO=1 BAR=2 claude -p x', 'nice -n 5 claude -p x', 'command claude -p x',
+    'exec claude -p x', 'npx -y @anthropic-ai/claude-code -p x', 'npx claude -p x', 'bunx @anthropic-ai/claude-code -p x',
+    '"claude" -p x', "'/opt/x/claude' -p x", 'timeout 60 env A=1 nice -n 2 claude -p x',
+  ]
+  const refused = [
+    'claudex review', 'claude-codex review', '/usr/local/bin/claude-codex review', 'codex exec x',
+    'sh -c "codex exec x"', 'env FOO=1 codex exec x', 'timeout 600 codex exec x', 'npx codex exec x',
+  ]
+  for (const [cmds, want] of [[accepted, 0], [refused, 1]]) {
+    for (const cmd of cmds) {
+      const f = fixture({ team: { review: { redTeam: { reviewers: {
+        claude: { bin: 'claude', find: `${cmd} "find {base}...{head}"`, verify: `${cmd} "verify {findings}"` },
+      } } } } })
+      const res = pr(f.dir, ['redteam'], { PATH: stubPath(f.dir, ['claude']) })
+      assert.equal(res.code, want, `${cmd}: ${res.out}`)
+      if (want) assert.match(res.out, /neither pass runs in a Claude session/, cmd)
+    }
+  }
+})
+
 test('a switched-off tool is skipped, and the brief carries the configured lenses', () => {
   const { dir, head } = fixture({ team: { review: { redTeam: {
     reviewers: { codex: { enabled: false } },

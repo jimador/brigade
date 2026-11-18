@@ -85,15 +85,16 @@ drops the gate-rerun evidence that made it worth anything. Then act on status:
 - `blocked-on-dep` — a dependency did not land this run; re-invoke execute once it does.
 - `rework-needed` — PASS, but landing failed; `blockedReason` names which: a rebase
   conflict, contamination in the main checkout, or a branch not contained in the delivery
-  branch. Resolving a conflict changes the shipped diff: fix it in the item worktree,
-  re-inspect the resolved state, then land it yourself by the same recipe (contamination
-  check, rebase, fast-forward, cleanup) — the one path the script cannot retry unattended.
+  branch. Resolving a conflict changes the shipped diff: fix it in the item worktree, have a
+  fresh inspector re-inspect the resolved state, then land it yourself by the same recipe
+  (contamination check, rebase, fast-forward, cleanup) — the one path the script cannot retry unattended.
 - `blocked` — `blockedReason` names the cause. A steward-create failure or a cook-reported
   readiness/underspecified-value block needs a decision-ready question: name the exact value
   needed, never guess one to keep moving — a cook that blocked on an impossible packet step
   instead of inventing a workaround did its job, so rule on the question and fix the packet
   rather than re-dispatch the contradiction. A ladder exhausted with no PASS is your rung 3:
-  fix it yourself (announced, minimal diff), re-inspect, then land it the same way. An item
+  fix it yourself (announced, minimal diff), have a fresh inspector verdict it, then land it
+  the same way. An item
   the tripped breaker never dispatched is handled under `stoppedEarly`.
 
 ### Record why an attempt ended
@@ -136,9 +137,9 @@ else is a reason to stop and ask.
 - A pre-flight collision — report what is in flight (the branch, the PR URL, or the other
   dish's overlapping items) and stop; never rename around it or defer it as a merge problem.
 - A `blocked` item that needs a decision — name the exact value; never guess one.
-- `rework-needed` (rebase conflict) — fix in the item worktree, re-inspect, land yourself.
-- The ladder exhausted with no PASS — rung 3: fix it yourself, announced, minimal diff,
-  re-inspected, landed the same way.
+- `rework-needed` (rebase conflict) — fix in the item worktree, a fresh inspector re-inspects, land yourself.
+- The ladder exhausted with no PASS — rung 3: fix it yourself, announced, minimal diff; a fresh
+  inspector (never you) writes its verdict before it lands the same way.
 - `stoppedEarly` — re-plan from first principles; bring the operator in only if the
   requirements themselves look suspect.
 
@@ -185,5 +186,7 @@ only, never the source of truth for what already landed — PLAN.md and the repo
 
 Every item in the ledger is `done` or `skipped` and PLAN.md mirrors it; every done item has
 its cook report and verdict on disk (reconstructions reported as healed); or a stop condition
-above has been reported to the operator with a decision-ready question. Then read
-`HANDOFF.md` — do not stop to ask whether to continue.
+above has been reported to the operator with a decision-ready question. When the wave ran at
+`level: contracts`, return to `SKILL.md` Phase 2: set `level: implementation`, write the
+implementation packets and take the second checkpoint (`DECOMPOSE.md` § The planning
+checkpoint). Otherwise read `HANDOFF.md` — do not stop to ask whether to continue.

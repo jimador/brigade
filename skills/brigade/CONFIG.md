@@ -33,7 +33,9 @@ as `promptOverrides` (Phases 1 and 3–5). `overrides` is the `config` object fr
 agent types, `scoutCap`, `maxParallel`, and the circuit-breaker thresholds are all
 overridable without editing any script.
 
-`models.<role>` points a role at a different agent type; `null` keeps the shipped agent.
+`models.<role>` points a role at a different agent type; `null` keeps the shipped agent. Every
+value is a non-empty string. `models.inspector` must be sonnet or stronger: `doctor` rejects a
+haiku-class name, and a `brigade:<name>` agent type whose `agents/<name>.md` sets `model: haiku`.
 The cook ladder has three slots:
 
 | key | rung | default |
@@ -154,7 +156,14 @@ Both go in any JSON layer. Objects merge key by key. Lenses, severities, section
 - `findingFormat` (`compiler` or `plain`) and `ruleNamespace` shape each finding line.
 - `reviewerOrder` and `reviewers.<tool>`: `{ name, bin, find, verify, enabled }`. `bin` is
   looked up on PATH; a tool that is not installed is skipped. Commands take `{base}`,
-  `{head}`, `{brief}` and `{findings}`; `verify` must take `{findings}`. The default find
+  `{head}`, `{brief}` and `{findings}`; `verify` must take `{findings}`. At least one pass must
+  run in a Claude session, meaning its command invokes the `claude` executable, whatever the
+  reviewer's id: the program word must have basename exactly `claude`, after leading
+  `NAME=value` assignments and the wrappers `env`, `timeout`, `nice`, `command` and `exec`, or
+  behind `npx` / `bunx` naming `claude` or `@anthropic-ai/claude-code`. `brigade-pr redteam`
+  exits 1 when Codex or another tool would review alone, and `doctor` rejects a reviewer
+  command that runs `claude` with a haiku-class `--model` (only the model argument is read,
+  never prompt text). The default Claude commands pin `--model sonnet`. The default find
   commands for Codex and Claude Code use their own reviewers and do not read the brief, so
   custom lenses reach the find pass only through a command that reads `{brief}`, such as
   `codex exec "Find pass. Read {brief}, then review git diff {base}...{head} through every lens in it." < /dev/null`.

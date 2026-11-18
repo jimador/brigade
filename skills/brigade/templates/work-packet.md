@@ -27,8 +27,9 @@ those steps, lifted out of the packet.
 - **files:** the ONLY files you may touch
   - path/to/file.ts (edit)
   - path/to/new-file.test.ts (create)
-  - never a contract-owned path (a `contract: true` item's files); a contract item's packet owns
-    the interface, its contract suite, one thin end-to-end path and the decision record
+  - never a path owned by another contract item (a `contract: true` item's files); a contract
+    item lists its own: the interface, its contract suite, one thin end-to-end path and the
+    decision record
 
 ### Goal
 

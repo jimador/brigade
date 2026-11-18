@@ -423,6 +423,52 @@ function reviewPlan(redTeam, author) {
   return { tools, skipped, find, verify }
 }
 
+// True when the pass's command invokes the `claude` executable: its program word has basename
+// exactly `claude`, after leading NAME=value assignments and the wrappers env, timeout, nice,
+// command and exec (with their options), or `npx` / `bunx` naming claude or @anthropic-ai/claude-code.
+function runsClaude(reviewers, tool, kind) {
+  const r = tool && reviewers[tool]
+  if (!isObject(r) || typeof r[kind] !== 'string') return false
+  const words = r[kind].trim().split(/\s+/).map((w) => w.replace(/^["']+|["']+$/g, ''))
+  const isAssign = (w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)
+  // Drop options (and the argument of those that take one); `takesArg` names the flags that do.
+  const skipOptions = (takesArg = []) => {
+    while (words.length > 0 && words[0].startsWith('-') && words[0] !== '-') {
+      const flag = words.shift()
+      if (takesArg.includes(flag)) words.shift()
+    }
+  }
+  for (let guard = 0; guard < 16 && words.length > 0; guard++) {
+    if (isAssign(words[0])) { words.shift(); continue }
+    const name = path.basename(words[0])
+    if (name === 'env') {
+      words.shift()
+      while (words.length > 0 && (isAssign(words[0]) || words[0].startsWith('-'))) {
+        const w = words.shift()
+        if (['-u', '-C', '-S', '--unset', '--chdir', '--split-string'].includes(w)) words.shift()
+      }
+    } else if (name === 'timeout') {
+      words.shift()
+      skipOptions(['-s', '-k', '--signal', '--kill-after'])
+      words.shift()
+    } else if (name === 'nice') {
+      words.shift()
+      skipOptions(['-n', '--adjustment'])
+    } else if (name === 'command' || name === 'exec') {
+      words.shift()
+      skipOptions()
+    } else if (name === 'npx' || name === 'bunx') {
+      words.shift()
+      skipOptions(['-p', '--package'])
+      const pkg = (words[0] ?? '').replace(/(.)@[^@/]*$/, '$1')
+      return pkg === '@anthropic-ai/claude-code' || pkg === 'claude'
+    } else {
+      break
+    }
+  }
+  return path.basename(words[0] ?? '') === 'claude'
+}
+
 const fillCommand = (command, vars) => command.replace(/\{(base|head|brief|findings)\}/g, (m, key) => vars[key] ?? m)
 
 function findingFormat(redTeam) {
@@ -511,8 +557,11 @@ function cmdRedteam(root, config, flags, print) {
     name: redTeam.reviewers[tool].name ?? tool,
     command: fillCommand(redTeam.reviewers[tool][kind], vars),
   }
+  // Every verdict comes from a fresh Claude session: Codex or another tool may add a pass, never replace it.
+  // What runs decides, never the reviewer's id.
+  const claudePass = runsClaude(redTeam.reviewers, plan.find, 'find') || runsClaude(redTeam.reviewers, plan.verify, 'verify')
   const doc = {
-    ok: plan.find !== null,
+    ok: plan.find !== null && claudePass,
     author,
     head,
     base,
@@ -541,8 +590,12 @@ function cmdRedteam(root, config, flags, print) {
     if (doc.sameTool) print('warning: only one review tool is installed, so both passes run in it; each still gets its own context')
     if (briefPath) print(`brief  ${briefPath}`)
   }
-  if (!doc.ok) {
+  if (plan.find === null) {
     print('redteam: no review tool is installed; stop, leave the PR in draft, and say which pass could not run')
+    return 1
+  }
+  if (!claudePass) {
+    print('redteam: neither pass runs in a Claude session; every review needs a fresh Claude session, so a tool such as Codex only adds a pass. Install or enable claude, leave the PR in draft, and say which pass could not run')
     return 1
   }
   return 0

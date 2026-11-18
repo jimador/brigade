@@ -54,9 +54,11 @@ the duties in the Intensive mode section.
   included: a count, not a rate, because no artifact counts their dispatches. Read
   `.brigade/state/turn-budget.jsonl`, where each line carries `agent_id`, `agent_type` and
   `event` (`soft` or `final`, as the turn-budget hook writes them), and count distinct
-  `agent_id` values per `agent_type` with at least one `event: soft` line (a dispatch that hit
-  soft and final counts once). A cook rate above a quarter, or a role with repeat counts, needs
-  a smaller packet or a larger `maxTurns`; say which. A role with no lines is unscored, not zero.
+  `agent_id` values per `agent_type` with at least one `event: soft` line, counting only rows
+  whose `at` falls within the dish's dates (the file spans every dish in the repo; a dispatch
+  that hit soft and final counts once). A cook rate above a quarter, or a role with repeat
+  counts, needs a smaller packet or a larger `maxTurns`; say which. A role with no lines is
+  unscored, not zero.
 - **Contract churn** — contract items (`contract: true`) that list a path an earlier contract
   item listed. Each one is a contract changed after merge; name both items and the path.
 - **Parked reopened** — `## Parked` has no state column, so score what the dish records: rows

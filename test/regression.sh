@@ -761,6 +761,42 @@ for needle in ("tier", "maxParallel", "nonsense", "kb.cli", "duplicate"):
         raise SystemExit(f"doctor did not report {needle!r}: {problems}")
 PY
 
+  # Every verdict comes from a fresh sonnet-or-stronger session: model values are type-checked,
+  # and a haiku-class inspector or reviewer command is an error.
+  for bad in '{"models":{"cookRetry":42}}' '{"models":{"inspector":"haiku"}}' \
+    '{"models":{"inspector":"claude-haiku-4-5"}}' '{"models":{"scout":""}}' \
+    '{"review":{"redTeam":{"reviewers":{"claude":{"find":"claude -p --model haiku x","verify":"claude -p {findings}"}}}}}'; do
+    printf '%s\n' "$bad" >"$fixture/brigade.config.json"
+    if config_run "$fixture" doctor >/dev/null 2>&1; then
+      fail "brigade-config doctor passed $bad"
+    fi
+  done
+  # An agent type the plugin ships counts by the model its agent file sets (cook is haiku).
+  printf '%s\n' '{"models":{"inspector":"brigade:brigade-cook"}}' >"$fixture/brigade.config.json"
+  if config_run "$fixture" doctor >/dev/null 2>&1; then
+    fail "brigade-config doctor passed models.inspector = brigade:brigade-cook (a haiku agent)"
+  fi
+  printf '%s\n' '{"models":{"inspector":"brigade:brigade-inspector"}}' >"$fixture/brigade.config.json"
+  config_run "$fixture" doctor >/dev/null ||
+    fail "brigade-config doctor rejected models.inspector = brigade:brigade-inspector"
+  printf '%s\n' '{"review":{"redTeam":{"reviewers":{"claude":{"find":"claude -p --model claude-haiku-4-5 x","verify":"claude -p {findings}"}}}}}' >"$fixture/brigade.config.json"
+  if config_run "$fixture" doctor >/dev/null 2>&1; then
+    fail "brigade-config doctor passed a claude reviewer command pinned to a haiku model"
+  fi
+  # The haiku floor reads only the model argument, never prompt text.
+  for bad in 'claude -p --model=claude-haiku-4-5 x' 'claude -p -m HAIKU x'; do
+    printf '{"review":{"redTeam":{"reviewers":{"claude":{"find":"%s","verify":"claude -p {findings}"}}}}}\n' "$bad" >"$fixture/brigade.config.json"
+    if config_run "$fixture" doctor >/dev/null 2>&1; then
+      fail "brigade-config doctor passed a reviewer command with $bad"
+    fi
+  done
+  printf '%s\n' '{"review":{"redTeam":{"reviewers":{"codex":{"find":"codex exec \"Read {brief}; check each packet against the haiku bar\"","verify":"codex exec {findings}"}}}}}' >"$fixture/brigade.config.json"
+  config_run "$fixture" doctor >/dev/null ||
+    fail "brigade-config doctor rejected a codex command that only mentions the haiku bar in its prompt"
+  printf '%s\n' '{"models":{"inspector":"sonnet","cookRetry":"opus"}}' >"$fixture/brigade.config.json"
+  config_run "$fixture" doctor >/dev/null ||
+    fail "brigade-config doctor rejected sonnet and opus model names"
+
   # A repo with no config files at all is valid, not an error.
   clean="$TMP_ROOT/config-clean"
   mkdir -p "$clean/home"

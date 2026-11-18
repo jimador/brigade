@@ -159,8 +159,8 @@ const DEFAULTS = {
         claude: {
           name: 'Claude Code',
           bin: 'claude',
-          find: 'claude -p "/code-review {base}...{head}"',
-          verify: 'claude -p "Verify pass. Read {brief}. For each finding in {findings}, try to refute it against git diff {base}...{head}. Keep only the findings you reproduce or trace, in the format the brief gives."',
+          find: 'claude -p --model sonnet "/code-review {base}...{head}"',
+          verify: 'claude -p --model sonnet "Verify pass. Read {brief}. For each finding in {findings}, try to refute it against git diff {base}...{head}. Keep only the findings you reproduce or trace, in the format the brief gives."',
         },
         cursor: {
           name: 'Cursor',
@@ -494,6 +494,59 @@ function validate() {
       if (typeof budgets.enabled !== 'boolean') problems.push({ layer: 'merged', file: null, problem: 'budgets.enabled must be a boolean (true or false)' })
       if (typeof budgets.softFraction !== 'number' || !(budgets.softFraction > 0 && budgets.softFraction < 1)) problems.push({ layer: 'merged', file: null, problem: 'budgets.softFraction must be a number above 0 and below 1' })
       if (!Number.isInteger(budgets.finalReserve) || budgets.finalReserve < 1) problems.push({ layer: 'merged', file: null, problem: 'budgets.finalReserve must be an integer of at least 1' })
+    }
+  }
+  // Every verdict comes from a fresh sonnet-or-stronger session, so a haiku-class model is refused
+  // for the inspector and in any reviewer command.
+  const HAIKU = /haiku/i
+  // The model argument(s) of a reviewer command (`--model X`, `--model=X`, `-m X`); prompt text is never read.
+  const modelArgs = (cmd) => {
+    const out = []
+    const re = /(?:^|\s)(?:--model[=\s]+|-m\s+)["']?([^\s"']+)/g
+    let m
+    while ((m = re.exec(cmd)) !== null) out.push(m[1])
+    return out
+  }
+  const REVIEWER_ROLE = /^(inspector|reviewer)/i
+  // The `model:` a shipped plugin agent (`brigade:<name>`) runs on, or null when it has none.
+  const shippedAgentModel = (name) => {
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) return null
+    try {
+      const text = fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', `${name}.md`), 'utf8')
+      const front = /^---\n([\s\S]*?)\n---/.exec(text)
+      const m = front && /^model:\s*(\S+)/m.exec(front[1])
+      return m ? m[1].replace(/^["']|["']$/g, '') : null
+    } catch {
+      return null
+    }
+  }
+  if (config.models != null) {
+    if (!isPlainObject(config.models)) {
+      problems.push({ layer: 'merged', file: null, problem: 'models must be an object mapping each agent to a model name' })
+    } else {
+      for (const [agent, model] of Object.entries(config.models)) {
+        if (model == null) continue
+        if (typeof model !== 'string' || model.trim() === '') {
+          problems.push({ layer: 'merged', file: null, problem: `models.${agent} must be a non-empty string (got ${JSON.stringify(model)})` })
+        } else if (REVIEWER_ROLE.test(agent) && HAIKU.test(model)) {
+          problems.push({ layer: 'merged', file: null, problem: `models.${agent} must be sonnet or stronger, never a haiku-class model (got "${model}")` })
+        } else if (REVIEWER_ROLE.test(agent) && model.startsWith('brigade:')) {
+          const agentModel = shippedAgentModel(model.slice('brigade:'.length))
+          if (agentModel && HAIKU.test(agentModel)) {
+            problems.push({ layer: 'merged', file: null, problem: `models.${agent} is "${model}", whose agent file sets model: ${agentModel}; reviewers must be sonnet or stronger` })
+          }
+        }
+      }
+    }
+  }
+  const redTeamReviewers = config.review && config.review.redTeam && config.review.redTeam.reviewers
+  if (isPlainObject(redTeamReviewers)) {
+    for (const [tool, r] of Object.entries(redTeamReviewers)) {
+      for (const key of ['find', 'verify']) {
+        if (isPlainObject(r) && typeof r[key] === 'string' && modelArgs(r[key]).some((m) => HAIKU.test(m))) {
+          problems.push({ layer: 'merged', file: null, problem: `review.redTeam.reviewers.${tool}.${key} names a haiku-class model; reviewers must be sonnet or stronger` })
+        }
+      }
     }
   }
   if (config.gate != null && !Array.isArray(config.gate)) {

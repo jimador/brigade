@@ -8,7 +8,7 @@ check cites a rule id.
 - Write the plan
 - Writing the packet text
 - P — Verify every premise before it goes in a packet
-- D — Shape the DAG (D1–D12)
+- D — Shape the DAG
 - The haiku bar
 - Heavy flags
 - Research dishes
@@ -94,7 +94,8 @@ scout claim is an inference to re-derive, not a fact to paste.
   interface; the decision record. Implementation items depend on it, run the suite in Verify,
   and never list its files; `brigade-scope` flags a contract-owned path in an implementation
   diff. Changing a merged contract is a new contract item, never an edit from an
-  implementation item.
+  implementation item; when one is needed after `level: implementation` opened, the dish
+  returns to `level: contracts` for it and takes the contract checkpoint again (D8).
 - **D4 — Ownership runs the whole call chain.** An item adding a leaf API, callback, or flag
   names each hop the real consumer walks (leaf → panel → section → host; producer → resolver →
   policy) and verifies at the consumer end, not the producer — "the mechanism exists" is not
@@ -117,7 +118,10 @@ scout claim is an inference to re-derive, not a fact to paste.
   contract is a plan defect. A question that would not change a contract goes in `## Parked`
   (`id | question | reopens at | raised`) with its reopen gate; a question that would change it
   is decided now, or put to the operator as one decision-ready question, before the contract
-  merges. Parking holds when the operator asks for the detail early.
+  merges. Parking holds when the operator asks for the detail early. A merged contract that
+  must change once `level: implementation` is open is a new contract item: set `level:
+  contracts` back for it, take the contracts checkpoint, and reopen `implementation` after it
+  merges.
 - **D9 — Depth stop.** Stop planning below the contract: no packets for adapter internals,
   key schemes, scripts or timers until their contract merges. Sync versus async, error
   shapes, and ownership of state are contract questions, not detail.
@@ -127,9 +131,10 @@ scout claim is an inference to re-derive, not a fact to paste.
   the operator asked for the abstraction, say so and ask before building it.
 - **D11 — Line limits are a backstop.** The haiku bar's size limits catch a packet that grew
   too big; they never choose where a seam goes. Cut along the contract first, then check size.
-- **D12 — Design-review matches go to the operator.** Run `brigade-risk --json` and read
-  `design_review` and `design_matches` over every contract item's files. A match (public
-  contract, persisted data, security boundary) is shown to the operator at the contract
+- **D12 — Design-review matches go to the operator.** Run `brigade-risk --files <item
+  files>` per item and read `design_review` and `design_matches`, over every contract item's
+  files, or over every item's files when the dish has no contract item. A match (public
+  contract, persisted data, security boundary) is shown to the operator at the dish's
   checkpoint with the item named; it never changes `escalate` or the heavy flag.
 
 ## The haiku bar
@@ -234,6 +239,9 @@ contract item has one level and one checkpoint.
 ## Complete when
 
 PLAN.md validates (`brigade-validate`), every packet clears the bar above, the plan check
-(when the tier runs one) is folded in with a disposition row per finding, and the operator has confirmed the plan at each level. Release
-the dish lease before yielding for a confirmation. After the last one, never re-plan or re-confirm:
-the next stop is handoff, and `EXECUTE.md` names the only conditions that interrupt it.
+(when the tier runs one) is folded in with a disposition row per finding, and the operator has
+confirmed the plan at the current level's checkpoint. Phase 2 completes per level: at
+`level: contracts` that confirmation completes Phase 2 for that pass, and after the contract wave
+the Planner re-enters Phase 2 for the implementation level. Release the dish lease before yielding
+for a confirmation. Only after the last level's wave, never re-plan or re-confirm: the next stop is
+handoff, and `EXECUTE.md` names the only conditions that interrupt it.

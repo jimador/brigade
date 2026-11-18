@@ -82,8 +82,9 @@ template).
    `--author` is the runtime that wrote the code: `claude` here, `codex` in a Codex session.
    The find pass runs in a tool other than the author's and the verify pass in a tool other
    than the find pass's. A tool that is not installed is skipped and the next one in
-   `reviewerOrder` takes its place. Exit 1 means no tool is installed: stop, open the PR as
-   a draft, and say which pass could not run.
+   `reviewerOrder` takes its place. Exit 1 means no tool is installed, or no pass runs in a
+   Claude session (Codex alone is refused): install or configure `claude`, leave the PR in
+   draft, and say which pass could not run.
 2. Run the find command from the delivery worktree, in the background, into
    `reports/red-team-find-<head7>.txt`. Run `redteam` again with `--findings` set to that
    file and run the verify command it returns into `reports/red-team-verify-<head7>.txt`.
@@ -114,7 +115,8 @@ decision record. The record lives in the repo's decision-record directory when i
 sections Context, Decision, Use cases, Alternatives rejected, Consequences. A contract item
 missing any of the three goes back to rework, and rework makes a new head: re-prove the gate
 (§ 1) and repeat the acceptance pass and red team (§ 2, § 3) on it. That round counts toward
-the two-round stop in § 3. Never hand off a contract nobody can read the reason for. Nothing under `.brigade/` is committed.
+the two-round stop in § 3. Never hand off a contract nobody can read the reason for. Nothing
+under `.brigade/` is committed.
 
 Run `brigade-risk --files <the item's files>` once per item and note every item whose result
 carries `design_review: true` (`design_matches`). The PR body lists those items first, under
@@ -180,23 +182,22 @@ The ticket reaches its done-equivalent status only when the human merges the PR 
 the pushed branch); delete the integration branch only after that. Release the dish lease
 before returning the handoff to the operator.
 
-## Spot-checks in place of an inspector pass
+## Fresh inspector pass for paths that skip the gate
 
 Four paths skip the gate quietly: a commit you made directly to the integration branch, a
-fix produced by overriding a PASS into rework, a docs-only item you self-verified instead
-of dispatching an inspector, and — the one that costs most — **cooking outside the
-Workflow.** The inspector gate lives inside `brigade-execute`, so the moment you dispatch
-cooks as direct subagents (because the Workflow broke, or the item was small) adversarial
-review silently disappears and nothing tells you. It is not optional there: dispatch
-`brigade-inspector` yourself, per item, before landing, and write its verdict to
-`reports/<item>-verdict.md` exactly as the Workflow would. Planner self-review of the diff
-is not a substitute — a dish that landed four items this way shipped with zero verdicts
-while every item read `done`. The first three paths are legitimate; each gets a short
-verdict-shaped note beside the cook report naming the commit, what you checked it
-against, and what you corrected — silent fixes leave the item unscoreable. A diff-conformance spot-check replaces
-a full inspector pass only when all three hold: the diff is annotation-, comment-, constant-
-or doc-only; every file it touches already PASSed inspection this dish; and the item's own
-Verify commands were re-run green. Record the deviation in PLAN.md.
+fix produced by overriding a PASS into rework, a docs-only item, and — the one that costs
+most — **cooking outside the Workflow.** The inspector gate lives inside `brigade-execute`,
+so the moment you dispatch cooks as direct subagents (because the Workflow broke, or the
+item was small) adversarial review silently disappears and nothing tells you.
+
+Every one of them gets a fresh reviewer: dispatch `brigade-inspector` yourself, per item,
+before landing, on sonnet or stronger, and write its verdict to `reports/<item>-verdict.md`
+exactly as the Workflow would. You never write a verdict, review your own diff in its place,
+or mark an item self-verified — a dish that landed four items that way shipped with zero
+verdicts while every item read `done`. A docs-only or comment-only diff is still a diff; the
+inspector pass is cheap there, and no size or file class waives it. What you do check before
+dispatch is the packet's own Verify commands, re-run green, so the inspector starts from a
+passing tree. Record any dispatch made outside the Workflow in PLAN.md.
 
 ## Complete when
 
