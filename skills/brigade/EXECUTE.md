@@ -7,6 +7,7 @@ Read when: before pre-flight, when a ledger returns, and when resuming mid-execu
 - Pre-flight
 - Invoke brigade-execute
 - Apply the ledger
+- When an agent's write is refused
 - Stop conditions
 - Landing, worktrees, and working memory
 - Resuming mid-execute
@@ -132,6 +133,18 @@ re-dispatch: re-plan from first principles (re-derive what is being built, re-sc
 packet's premises, question the decomposition) and bring the operator in only if the
 requirements themselves look suspect; a third rework attempt on a wrong premise is the most
 expensive way to discover it.
+
+## When an agent's write is refused
+
+A reviewer or writer's Write can be refused by the harness. Its artifact still has to land.
+
+- Every dispatched reviewer or writer is told: when its Write is refused, put the exact full
+  artifact text at the end of its final message, and do not work around the refusal.
+- The workflows (execute, research, review) write that returned text out themselves.
+- For an artifact you dispatched by hand (plan check, acceptance pass, analyst, a standalone
+  scout or inspector), write the returned text to the artifact path verbatim, add one last line
+  saying it was transcribed and why, and run `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate"` on it.
+- Never edit the text. A transcription copies; it does not fix.
 
 ## Stop conditions
 
