@@ -17,8 +17,11 @@
 // Usage:
 //   brigade-rehearse <PLAN.md> [--base <ref>] [--json]
 //
-// The base defaults to the plan's `delivery_branch`, else HEAD. Git runs in the current
-// directory, so run it from inside the repository the plan describes.
+// The base defaults to the plan's `delivery_branch`. A fresh dish only creates that branch at
+// dispatch, after the plan check, so when it is unset or does not exist yet the base falls back
+// to the main line: origin's default branch, else main, else master, else HEAD. The fallback
+// prints one `base: <ref> (...)` line (to stderr with --json, so stdout stays JSON). Git runs in
+// the current directory, so run it from inside the repository the plan describes.
 //
 // Exit codes: 0 no findings (warnings allowed), 1 findings, 2 usage or I/O error.
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -90,6 +93,20 @@ function packetMarks(text) {
 
 function git(args) {
   return spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
+function isCommit(ref) {
+  return git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).status === 0
+}
+
+// The main line to rehearse against when the delivery branch is not there yet: the branch
+// origin/HEAD points at, then main, master and HEAD, whichever resolves first.
+function mainLine() {
+  const candidates = []
+  const originHead = git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
+  if (originHead.status === 0 && originHead.stdout.trim() !== '') candidates.push(originHead.stdout.trim())
+  candidates.push('main', 'master', 'HEAD')
+  return candidates.find(isCommit) ?? null
 }
 
 function existsAt(base, p) {
@@ -302,10 +319,28 @@ function main() {
     return 2
   }
   const plan = parsePlan(text)
-  if (base === null) base = plan.frontmatter.delivery_branch || 'HEAD'
-  if (git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`]).status !== 0) {
-    console.error(`base ${base} does not name a commit here; pass --base <ref>`)
-    return 2
+  if (base !== null) {
+    if (!isCommit(base)) {
+      console.error(`base ${base} does not name a commit here; pass --base <ref>`)
+      return 2
+    }
+  } else {
+    const delivery = plan.frontmatter.delivery_branch || ''
+    if (delivery !== '' && isCommit(delivery)) {
+      base = delivery
+    } else {
+      base = mainLine()
+      if (base === null) {
+        console.error('no base to rehearse against: the delivery branch, origin/HEAD, main, master ' +
+          'and HEAD all fail to name a commit here; pass --base <ref>')
+        return 2
+      }
+      const why = delivery === '' ? 'no delivery branch in the plan'
+        : `delivery branch ${delivery} does not exist yet`
+      const note = `base: ${base} (${why})`
+      if (json) console.error(note)
+      else console.log(note)
+    }
   }
 
   const bySlug = new Map(plan.items.map((it) => [it.slug, it]))

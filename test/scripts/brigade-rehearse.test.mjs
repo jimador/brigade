@@ -49,9 +49,10 @@ function makeRepo(baseFiles = ['src/a.js', 'src/b.js', 'src/c.js', 'README.md'])
 
 // Each item: { slug, files: [[path, mark]], depends_on, status, heavy, contract }. A mark of
 // null leaves the path unmarked in the packet body.
+// A deliveryBranch of null leaves the key out of the frontmatter.
 function writePlan(root, items, { deliveryBranch = 'main', extraFrontmatter = [] } = {}) {
   const lines = ['---', 'doc: plan', 'schema: 1', 'dish: rehearse-test', 'ticket: rehearse-test',
-    'source: local', `delivery_branch: ${deliveryBranch}`,
+    'source: local', ...(deliveryBranch === null ? [] : [`delivery_branch: ${deliveryBranch}`]),
     ...extraFrontmatter, 'items:']
   for (const it of items) {
     const parts = [
@@ -257,6 +258,88 @@ test('usage and I/O errors exit 2', () => {
   const badBase = rehearse(root, ['--base', 'no-such-ref', plan])
   assert.equal(badBase.status, 2)
   assert.match(badBase.stderr, /no-such-ref/)
-  const missingDelivery = writePlan(root, CLEAN, { deliveryBranch: 'feature/not-there' })
-  assert.equal(rehearse(root, [missingDelivery]).status, 2)
+})
+
+// Commits `rel` on a new branch `name`, then returns to main.
+function branchWith(root, name, rel) {
+  git(root, ['checkout', '-q', '-b', name])
+  writeFile(root, rel)
+  git(root, ['add', '--', rel])
+  git(root, ['commit', '-q', '-m', name])
+  git(root, ['checkout', '-q', 'main'])
+}
+
+function baseLines(text) {
+  return text.split('\n').filter((l) => l.startsWith('base: '))
+}
+
+test('base E1: a delivery branch that exists is the base, with no fallback line', () => {
+  const root = makeRepo()
+  branchWith(root, 'feature/ready', 'src/only-on-feature.js')
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/only-on-feature.js', 'edit']] }],
+    { deliveryBranch: 'feature/ready' })
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(findingLines(r), [])
+  assert.deepEqual(baseLines(r.stdout + r.stderr), [])
+  assert.match(r.stdout, /against feature\/ready: 0 findings/)
+})
+
+test('base E2: a delivery branch that does not exist yet falls back to main and runs every check', () => {
+  const root = makeRepo()
+  const clean = writePlan(root, CLEAN, { deliveryBranch: 'feature/not-there' })
+  const ok = rehearse(root, [clean])
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr)
+  assert.deepEqual(baseLines(ok.stdout), ['base: main (delivery branch feature/not-there does not exist yet)'])
+  assert.match(ok.stdout, /against main: 0 findings, 0 warnings/)
+  // The checks really run against main: a missing (edit) path is a finding, so exit 1, not 2.
+  const bad = writePlan(root, [{ slug: 'one', files: [['src/missing.js', 'edit']] }],
+    { deliveryBranch: 'feature/not-there' })
+  const r = rehearse(root, [bad])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(findingLines(r), ['premise: one: src/missing.js is marked (edit) but does not exist at main'])
+  // With --json the note goes to stderr so stdout stays one JSON object per line.
+  const j = rehearse(root, ['--json', bad])
+  assert.equal(j.status, 1, j.stdout + j.stderr)
+  assert.equal(jsonRows(j).length, 1)
+  assert.deepEqual(baseLines(j.stderr), ['base: main (delivery branch feature/not-there does not exist yet)'])
+})
+
+test('base E2: with no delivery branch in the plan the note says so', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, CLEAN, { deliveryBranch: null })
+  const r = rehearse(root, [plan])
+  assert.notEqual(r.status, 2, r.stdout + r.stderr)
+  assert.deepEqual(baseLines(r.stdout), ['base: main (no delivery branch in the plan)'])
+  assert.match(r.stdout, /rehearsed 2 items against main/)
+})
+
+test('base E2 (adversarial): origin/HEAD wins over main, and master is used when main is absent', () => {
+  const root = makeRepo()
+  branchWith(root, 'trunk', 'src/only-on-trunk.js')
+  const trunk = git(root, ['rev-parse', 'trunk']).trim()
+  git(root, ['update-ref', 'refs/remotes/origin/trunk', trunk])
+  git(root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'])
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/only-on-trunk.js', 'edit']] }],
+    { deliveryBranch: 'feature/not-there' })
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(baseLines(r.stdout), ['base: origin/trunk (delivery branch feature/not-there does not exist yet)'])
+
+  const other = makeRepo()
+  git(other, ['branch', '-m', 'main', 'master'])
+  git(other, ['checkout', '-q', '--detach'])
+  const p2 = writePlan(other, CLEAN, { deliveryBranch: 'feature/not-there' })
+  const r2 = rehearse(other, [p2])
+  assert.equal(r2.status, 0, r2.stdout + r2.stderr)
+  assert.deepEqual(baseLines(r2.stdout), ['base: master (delivery branch feature/not-there does not exist yet)'])
+})
+
+test('base E3: an explicit --base that does not resolve exits 2 even when the delivery branch exists', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, CLEAN)
+  const r = rehearse(root, ['--base', 'feature/not-there', plan])
+  assert.equal(r.status, 2, r.stdout + r.stderr)
+  assert.equal(r.stderr.trim(), 'base feature/not-there does not name a commit here; pass --base <ref>')
+  assert.equal(r.stdout, '')
 })
