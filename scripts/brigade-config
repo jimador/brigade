@@ -99,6 +99,12 @@ const DEFAULTS = {
     steward: null,
     designer: null,
   },
+  // Turn-budget warnings for brigade subagents (hooks/turn-budget.mjs). Counts tool calls.
+  budgets: {
+    enabled: true,
+    softFraction: 0.75, // 0 < x < 1: warn at ceil(maxTurns * x)
+    finalReserve: 3, // integer >= 1: final warning at maxTurns - finalReserve
+  },
   circuitBreaker: {
     maxLadderExhausts: 2,
     maxTotalFails: 4,
@@ -479,6 +485,16 @@ function validate() {
   }
   if (config.workingMemory != null && typeof config.workingMemory !== 'boolean') {
     problems.push({ layer: 'merged', file: null, problem: 'workingMemory must be a boolean (true or false)' })
+  }
+  const budgets = config.budgets
+  if (budgets != null) {
+    if (!isPlainObject(budgets)) {
+      problems.push({ layer: 'merged', file: null, problem: 'budgets must be an object with enabled, softFraction and finalReserve' })
+    } else {
+      if (typeof budgets.enabled !== 'boolean') problems.push({ layer: 'merged', file: null, problem: 'budgets.enabled must be a boolean (true or false)' })
+      if (typeof budgets.softFraction !== 'number' || !(budgets.softFraction > 0 && budgets.softFraction < 1)) problems.push({ layer: 'merged', file: null, problem: 'budgets.softFraction must be a number above 0 and below 1' })
+      if (!Number.isInteger(budgets.finalReserve) || budgets.finalReserve < 1) problems.push({ layer: 'merged', file: null, problem: 'budgets.finalReserve must be an integer of at least 1' })
+    }
   }
   if (config.gate != null && !Array.isArray(config.gate)) {
     problems.push({ layer: 'merged', file: null, problem: 'gate must be an array of shell commands' })

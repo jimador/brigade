@@ -103,6 +103,23 @@ that artifact: `report` to the cook, `verdict` to the inspector, `brief` to the 
 `packet`, `plan`, `ticket_comment`, `pr_body` to you. An agent never pays context for rules
 it does not use, and never follows rules meant for another artifact.
 
+## Turn budgets
+
+The `budgets` block drives `hooks/turn-budget.mjs`, a PostToolUse hook that warns a running
+brigade subagent as it nears the `maxTurns` in its agent file. It goes in any JSON layer;
+keys merge one by one.
+
+```json
+{ "budgets": { "enabled": true, "softFraction": 0.75, "finalReserve": 3 } }
+```
+
+`softFraction` (above 0, below 1) sets the wrap-up warning at `ceil(maxTurns * softFraction)`
+tool calls; `finalReserve` (integer, at least 1) sets the final warning at `maxTurns -
+finalReserve`; `enabled: false` silences both. Each fires once per agent. The budget counts
+tool calls, which are at least the turns, so a warning never comes late. It is Claude Code
+only: Codex hook parity is unverified. Each warning also appends a line to
+`.brigade/state/turn-budget.jsonl` when `.brigade/` exists. `doctor` rejects out-of-range values.
+
 ## Red team and PR template
 
 Two blocks drive the handoff red team and the PR description (`HANDOFF.md` § 3 and § 4).
