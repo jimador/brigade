@@ -130,6 +130,7 @@ Write the PR body from the configured template and check it before anyone sees i
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr" template > .brigade/dishes/<slug>/pr-body.md
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr" check .brigade/dishes/<slug>/pr-body.md --base <main_branch>
+"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr" commits --base <main_branch>  # before any push or PR: reword every WIP, fixup! or squash! subject it names
 ```
 
 Fill every section from evidence on disk. How it was validated carries each gate command

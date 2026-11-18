@@ -121,7 +121,8 @@ on every attempt, not just rework. Heavy items are exactly where constraints ero
 5. **Commit** on your branch — it is your own wip branch, so repo rules saying "stage but
    never commit" or "the developer commits" apply to protected branches (`main`/`master`),
    never to yours. `done` without a commit is a failed attempt, except after a policy
-   refusal (below). Make small, coherent commits; messages state intent, not file lists.
+   refusal (below). Make small, coherent commits. Each message is one plain line describing
+   the change, never starting with WIP, fixup or squash, with no trailer lines.
    Stage only the packet's files (`git add <paths>`, never `-A`), then confirm with
    `git log --oneline -1` that the commit exists before reporting. If a policy guard (a
    classifier or hook block, not a signing prompt) refuses `git commit`, do not retry it

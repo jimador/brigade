@@ -307,6 +307,51 @@ test('check --pr reads the published body and its head through gh', () => {
   assert.match(pushed.out, /review the changed range again/)
 })
 
+// ---------------------------------------------------------------- commits
+
+// Adds an empty commit with this exact subject; verbatim cleanup keeps leading spaces.
+function commit(dir, subject) {
+  execFileSync('git', ['-C', dir, '-c', 'user.name=alex', '-c', 'user.email=alex@example.com', '-c', 'commit.gpgsign=false',
+    '-c', 'core.hooksPath=/dev/null', 'commit', '-q', '--allow-empty', '--cleanup=verbatim', '-m', subject], { stdio: 'pipe' })
+  return execFileSync('git', ['-C', dir, 'rev-parse', '--short', 'HEAD']).toString().trim()
+}
+
+test('commits passes a clean range and counts what it checked', () => {
+  const { dir } = fixture()
+  commit(dir, 'Wipe stale widget caches on owner change')
+  const r = pr(dir, ['commits'])
+  assert.equal(r.code, 0, r.out + r.err)
+  assert.equal(r.out.trim(), 'commits OK: 2 checked')
+})
+
+test('commits names each WIP, fixup! and squash! subject, in any case and after leading spaces', () => {
+  for (const subject of ['WIP: widgets by owner', 'wip', '  Wip widgets', 'fixup! widgets', 'FIXUP! widgets', 'squash! widgets', ' Squash! widgets']) {
+    const { dir } = fixture()
+    const sha = commit(dir, subject)
+    commit(dir, 'List widgets by owner')
+    const r = pr(dir, ['commits'])
+    assert.equal(r.code, 1, `${subject}: ${r.out}`)
+    assert.equal(r.out.trim(), `bad commit subject: ${sha} ${subject}`, subject)
+  }
+})
+
+test('commits honors --base and --head, and refuses a range it cannot resolve', () => {
+  const { dir } = fixture()
+  const wip = commit(dir, 'WIP: owner filter')
+  const layer = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD']).toString().trim()
+  commit(dir, 'Filter widgets by owner')
+  assert.equal(pr(dir, ['commits']).code, 1, 'the WIP commit is in main..HEAD')
+  const above = pr(dir, ['commits', '--base', layer])
+  assert.equal(above.code, 0, above.out)
+  assert.equal(above.out.trim(), 'commits OK: 1 checked')
+  const upTo = pr(dir, ['commits', '--head', layer])
+  assert.equal(upTo.code, 1)
+  assert.match(upTo.out, new RegExp(`bad commit subject: ${wip} WIP: owner filter`))
+  const missing = pr(dir, ['commits', '--base', 'no-such-branch'])
+  assert.equal(missing.code, 2)
+  assert.match(missing.err, /could not list no-such-branch\.\.HEAD/)
+})
+
 // ---------------------------------------------------------------- red team
 
 test('the find pass skips the author tool and the verify pass skips the find tool', () => {

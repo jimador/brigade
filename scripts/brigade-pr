@@ -16,6 +16,9 @@
 //                      [--findings <file>] [--json]
 //                                             pick the find and verify tools, fill their
 //                                             commands, and write the reviewers' brief
+//   brigade-pr commits [--base <ref>] [--head <ref>]
+//                                             refuse WIP, fixup! and squash! commit subjects
+//                                             in base..head before the branch is pushed
 //
 // --base defaults to the configured mainBranch. --ready also requires a clean verdict, or a
 // human override, in the review section: run it before marking a PR ready.
@@ -686,10 +689,34 @@ function cmdSize(root, config, flags, print) {
   return report.over && enforce === 'error' ? 1 : 0
 }
 
+// A subject that marks unfinished work: WIP (but not a word such as "wipe"), or the
+// fixup! and squash! subjects git's autosquash leaves behind. Case and leading spaces don't matter.
+const BAD_SUBJECT = /^\s*(?:wip(?![a-z])|fixup!|squash!)/i
+
+function cmdCommits(root, config, flags, print) {
+  const base = flags.base ?? config.mainBranch
+  const head = flags.head ?? 'HEAD'
+  let raw
+  try {
+    raw = git(root, ['log', '-z', '--format=%h%x1f%s', `${base}..${head}`, '--'])
+  } catch (e) {
+    throw new UsageError(`could not list ${base}..${head}: ${String(e.stderr || e.message).split('\n')[0]}`)
+  }
+  const commits = raw.split('\0').filter(Boolean).map((entry) => {
+    const at = entry.indexOf('\x1f')
+    return { sha: entry.slice(0, at), subject: entry.slice(at + 1) }
+  })
+  const bad = commits.filter((c) => BAD_SUBJECT.test(c.subject))
+  for (const c of bad) print(`bad commit subject: ${c.sha} ${c.subject}`)
+  if (bad.length) return 1
+  print(`commits OK: ${commits.length} checked`)
+  return 0
+}
+
 function main(argv, print = console.log) {
   const { flags, positional } = parseArgs(argv)
   const command = positional[0]
-  const known = ['template', 'check', 'size', 'redteam']
+  const known = ['template', 'check', 'size', 'redteam', 'commits']
   if (!known.includes(command)) throw new UsageError(`unknown command ${command ?? '(none)'}; commands: ${known.join(', ')}`)
   const root = repoRoot()
   const config = loadConfig(root)
@@ -700,6 +727,7 @@ function main(argv, print = console.log) {
     case 'check': return cmdCheck(root, config, flags, positional, print)
     case 'size': return cmdSize(root, config, flags, print)
     case 'redteam': return cmdRedteam(root, config, flags, print)
+    case 'commits': return cmdCommits(root, config, flags, print)
   }
 }
 
