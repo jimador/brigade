@@ -8,13 +8,21 @@
 // line (//@BRIGADE_CONFIG@) that this tool replaces with the full text of
 // workflows/config.js, then appends a generated-file trailer.
 //
+// Some entries in workflows/config.js are themselves generated: the verdict schema lives in
+// scripts/lib/schemas.mjs, and this tool rewrites the lines between each
+// `// @schemas:begin <name>` and `// @schemas:end <name>` pair from that module before
+// bundling. config.js keeps the literal text so tests can still evaluate it on its own.
+//
 // Usage:
 //   brigade-bundle            # bundle every workflows/src/*.js, write outputs
 //   brigade-bundle --check    # regenerate in memory, compare to committed
-//                              # outputs; exit 1 if anything is stale/missing
+//                              # outputs; exit 1 if anything is stale/missing,
+//                              # including config.js entries that no longer
+//                              # match scripts/lib/schemas.mjs
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { VERDICT, SCHEMA_VERDICT_RETURN } from './lib/schemas.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..')
@@ -31,6 +39,49 @@ function die(msg) {
 function readConfigText() {
   if (!fs.existsSync(CONFIG_PATH)) die(`missing config: ${CONFIG_PATH}`)
   return fs.readFileSync(CONFIG_PATH, 'utf8')
+}
+
+// Writes a plain value as a one-line JS literal in config.js's own style: single-quoted
+// strings, `{ key: value }` objects and `['a', 'b']` arrays.
+function toJs(value) {
+  if (typeof value === 'string') return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')}'`
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return String(value)
+  if (Array.isArray(value)) return `[${value.map(toJs).join(', ')}]`
+  if (typeof value === 'object') {
+    const entries = Object.entries(value).map(([k, v]) => `${/^[A-Za-z_$][\w$]*$/.test(k) ? k : toJs(k)}: ${toJs(v)}`)
+    return entries.length ? `{ ${entries.join(', ')} }` : '{}'
+  }
+  die(`cannot write a ${typeof value} into workflows/config.js`)
+}
+
+// Escapes text so it reads back unchanged from inside a template literal.
+function toTemplate(text) {
+  return '`' + text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`'
+}
+
+// The config.js entries this tool owns, by marker name, and the lines each one holds.
+const GENERATED = {
+  'verdict-doc': () => [`  verdict: ${toTemplate(VERDICT.doc)},`],
+  'verdict-return': () => [`const SCHEMA_VERDICT_RETURN = ${toJs(SCHEMA_VERDICT_RETURN)}`],
+}
+
+// Returns config.js's text with every generated entry rewritten from scripts/lib/schemas.mjs.
+// Dies when a marker pair is missing, repeated or out of order, so a hand edit that drops a
+// marker can't quietly turn the entry back into a hand-kept copy.
+function regenerateConfig(configText) {
+  let lines = linesOf(configText)
+  for (const [name, render] of Object.entries(GENERATED)) {
+    const begin = `// @schemas:begin ${name}`
+    const end = `// @schemas:end ${name}`
+    const at = (marker) => lines.map((l, i) => (l.trim() === marker ? i : -1)).filter((i) => i >= 0)
+    const begins = at(begin)
+    const ends = at(end)
+    if (begins.length !== 1 || ends.length !== 1 || ends[0] < begins[0]) {
+      die(`workflows/config.js needs exactly one '${begin}' line followed by one '${end}' line`)
+    }
+    lines = [...lines.slice(0, begins[0] + 1), ...render(), ...lines.slice(ends[0])]
+  }
+  return lines.join('\n') + '\n'
 }
 
 function listSrcFiles() {
@@ -74,6 +125,10 @@ function outputPathFor(srcFile) {
 
 function runCheck(srcFiles, configText) {
   let stale = false
+  if (regenerateConfig(configText) !== linesOf(configText).join('\n') + '\n') {
+    console.log('STALE: workflows/config.js (its verdict entries differ from scripts/lib/schemas.mjs)')
+    stale = true
+  }
   for (const f of srcFiles) {
     const expected = bundle(path.join(SRC_DIR, f), configText)
     const outPath = outputPathFor(f)
@@ -88,7 +143,12 @@ function runCheck(srcFiles, configText) {
   process.exit(0)
 }
 
-function runBundle(srcFiles, configText) {
+function runBundle(srcFiles, rawConfigText) {
+  const configText = regenerateConfig(rawConfigText)
+  if (configText !== rawConfigText) {
+    fs.writeFileSync(CONFIG_PATH, configText)
+    console.log('regenerated workflows/config.js')
+  }
   for (const f of srcFiles) {
     const content = bundle(path.join(SRC_DIR, f), configText)
     const outPath = outputPathFor(f)

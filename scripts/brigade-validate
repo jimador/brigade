@@ -23,9 +23,9 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { parsePlan } from './lib/plan.mjs'
+import { SEVERITIES, VERDICT_VALUES, VERDICT } from './lib/schemas.mjs'
 
 const STATUSES = ['todo', 'dispatched', 'in_review', 'rework', 'done', 'blocked']
-const SEVERITIES = ['blocking', 'high', 'medium', 'low']
 const ATTEMPT_TRIGGERS = ['initial', 'fail-retry', 'escalation', 'answer-retry']
 const ATTEMPT_RESULTS = ['done', 'failed', 'blocked']
 const ATTEMPT_CAUSES = ['inspector-fail', 'turn-limit', 'wrap-up', 'blocked-missing-fact', 'blocked-other', 'no-result']
@@ -41,7 +41,7 @@ const TYPES = {
   plan: { keys: ['ticket', 'source', 'items'], budget: null },
   brief: { keys: ['question', 'confidence', 'sources'], budget: 150 },
   report: { keys: ['status', 'attempt', 'branch', 'files_changed', 'commands'], budget: 120 },
-  verdict: { keys: ['verdict', 'attempt_reviewed', 'reran_gate', 'findings'], budget: 150 },
+  verdict: { keys: VERDICT.keys, budget: VERDICT.budget },
   plan_check: { keys: ['blind_sketch_first'], budget: 150 },
   analyst: { keys: ['items_total', 'proposals'], budget: null }, // budget comes from mode
   research: { keys: ['item', 'depth', 'confidence', 'sources'], budget: null }, // budget comes from depth
@@ -895,7 +895,7 @@ function validateFile(file, ticketPath = null) {
 
   // Required body sections per type (SCHEMAS.md); checked as line prefixes.
   const REQUIRED_SECTIONS = {
-    verdict: ['## Verdict', '## Findings', '## Evidence check'],
+    verdict: VERDICT.sections,
     analyst: ['## Scorecard', '## Patterns', '## Proposals'],
     brief: ['## Answer'],
     plan_check: ['## Blind sketch', '## Comparison', '## Recommendations'],
@@ -1071,7 +1071,7 @@ function validateFile(file, ticketPath = null) {
     }
     case 'verdict': {
       const verdict = fmValue(fm, 'verdict')
-      if (verdict && !['PASS', 'FAIL'].includes(verdict)) problems.push(`invalid verdict: ${verdict}`)
+      if (verdict && !VERDICT_VALUES.includes(verdict)) problems.push(`invalid verdict: ${verdict}`)
       for (const s of nestedFieldValues(fm, 'findings', 'severity')) {
         if (!SEVERITIES.includes(s)) problems.push(`invalid finding severity: ${s}`)
       }

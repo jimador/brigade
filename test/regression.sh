@@ -3508,11 +3508,12 @@ $output"
 
   # A sibling brigade-config that fails, prints the wrong thing or hangs gives one
   # warning and nothing else. The validator finds its sibling next to itself, so a copy
-  # in a fixture folder picks up the fake. The copy takes the plan library it imports along.
+  # in a fixture folder picks up the fake. The copy takes the libraries it imports along.
   bin="$fixture/bin"
   mkdir -p "$bin/lib"
   cp "$ROOT/scripts/brigade-validate" "$bin/brigade-validate"
   cp "$ROOT/scripts/lib/plan.mjs" "$bin/lib/plan.mjs"
+  cp "$ROOT/scripts/lib/schemas.mjs" "$bin/lib/schemas.mjs"
   calls="$fixture/calls"
   skipped="warn  $rel: writing checks skipped: could not resolve writing config"
   write_writing_plan "writing: ste-80" "$plan"

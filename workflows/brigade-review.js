@@ -220,7 +220,10 @@ const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence',
 
 const SCHEMA_COOK_RETURN = { type: 'object', required: ['status', 'attempt', 'branch', 'reportPath', 'filesChanged', 'summary'], properties: { status: { enum: ['done', 'blocked'] }, attempt: { type: 'integer' }, branch: { type: 'string' }, reportPath: { type: 'string' }, filesChanged: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' }, blockedReason: { type: 'string' } } }
 
+// Written by scripts/brigade-bundle from scripts/lib/schemas.mjs: edit the module, then re-run the bundler.
+// @schemas:begin verdict-return
 const SCHEMA_VERDICT_RETURN = { type: 'object', required: ['verdict', 'verdictPath', 'trivialOnly', 'findings'], properties: { verdict: { enum: ['PASS', 'FAIL'] }, verdictPath: { type: 'string' }, trivialOnly: { type: 'boolean' }, findings: { type: 'array', items: { type: 'object', required: ['id', 'severity', 'location', 'summary'], properties: { id: { type: 'string' }, severity: { enum: ['blocking', 'high', 'medium', 'low'] }, location: { type: 'string' }, summary: { type: 'string' } } } }, verdictDoc: { type: 'string' } } }
+// @schemas:end verdict-return
 
 // What the execute workflow's verdict probe returns: whether the inspector's verdict file is
 // on disk, whether it passes brigade-validate with the verdict the workflow is about to land,
@@ -304,6 +307,8 @@ replacement unit "(supersedes Wn)", never delete), ## Archive (optional overflow
 Cadence: read-or-seed before first edit; after every Verify run update World state and
 re-read Canon; before commit self-check the diff against Canon; before the report do a
 final update, quote the live World state in Evidence, set ledger: in the frontmatter.`,
+  // Written by scripts/brigade-bundle from scripts/lib/schemas.mjs: edit the module, then re-run the bundler.
+  // @schemas:begin verdict-doc
   verdict: `Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 
 \`\`\`yaml
@@ -328,6 +333,7 @@ wrong, why it matters, concrete fix direction — ids matching frontmatter), \`#
 check\` (what was re-run, verbatim result tail). Authority: the actual diff and the
 inspector's own command runs; the cook's report is a claim, not a source.
 Budget: ≤ 150 lines.`,
+  // @schemas:end verdict-doc
   review_report: `Producer: review workflow (inspector Mode 3 findings, planner-assembled).
 Consumers: operator, later finding-to-packet dispatch. Advisory — no PASS/FAIL.
 
