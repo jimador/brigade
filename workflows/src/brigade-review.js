@@ -8,6 +8,20 @@ export const meta = {
 // The harness sometimes hands us args as a JSON string instead of an object — normalize once, up front.
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
+// Check the args against what this script reads, right after parsing them. Keys it never
+// reads only get a warning. A bad arg stops the run at the first line of the runtime body
+// below, before any phase or agent starts: everything up to there only defines things. The
+// stop waits until then because regression pins run this top part alone, with partial args.
+const ARGS_CHECK = validateArgs(ARGS_REVIEW, A)
+if (ARGS_CHECK.unknown.length) blog('planner', `ignoring unknown args: ${ARGS_CHECK.unknown.join(', ')}`)
+// Logs every bad arg and gives the result this script returns when it stops at entry.
+function invalidArgs() {
+  for (const error of ARGS_CHECK.errors) blog('inspector', error)
+  return { findings: [], contextTier: 'bare', reportPath: null, error: `invalid args: ${ARGS_CHECK.errors.join('; ')}` }
+}
+// Args that are not an object at all would crash the reads just below, so those stop here.
+if (A === null || typeof A !== 'object') return invalidArgs()
+
 // Text an operator's config layers add to agent prompts, by role. Accepts the plain role map
 // or the whole `brigade-config prompts --json` output, and says so when a value carried no text.
 const PROMPT_RESOLVED = resolvePromptExtras(A.promptOverrides)
@@ -162,6 +176,7 @@ function buildReviewReportMarkdown(params) {
 // Everything below runs inside a single async IIFE (rather than top-level await) so this file
 // stays valid under a plain CommonJS-style syntax check as well as the Workflow runtime.
 return (async () => {
+  if (!ARGS_CHECK.ok) return invalidArgs()
   phase('Resolve')
 
   // Tier policy first, then the operator's config layers folded over it.

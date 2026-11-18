@@ -157,6 +157,65 @@ function withWritingRules(prompt, writing, artifact) {
   return `${prompt}\n\nWRITING RULES for the ${artifact} you write (from this repo's brigade configuration):\n\n${usable.map((rule) => `- ${rule}`).join('\n')}\n`
 }
 
+// Checks a workflow's args against what the script reads, before anything runs. Without it a
+// missing key surfaced as a TypeError deep in a run, or as the word "undefined" in an agent's
+// prompt. `spec` is `{ required: { key: type }, optional: { key: type } }`, and a type is one
+// of 'string', 'number', 'boolean', 'array', 'object' (a plain object, not a list) or
+// 'string[]', plus 'any' for a key the script reads but takes in any shape. It only looks at
+// the top level: `overrides` and `promptOverrides` are typed 'object' and their insides stay
+// the business of the helpers that read them.
+// An optional key set to null counts as not passed, the same as the helpers treat it; a
+// required key set to null is an error. It never throws: it returns `ok`, one message per bad
+// key in `errors`, and the top-level keys the script does not read in `unknown`, so the
+// caller can stop with every problem named at once and warn about the rest.
+function validateArgs(spec, A) {
+  const required = (spec && spec.required) || {}
+  const optional = (spec && spec.optional) || {}
+  const args = A !== null && typeof A === 'object' && !Array.isArray(A) ? A : {}
+  const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key)
+  const kindOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v)
+  const fits = (v, type) => {
+    if (type === 'any') return true
+    if (type === 'array') return Array.isArray(v)
+    if (type === 'string[]') return Array.isArray(v) && v.every((s) => typeof s === 'string')
+    if (type === 'object') return v !== null && typeof v === 'object' && !Array.isArray(v)
+    return typeof v === type
+  }
+  const errors = []
+  if (args !== A) errors.push(`args must be object, got ${kindOf(A)}`)
+  for (const key of Object.keys(required)) {
+    const type = required[key]
+    if (!has(args, key) || args[key] === undefined) errors.push(`missing arg: ${key} (${type})`)
+    else if (!fits(args[key], type)) errors.push(`arg ${key} must be ${type}, got ${kindOf(args[key])}`)
+  }
+  for (const key of Object.keys(optional)) {
+    const type = optional[key]
+    if (!has(args, key) || args[key] === undefined || args[key] === null) continue
+    if (!fits(args[key], type)) errors.push(`arg ${key} must be ${type}, got ${kindOf(args[key])}`)
+  }
+  const unknown = Object.keys(args).filter((key) => !has(required, key) && !has(optional, key))
+  return { ok: errors.length === 0, errors, unknown }
+}
+
+// What each workflow reads from its args. Required keys have no fallback in the script; the
+// optional ones do (a tier default, an empty map, or nothing at all). `writing` is 'any' on
+// purpose: withWritingRules ignores any shape it cannot use, and the workflow smoke test
+// pins that a malformed one leaves every prompt as it was rather than stopping the run.
+const ARGS_EXECUTE = {
+  required: { dishDir: 'string', repoRoot: 'string', now: 'string', deliveryBranch: 'string', deliverySlug: 'string', items: 'array', gate: 'string[]' },
+  optional: { tier: 'string', overrides: 'object', promptOverrides: 'object', writing: 'any', maxParallel: 'number' },
+}
+const ARGS_RESEARCH = {
+  required: { dishDir: 'string', repoRoot: 'string', now: 'string', questions: 'array' },
+  optional: { tier: 'string', overrides: 'object', promptOverrides: 'object', writing: 'any' },
+}
+// Review does not read `writing`, but the brigade skill tells callers to pass it to every
+// workflow, so it is listed here to keep that from warning on every run.
+const ARGS_REVIEW = {
+  required: { repoRoot: 'string', now: 'string', reviewSlug: 'string', input: 'object' },
+  optional: { tier: 'string', overrides: 'object', promptOverrides: 'object', mainLine: 'string', boardConfigured: 'boolean', writing: 'any' },
+}
+
 const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' } } }
 
 const SCHEMA_COOK_RETURN = { type: 'object', required: ['status', 'attempt', 'branch', 'reportPath', 'filesChanged', 'summary'], properties: { status: { enum: ['done', 'blocked'] }, attempt: { type: 'integer' }, branch: { type: 'string' }, reportPath: { type: 'string' }, filesChanged: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' }, blockedReason: { type: 'string' } } }
@@ -360,6 +419,20 @@ function resolveReviewDimensions(overrides) {
 // The harness sometimes hands us args as a JSON string instead of an object — normalize once, up front.
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
+// Check the args against what this script reads, right after parsing them. Keys it never
+// reads only get a warning. A bad arg stops the run at the first line of the runtime body
+// below, before any phase or agent starts: everything up to there only defines things. The
+// stop waits until then because regression pins run this top part alone, with partial args.
+const ARGS_CHECK = validateArgs(ARGS_REVIEW, A)
+if (ARGS_CHECK.unknown.length) blog('planner', `ignoring unknown args: ${ARGS_CHECK.unknown.join(', ')}`)
+// Logs every bad arg and gives the result this script returns when it stops at entry.
+function invalidArgs() {
+  for (const error of ARGS_CHECK.errors) blog('inspector', error)
+  return { findings: [], contextTier: 'bare', reportPath: null, error: `invalid args: ${ARGS_CHECK.errors.join('; ')}` }
+}
+// Args that are not an object at all would crash the reads just below, so those stop here.
+if (A === null || typeof A !== 'object') return invalidArgs()
+
 // Text an operator's config layers add to agent prompts, by role. Accepts the plain role map
 // or the whole `brigade-config prompts --json` output, and says so when a value carried no text.
 const PROMPT_RESOLVED = resolvePromptExtras(A.promptOverrides)
@@ -514,6 +587,7 @@ function buildReviewReportMarkdown(params) {
 // Everything below runs inside a single async IIFE (rather than top-level await) so this file
 // stays valid under a plain CommonJS-style syntax check as well as the Workflow runtime.
 return (async () => {
+  if (!ARGS_CHECK.ok) return invalidArgs()
   phase('Resolve')
 
   // Tier policy first, then the operator's config layers folded over it.
