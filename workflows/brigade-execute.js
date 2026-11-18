@@ -719,6 +719,20 @@ THE PACKET (its files list is the only set of paths you may commit):
 ${item.packet}
 `
 
+// brigade-validate prints `ok    <path> (<doc>)` for a clean file and only `FAIL` or `warn`
+// lines otherwise. A warning, such as a model copied from the schema example, still exits 0,
+// so the stewards read the line rather than the exit status.
+const validOnlyWhen = (subject, doc) => `${subject} passes only when the validator prints a line starting ok that names it and ends (${doc}), and no FAIL or warn line; the exit status alone is not enough, since a warning exits 0.`
+
+// Workflow agents do not always get CLAUDE_PLUGIN_ROOT in their shell. Without it the validate
+// command points at /scripts/brigade-validate, and a steward that read that failure as
+// "invalid" would refuse every landing, so it is told where else the validator lives.
+const VALIDATOR_FALLBACK = `If CLAUDE_PLUGIN_ROOT is empty in your shell, run the brigade-validate in the highest-version folder under ~/.claude/plugins/cache/*/brigade/ instead, or ${A.repoRoot}/scripts/brigade-validate when that exists. If no copy can be found, return ok: false (or valid: false) saying the validator is unreachable; never judge the file by eye instead.`
+
+// The line the landing steward starts its detail with when the item's commits landed but its
+// worktree still holds uncommitted changes, so it keeps the worktree and the branch.
+const teardownRefusal = (branch, worktreePath) => `teardown refused: ${branch} landed but ${worktreePath} still has uncommitted changes`
+
 const stewardLandPrompt = (worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction) => `
 You are the Steward landing ONE finished, passed work item. Follow these steps in
 order and stop at the first failure.
@@ -729,23 +743,29 @@ order and stop at the first failure.
    one, do NOT land: return ok: false, contamination: true, and describe what you
    found in detail.
 
-1b. Artifact check — run: head -3 ${verdictPath} — it must exist and its
-   frontmatter must start doc: verdict. Then run: head -3 ${reportPath} — it must
-   exist and its frontmatter must start doc: report. Handle each independently, self-
+1b. Artifact check — run: head -3 ${verdictPath} and head -3 ${reportPath} to see
+   what is there, then run the validator on each:
+     \${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate '${verdictPath}'
+     \${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate '${reportPath}'
+   ${VALIDATOR_FALLBACK}
+   ${validOnlyWhen('The verdict', 'verdict')} The same goes for the report with
+   (report). Treat any other output for a file as invalid, and handle an invalid
+   artifact exactly like a missing one: a fenced frontmatter, a placeholder model, a
+   FAIL or warn line or the wrong doc type all count. Handle each independently, self-
    healing instead of refusing when the workflow has handed you a reconstruction:
-   - Verdict missing or wrong doc type: do NOT land, and do NOT write a verdict.
+   - Verdict missing or invalid: do NOT land, and do NOT write a verdict.
      The verdict IS the authorization to merge, so writing one here would be
      manufacturing your own permission — the gate would then only ever say what
      this step wrote. A verdict that no inspector wrote is not a verdict.
-     Return ok: false naming ${verdictPath} as missing, so the planner can re-run
-     the Inspector against the real diff.${verdictReconstruction
+     Return ok: false naming ${verdictPath} as missing or invalid, with the
+     validator's line, so the planner can re-run the Inspector against the real diff.${verdictReconstruction
        ? ` Structured verdict data was handed to you; record it in your returned detail as UNVERIFIED context, but it does not authorize landing and must not be written to ${verdictPath}.`
        : ``}
-   - Report missing or wrong doc type: ${reportReconstruction
-       ? `write the block below to ${reportPath} — the cook returned this report but never wrote the file — prefixing it with the line \`reconstructed_by: steward\` inside its frontmatter so a later reader can tell it was recovered from a return value rather than written by the cook itself. A report records what happened; it does not authorize anything, which is why recovering one is safe where recovering a verdict is not. Then continue.\n\nREPORT RECONSTRUCTION:\n${reportReconstruction}`
-       : `no structured cook data was handed to you for self-healing — treat that as the artifact-missing outcome: do NOT land, return ok: false with detail naming the missing artifact.`}
-   If either check already passed (file present, correct doc type), skip its write —
-   never overwrite a real artifact with a reconstruction. If you wrote either
+   - Report missing or invalid: ${reportReconstruction
+       ? `if the file exists but is invalid, first copy it to ${reportPath}.invalid so the cook's own text survives. Then write the block below to ${reportPath} — the cook returned this report but never wrote a valid file — prefixing it with the line \`reconstructed_by: steward\` inside its frontmatter so a later reader can tell it was recovered from a return value rather than written by the cook itself. A report records what happened; it does not authorize anything, which is why recovering one is safe where recovering a verdict is not. Then continue.\n\nREPORT RECONSTRUCTION:\n${reportReconstruction}`
+       : `no structured cook data was handed to you for self-healing — treat that as the artifact-missing outcome: do NOT land, return ok: false with detail naming the missing or invalid artifact and the validator's line.`}
+   If either check already passed (the validator printed its ok line), skip its
+   write — never overwrite a valid artifact with a reconstruction. If you wrote either
    reconstruction this run, name the path(s) you wrote in reconstructed (an array)
    in your return; otherwise return reconstructed: [] or omit it.
 
@@ -794,7 +814,14 @@ order and stop at the first failure.
    stating it was not contained in ${A.deliveryBranch}, leaving BOTH the branch and the
    worktree in place for investigation.
    Only if that check exits 0 — the branch tip IS contained in the delivery branch —
-   tear down, worktree first then branch:
+   read the worktree's state before removing anything:
+     git -C ${worktreePath} status --porcelain
+   If it prints anything, the commits landed but the worktree still holds changes that
+   did not. Refuse the teardown: remove nothing, delete no branch, and leave both the
+   branch and the worktree in place for the planner. Go on to step 7, then return
+   ok: true with the landed range, starting detail with this exact line:
+     ${teardownRefusal(branch, worktreePath)}
+   Only when it prints nothing, tear down, worktree first then branch:
      git -C ${A.repoRoot} worktree remove ${worktreePath}
      git -C ${A.repoRoot}/.brigade/worktrees/${A.deliverySlug} branch -d ${branch}
    The delete is run at the delivery worktree so its merge-check passes; it is safe
@@ -827,11 +854,13 @@ never create, edit, move or delete any file.
 Run these two commands:
   awk 'NR==1 && /^---$/ {f=1; print; next} f {print} f && /^---$/ {exit}' '${verdictPath}'
   \${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate '${verdictPath}'
+${VALIDATOR_FALLBACK}
 
 Return:
 - exists: true when the file is there, false when awk says it cannot open it.
-- valid: true only when brigade-validate printed ok for it AND its frontmatter says
-  doc: verdict AND ${accepts}. Anything else is false.
+- valid: true only when brigade-validate printed its ok line for the file AND its
+  frontmatter says doc: verdict AND ${accepts}. ${validOnlyWhen('The file', 'verdict')}
+  Anything else, a warning included, is false.
 - detail: one line saying what you saw (the validate line, or the error).
 `
 
@@ -1157,11 +1186,15 @@ async function runItem(item, promises) {
 
     // When the inspector handed back its verdict text, a steward writes that text out as is
     // and the probe looks again. Without usable text there is nothing to write.
+    // A verdict file the workflow wrote out is recorded in `reconstructed` once the item lands.
+    let transcribed = false
     const transcribeVerdict = async (passed) => {
       if (!usableVerdictDoc(passed.verdictDoc, passed)) return false
       const written = await stewardAgent(`transcribe:${item.slug}:${i}`, 'Inspect', verdictTranscribePrompt(verdictPath, passed.verdictDoc), SCHEMA_STEWARD_RETURN)
       blog('inspector', `transcribed the returned verdict for ${item.slug} attempt ${i + 1}: ${written ? written.detail : 'transcriber returned no result'}`)
-      return probeVerdict(passed)
+      const onDisk = await probeVerdict(passed)
+      if (onDisk) transcribed = true
+      return onDisk
     }
 
     blog('inspector', `inspect ${item.slug}: attempt ${i + 1}`)
@@ -1237,8 +1270,13 @@ async function runItem(item, promises) {
     }
 
     reconstructed = landResult.reconstructed || []
+    if (transcribed && !reconstructed.includes(verdictPath)) reconstructed = [...reconstructed, verdictPath]
     if (reconstructed.length) {
-      blog('steward', `self-healed missing artifact(s) for ${item.slug}: ${reconstructed.join(', ')}`)
+      blog('steward', `self-healed missing or invalid artifact(s) for ${item.slug}: ${reconstructed.join(', ')}`)
+    }
+    // The commits landed, but the steward kept a worktree that still had uncommitted changes.
+    if (typeof landResult.detail === 'string' && landResult.detail.includes('teardown refused:')) {
+      blog('steward', landResult.detail)
     }
 
     status = 'done'
