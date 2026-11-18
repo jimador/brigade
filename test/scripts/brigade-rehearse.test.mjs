@@ -47,8 +47,8 @@ function makeRepo(baseFiles = ['src/a.js', 'src/b.js', 'src/c.js', 'README.md'])
   return root
 }
 
-// Each item: { slug, files: [[path, mark]], depends_on, status, heavy, contract }. A mark of
-// null leaves the path unmarked in the packet body.
+// Each item: { slug, files: [[path, mark]], depends_on, status, heavy, contract, body }. A mark of
+// null leaves the path unmarked in the packet body; `body` lines go after the file list.
 // A deliveryBranch of null leaves the key out of the frontmatter.
 function writePlan(root, items, { deliveryBranch = 'main', extraFrontmatter = [] } = {}) {
   const lines = ['---', 'doc: plan', 'schema: 1', 'dish: rehearse-test', 'ticket: rehearse-test',
@@ -70,6 +70,7 @@ function writePlan(root, items, { deliveryBranch = 'main', extraFrontmatter = []
     lines.push(`## Packet: ${it.slug} — fixture packet`, '', '- **files:** the ONLY files you may touch')
     for (const [p, mark] of it.files) lines.push(mark ? `  - ${p} (${mark})` : `  - ${p}`)
     lines.push('')
+    if (it.body) lines.push(...it.body, '')
   }
   const planPath = path.join(root, 'PLAN.md')
   fs.writeFileSync(planPath, lines.join('\n'))
@@ -443,4 +444,177 @@ test('base E2 (adversarial): a configured branch that does not exist, a failing 
     assert.deepEqual(baseLines(r2.stdout),
       ['base: origin/main (delivery branch feature/not-there does not exist yet)'], body)
   }
+})
+
+// Commits each { path: body } on main, on top of makeRepo's base.
+function commitOnMain(root, files) {
+  for (const [rel, body] of Object.entries(files)) writeFile(root, rel, body)
+  git(root, ['add', '--', ...Object.keys(files)])
+  git(root, ['commit', '-q', '-m', 'more'])
+}
+
+function lineStarting(r, prefix) {
+  return r.stdout.split('\n').filter((l) => l.startsWith(prefix))
+}
+
+function worktreeCount(root) {
+  return git(root, ['worktree', 'list']).trim().split('\n').length
+}
+
+test('pin E1: a test file the item does not list warns once per file; an owned one does not; exit unchanged', () => {
+  const root = makeRepo(['scripts/foo', 'src/a.js', 'src/data.js'])
+  commitOnMain(root, {
+    'test/scripts/foo.test.mjs': "import path from 'node:path'\nconst FOO = 'scripts/foo'\nconst AGAIN = 'foo'\n",
+    'test/regression.sh': '#!/bin/sh\nnode --check src/data.js\ngrep -q x src/a.js\n',
+    'test/board/other.test.mjs': "// mentions a.json and data.js only\n",
+    'docs/notes.md': 'scripts/foo and src/a.js live outside the searched test files\n',
+  })
+  const plan = writePlan(root, [{ slug: 'one', files: [['scripts/foo', 'edit'], ['src/a.js', 'edit']] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  // Warnings come in git grep's order: by test file path, then line.
+  assert.deepEqual(lineStarting(r, 'pin: '), [
+    "pin: one lists src/a.js; test/regression.sh:3 pins it but is not in the item's files",
+    "pin: one lists scripts/foo; test/scripts/foo.test.mjs:2 pins it but is not in the item's files",
+  ])
+  assert.match(r.stdout, /0 findings, 2 warnings/)
+  const j = rehearse(root, ['--json', plan])
+  assert.equal(j.status, 0, j.stdout + j.stderr)
+  assert.deepEqual(jsonRows(j)[1], {
+    check: 'pin', level: 'warning', item: 'one',
+    detail: "test/scripts/foo.test.mjs:2 pins scripts/foo but is not in the item's files",
+    path: 'scripts/foo', test: 'test/scripts/foo.test.mjs', line: 2,
+  })
+
+  // Listing the test file, or a directory that holds it, owns it: no warning for it.
+  const owned = writePlan(root, [
+    { slug: 'one', files: [['scripts/foo', 'edit'], ['test/scripts/foo.test.mjs', 'edit']] },
+    { slug: 'two', depends_on: ['one'], files: [['src/a.js', 'edit'], ['test/', 'edit']] },
+  ])
+  const o = rehearse(root, [owned])
+  assert.equal(o.status, 0, o.stdout + o.stderr)
+  assert.deepEqual(lineStarting(o, 'pin: '), [])
+})
+
+test('premise E2: premise lines run in a removed worktree of the base; a failing one is a finding', () => {
+  const root = makeRepo()
+  // Present in the working directory but not committed: a premise about it fails on the base.
+  writeFile(root, 'only-here.txt')
+  const before = worktreeCount(root)
+  const body = [
+    '- **premise:** `test -f src/a.js`',
+    '- **premise:** `test -f only-here.txt`',
+    '```text',
+    '- **premise:** `false`',
+    '```',
+  ]
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'premise FAIL: '), ['premise FAIL: one: test -f only-here.txt (exit 1)'])
+  assert.match(r.stdout, /1 finding, 0 warnings/)
+  assert.equal(worktreeCount(root), before)
+
+  const passing = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']],
+    body: ['- **premise:** `test -f src/a.js && git rev-parse --verify -q HEAD >/dev/null`'] }])
+  const p = rehearse(root, [passing])
+  assert.equal(p.status, 0, p.stdout + p.stderr)
+  assert.deepEqual(lineStarting(p, 'premise FAIL: '), [])
+  assert.equal(worktreeCount(root), before)
+})
+
+// A packet whose Verify block mixes lines that cannot run on base with lines that only fail
+// because the change is missing.
+const VERIFY_BODY = [
+  '### Steps',
+  '',
+  '1. **Implement:** fix src/broken.js and make the test pass.',
+  '2. **Verify (must pass):**',
+  '',
+  '```bash',
+  '# comments and blank lines are skipped',
+  '',
+  'node --check src/broken.js',
+  'node --check src/ok.js',
+  'node --test test/fails.test.mjs',
+  'node --check src/new.js',
+  'node --test test/missing.test.mjs',
+  'no-such-tool-for-rehearse --version',
+  '```',
+  '',
+  '### Acceptance criteria',
+  '',
+  '```bash',
+  'node --test test/outside-verify.test.mjs',
+  '```',
+]
+
+test('verify E3: a node --check failing on base, a missing file and a missing program are UNRUNNABLE; a failing test is not', () => {
+  const root = makeRepo()
+  commitOnMain(root, {
+    'src/broken.js': 'function (\n',
+    'src/ok.js': 'export const ok = 1\n',
+    'test/fails.test.mjs': "import test from 'node:test'\nimport assert from 'node:assert'\n" +
+      "test('needs the change', () => assert.fail('missing'))\n",
+  })
+  const before = worktreeCount(root)
+  const plan = writePlan(root, [{ slug: 'one', body: VERIFY_BODY, files: [
+    ['src/broken.js', 'edit'], ['test/fails.test.mjs', 'edit'], ['src/new.js', 'create']] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify UNRUNNABLE: one: node --check src/broken.js: node --check fails on base (exit 1)',
+    'verify UNRUNNABLE: one: node --test test/missing.test.mjs: ' +
+      'test/missing.test.mjs does not exist on base and the packet does not create it',
+    'verify UNRUNNABLE: one: no-such-tool-for-rehearse --version: program no-such-tool-for-rehearse not found',
+  ])
+  assert.equal(worktreeCount(root), before)
+  const j = rehearse(root, ['--json', plan])
+  assert.equal(j.status, 1, j.stdout + j.stderr)
+  assert.deepEqual(jsonRows(j).filter((row) => row.check === 'verify')[0], {
+    check: 'verify', level: 'finding', item: 'one',
+    detail: 'node --check src/broken.js: node --check fails on base (exit 1)', command: 'node --check src/broken.js',
+  })
+})
+
+test('verify E3 (adversarial): a file an ancestor item creates is not missing; failing lines that need the change print nothing', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [
+    { slug: 'maker', files: [['src/made.mjs', 'create']] },
+    { slug: 'user', depends_on: ['maker'], files: [['src/a.js', 'edit']], body: [
+      '- **Verify:**',
+      '  ```bash',
+      '  node src/made.mjs',
+      '  grep -q "new behavior" src/a.js',
+      '  test "$(cat src/a.js)" = changed \\',
+      '    && echo done',
+      '  ```',
+    ] },
+  ])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [])
+})
+
+test('no-exec E4: --no-exec skips premises and Verify commands and says so', () => {
+  const root = makeRepo()
+  commitOnMain(root, { 'src/broken.js': 'function (\n' })
+  const before = worktreeCount(root)
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/broken.js', 'edit']],
+    body: ['- **premise:** `false`', ...VERIFY_BODY] }])
+  const ran = rehearse(root, [plan])
+  assert.equal(ran.status, 1, ran.stdout + ran.stderr)
+  assert.deepEqual(lineStarting(ran, 'premise FAIL: '), ['premise FAIL: one: false (exit 1)'])
+  assert.deepEqual(lineStarting(ran, 'premises: '), [])
+
+  const r = rehearse(root, ['--no-exec', plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'premises: '), ['premises: skipped'])
+  assert.deepEqual(lineStarting(r, 'premise FAIL: '), [])
+  assert.deepEqual(lineStarting(r, 'verify '), [])
+  assert.equal(worktreeCount(root), before)
+  const j = rehearse(root, ['--json', '--no-exec', plan])
+  assert.equal(j.status, 0, j.stdout + j.stderr)
+  assert.equal(j.stdout.trim(), '')
+  assert.match(j.stderr, /^premises: skipped$/m)
 })

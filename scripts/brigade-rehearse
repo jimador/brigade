@@ -10,12 +10,23 @@
 //   overlap   two items with no dependency path between them list the same file
 //   chain     a file listed by three or more items (a warning: it serializes the plan)
 //   risk      `brigade-risk` says an item escalates but the item is not `heavy: true`
+//   pin       a test file the item does not list mentions a file it does (a warning: the cook
+//             may have to change behavior that test pins)
+//   premise FAIL       a packet's `- **premise:** \`<command>\`` line exits non-zero on the base
+//   verify UNRUNNABLE  a Verify command fails on the base for a reason the change cannot fix:
+//             a `node --check` / `bash -n` that fails there, or a program or file argument that
+//             is missing there and that the packet does not create
 //
 // Each finding prints as one line `<check>: <item>: <detail>`; a chain warning prints as
-// `chain: <file>: <slugs in order>`. With --json, each prints as one JSON object per line.
+// `chain: <file>: <slugs in order>`; the last three print in the shapes their names show.
+// With --json, each prints as one JSON object per line.
+//
+// The premise and Verify commands run in a temporary detached worktree of the base, which is
+// removed afterwards, each with a 60 s limit. --no-exec skips running them and prints
+// `premises: skipped` (to stderr with --json).
 //
 // Usage:
-//   brigade-rehearse <PLAN.md> [--base <ref>] [--json]
+//   brigade-rehearse <PLAN.md> [--base <ref>] [--json] [--no-exec]
 //
 // The base defaults to the plan's `delivery_branch`. A fresh dish only creates that branch at
 // dispatch, after the plan check, so when it is unset or does not exist yet the base falls back
@@ -26,8 +37,9 @@
 // the current directory, so run it from inside the repository the plan describes.
 //
 // Exit codes: 0 no findings (warnings allowed), 1 findings, 2 usage or I/O error.
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parsePlan } from './lib/plan.mjs'
@@ -35,7 +47,7 @@ import { parsePlan } from './lib/plan.mjs'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 function usage() {
-  console.error('usage: brigade-rehearse <PLAN.md> [--base <ref>] [--json]')
+  console.error('usage: brigade-rehearse <PLAN.md> [--base <ref>] [--json] [--no-exec]')
   return 2
 }
 
@@ -94,7 +106,7 @@ function packetMarks(text) {
 }
 
 function git(args) {
-  return spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  return spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 })
 }
 
 function isCommit(ref) {
@@ -321,14 +333,511 @@ function checkRisk(open) {
   return found
 }
 
-function main() {
+// pin: the test files that most often pin behavior. A file an item lists is "mentioned" when its
+// basename appears as a whole name (so `a.js` is not found inside `data.js` or `a.json`); its
+// full path always contains the basename, so one search covers both.
+const PIN_PATHS = ['test/regression.sh', 'test/scripts', 'test/board']
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function mentions(text, name) {
+  return new RegExp(`(^|[^\\w.-])${escapeRegExp(name)}(?![\\w-])`).test(text)
+}
+
+// pin: one warning per (listed file, test file) pair, naming the first line that mentions it,
+// for every test file at the base that the item does not list. Directory entries are skipped.
+function checkPin(open, base) {
+  const found = []
+  for (const item of open) {
+    const files = [...new Set(item.files.map(normalize))].filter((p) => p !== '' && !p.endsWith('/'))
+    if (files.length === 0) continue
+    const args = ['grep', '-n', '-I', '-F']
+    for (const name of new Set(files.map((p) => path.posix.basename(p)))) args.push('-e', name)
+    const r = git([...args, base, '--', ...PIN_PATHS])
+    if (r.status === 1) continue
+    if (r.status !== 0) throw new RehearsalError(`git grep for pinning tests failed: ${r.stderr.trim()}`)
+    const seen = new Set()
+    const prefix = `${base}:`
+    for (const row of r.stdout.split('\n')) {
+      if (!row.startsWith(prefix)) continue
+      const m = /^(.*?):(\d+):(.*)$/.exec(row.slice(prefix.length))
+      if (!m) continue
+      const [, testFile, line, body] = m
+      if (item.files.some((e) => covers(normalize(e), testFile))) continue
+      for (const p of files) {
+        const key = `${p}\0${testFile}`
+        if (seen.has(key) || !mentions(body, path.posix.basename(p))) continue
+        seen.add(key)
+        found.push({ check: 'pin', level: 'warning', item: item.slug, path: p, test: testFile, line: Number(line),
+          detail: `${testFile}:${line} pins ${p} but is not in the item's files`,
+          text: `pin: ${item.slug} lists ${p}; ${testFile}:${line} pins it but is not in the item's files` })
+      }
+    }
+  }
+  return found
+}
+
+// The raw lines of each packet, from its `## Packet: <slug>` heading to the next one.
+function packetSections(text) {
+  const sections = new Map()
+  let current = null
+  let fenced = false
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced
+    else if (!fenced) {
+      const heading = /^##\s+Packet:\s*(\S+)/.exec(line)
+      if (heading) {
+        current = heading[1]
+        if (!sections.has(current)) sections.set(current, [])
+        continue
+      }
+    }
+    if (current !== null) sections.get(current).push(line)
+  }
+  return sections
+}
+
+// Every `- **premise:** `<command>`` line outside fenced code.
+function packetPremises(lines) {
+  const out = []
+  let fenced = false
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced
+      continue
+    }
+    if (fenced) continue
+    const m = /^\s*[-*]\s+\*\*premise:\*\*\s*`(.+)`\s*$/i.exec(line)
+    if (m && m[1].trim() !== '') out.push(m[1].trim())
+  }
+  return out
+}
+
+// The commands of one fenced shell block: blank and comment lines dropped, `\` continuations
+// and heredoc bodies kept with the line that starts them.
+function blockCommands(block) {
+  const out = []
+  let pending = ''
+  let heredoc = null
+  for (const raw of block) {
+    const line = raw.trim()
+    if (heredoc !== null) {
+      pending += `\n${line}`
+      if (line === heredoc) {
+        out.push(pending)
+        pending = ''
+        heredoc = null
+      }
+      continue
+    }
+    if (pending === '' && (line === '' || line.startsWith('#'))) continue
+    pending = pending === '' ? line : `${pending}\n${line}`
+    if (line.endsWith('\\')) continue
+    const h = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/.exec(line.replace(/<<</g, ''))
+    if (h) {
+      heredoc = h[2]
+      continue
+    }
+    out.push(pending)
+    pending = ''
+  }
+  if (pending !== '') out.push(pending)
+  return out
+}
+
+// A Verify step: a heading, a list item or a bold label that starts with "Verify".
+const VERIFY_STEP = /^(\s*)(?:(#{1,6})\s+\**|(?:\d+[.)]|[-*])\s+\**|\*\*)\s*Verify\b/i
+
+// The commands in every fenced bash/sh block under the packet's Verify step. Under a heading the
+// step runs to the next heading; under a list item it also ends at the next item at the same or
+// a shallower indent.
+function verifyCommands(lines) {
+  const commands = []
+  let fence = null
+  let region = null
+  let block = []
+  for (const line of lines) {
+    const f = /^\s*(```|~~~)\s*([^\s`]*)/.exec(line)
+    if (fence !== null) {
+      if (f && f[1] === fence.marker && f[2] === '') {
+        if (fence.shell) commands.push(...blockCommands(block))
+        fence = null
+      } else if (fence.shell) block.push(line)
+      continue
+    }
+    if (f) {
+      fence = { marker: f[1], shell: region !== null && /^(bash|sh|shell)$/i.test(f[2]) }
+      block = []
+      continue
+    }
+    const v = VERIFY_STEP.exec(line)
+    if (v) {
+      region = { heading: Boolean(v[2]), indent: v[1].length }
+      continue
+    }
+    if (region === null) continue
+    if (/^\s*#{1,6}\s/.test(line)) region = null
+    else if (!region.heading) {
+      const item = /^(\s*)(?:\d+[.)]|[-*])\s/.exec(line)
+      if (item && item[1].length <= region.indent) region = null
+    }
+  }
+  return commands
+}
+
+// The end (exclusive) of a `$( )`, `${ }` or backtick expansion starting at i.
+function expansionEnd(line, i) {
+  if (line[i] === '`') {
+    const e = line.indexOf('`', i + 1)
+    return e === -1 ? line.length : e + 1
+  }
+  if (line[i + 1] === '{') {
+    const e = line.indexOf('}', i + 2)
+    return e === -1 ? line.length : e + 1
+  }
+  let depth = 0
+  for (let j = i + 1; j < line.length; j++) {
+    if (line[j] === '(') depth++
+    else if (line[j] === ')' && --depth === 0) return j + 1
+  }
+  return line.length
+}
+
+const REDIRECT = /^(&>>|&>|<<<|<<-|<<|<>|>>|>&|<&|>\||>|<)/
+
+// Splits a shell command into simple commands: [{ words, text }], each word
+// { text, quoted, dynamic, redirect }. It knows quotes, escapes, expansions, comments, control
+// operators, redirections and heredoc bodies; enough for the static checks, not a full shell.
+function simpleCommands(line) {
+  const commands = []
+  let words = []
+  let word = null
+  let start = 0
+  let redirect = null
+  let heredocs = []
+  const open = () => (word ??= { text: '', quoted: false, dynamic: false, redirect: null })
+  const endWord = () => {
+    if (word === null) return
+    if (redirect !== null) {
+      word.redirect = redirect
+      if (redirect.startsWith('<<') && redirect !== '<<<') heredocs.push(word.text)
+      redirect = null
+    }
+    words.push(word)
+    word = null
+  }
+  const endCommand = (at, next) => {
+    endWord()
+    if (words.length > 0) commands.push({ words, text: line.slice(start, at).trim() })
+    words = []
+    start = next
+    redirect = null
+  }
+  let i = 0
+  while (i < line.length) {
+    const c = line[i]
+    if (c === '\\') {
+      if (line[i + 1] === '\n') endWord()
+      else open().text += line[i + 1] ?? ''
+      i += 2
+      continue
+    }
+    if (c === "'" || c === '"') {
+      let end = line.indexOf(c, i + 1)
+      if (end === -1) end = line.length
+      const w = open()
+      const body = line.slice(i + 1, end)
+      w.quoted = true
+      if (c === '"' && /[$`]/.test(body)) w.dynamic = true
+      w.text += body
+      i = end + 1
+      continue
+    }
+    if (c === '`' || c === '$') {
+      const end = c === '$' && line[i + 1] !== '(' && line[i + 1] !== '{' ? i + 1 : expansionEnd(line, i)
+      const w = open()
+      w.dynamic = true
+      w.text += line.slice(i, end)
+      i = end
+      continue
+    }
+    if (c === '#' && word === null) {
+      const e = line.indexOf('\n', i)
+      i = e === -1 ? line.length : e
+      continue
+    }
+    if (c === '\n') {
+      endCommand(i, i + 1)
+      i++
+      // Skip heredoc bodies up to their delimiter lines.
+      while (heredocs.length > 0 && i < line.length) {
+        let e = line.indexOf('\n', i)
+        if (e === -1) e = line.length
+        if (line.slice(i, e).trim() === heredocs[0]) heredocs.shift()
+        i = e + 1
+      }
+      heredocs = []
+      start = Math.min(i, line.length)
+      continue
+    }
+    if (c === ' ' || c === '\t') {
+      endWord()
+      i++
+      continue
+    }
+    const r = REDIRECT.exec(line.slice(i))
+    if (r && (c !== '&' || r[1].startsWith('&>'))) {
+      if (word !== null && !word.quoted && /^\d+$/.test(word.text)) word = null
+      else endWord()
+      i += r[1].length
+      if (r[1] === '>&' || r[1] === '<&') {
+        const fd = /^\s*[\d-]+/.exec(line.slice(i))
+        if (fd) i += fd[0].length
+      } else redirect = r[1]
+      continue
+    }
+    if (c === ';' || c === '|' || c === '&' || c === '(' || c === ')') {
+      let j = i + 1
+      if (c !== '(' && c !== ')') while (j < line.length && /[;|&]/.test(line[j])) j++
+      endCommand(i, j)
+      i = j
+      continue
+    }
+    open().text += c
+    i++
+  }
+  endCommand(line.length, line.length)
+  return commands
+}
+
+const SHELL_WORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}',
+  'in', 'esac'])
+const WRAPPERS = new Set(['env', 'exec', 'command', 'nohup', 'time', 'xargs'])
+// Segments whose words are not a program and its arguments, or whose program comes from a
+// package registry rather than the tree.
+const OPAQUE = new Set(['for', 'case', 'select', 'function', 'npx', 'bunx', 'pnpx'])
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
+const INTERPRETERS = new Set([...SHELLS, 'node', 'python', 'python3', 'ruby', 'perl'])
+const NODE_VALUE_OPTIONS = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader',
+  '-C', '--conditions', '--input-type'])
+
+// The program word and its argument words of a simple command, past assignments, shell
+// keywords and wrappers. 'stop' for cd/pushd (later relative paths no longer mean the tree);
+// null when there is nothing to check.
+function commandParts(words) {
+  const plain = (w) => !w.quoted && !w.dynamic
+  let k = 0
+  while (k < words.length && (words[k].redirect !== null ||
+    (plain(words[k]) && (/^[A-Za-z_]\w*=/.test(words[k].text) || SHELL_WORDS.has(words[k].text))))) k++
+  if (k >= words.length || words[k].dynamic) return null
+  let program = words[k]
+  if (plain(program) && (program.text === 'cd' || program.text === 'pushd')) return 'stop'
+  if (OPAQUE.has(program.text)) return null
+  if (WRAPPERS.has(program.text)) {
+    k++
+    while (k < words.length && (words[k].redirect !== null ||
+      (plain(words[k]) && (words[k].text.startsWith('-') || /^[A-Za-z_]\w*=/.test(words[k].text))))) k++
+    if (k >= words.length || words[k].dynamic) return null
+    program = words[k]
+  }
+  return { program: program.text, args: words.slice(k + 1).filter((w) => w.redirect === null || w.redirect === '<') }
+}
+
+// A word that names a file: path-safe characters only (no globs, `=`, `:` or `..`) and, unless
+// `loose`, a final name with an extension.
+function looksLikePath(t, loose) {
+  if (t === '' || !/^[\w./+@-]+$/.test(t) || t.includes('..') || t.endsWith('/')) return false
+  return loose || /(^|\/)[^/]*[^/.]\.[A-Za-z][A-Za-z0-9]*$/.test(t)
+}
+
+// The words of a simple command that name files it reads: `<` inputs, an interpreter's script,
+// and any unquoted path-like word with an extension. Git arguments are refs and pathspecs that
+// may legitimately be absent, so git contributes none.
+function fileArgs(program, args) {
+  const name = path.posix.basename(program)
+  if (name === 'git') return []
+  const out = []
+  const inline = name === 'node' ? new Set(['-e', '-p', '--eval', '--print']) : new Set(['-c', '-e', '-E', '-m'])
+  let script = INTERPRETERS.has(name) && !args.some((a) => !a.quoted && inline.has(a.text))
+  let skipNext = false
+  for (const a of args) {
+    if (a.redirect === '<') {
+      if (!a.dynamic) out.push(a.text)
+      continue
+    }
+    if (skipNext) {
+      skipNext = false
+      continue
+    }
+    if (a.quoted || a.dynamic) {
+      script = false
+      continue
+    }
+    if (a.text.startsWith('-')) {
+      if (name === 'node' && NODE_VALUE_OPTIONS.has(a.text)) skipNext = true
+      continue
+    }
+    if (looksLikePath(a.text, script)) out.push(a.text)
+    script = false
+  }
+  return out
+}
+
+// `node --check` / `bash -n` segments: what they check, and how to name them.
+function syntaxCheck(seg) {
+  const parts = commandParts(seg.words)
+  if (parts === null || parts === 'stop') return null
+  const name = path.posix.basename(parts.program)
+  const flags = parts.args.filter((a) => !a.quoted).map((a) => a.text)
+  if (name === 'node' && (flags.includes('--check') || flags.includes('-c'))) {
+    return { label: 'node --check', targets: fileArgs(parts.program, parts.args) }
+  }
+  if (SHELLS.has(name) && flags.includes('-n')) return { label: `${name} -n`, targets: fileArgs(parts.program, parts.args) }
+  return null
+}
+
+const EXEC_TIMEOUT_MS = 60 * 1000
+
+// Runs a command with bash in `cwd`, its own process group, no stdin and no output, killing the
+// whole group when it exits or when the time limit runs out.
+function runShell(command, cwd) {
+  return new Promise((resolve) => {
+    let timedOut = false
+    let child
+    try {
+      child = spawn('bash', ['-c', command], { cwd, stdio: 'ignore', detached: true })
+    } catch (err) {
+      resolve({ status: 127, signal: null, timedOut: false })
+      return
+    }
+    const killGroup = () => {
+      try {
+        process.kill(-child.pid, 'SIGKILL')
+      } catch {
+        // The group is already gone.
+      }
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      killGroup()
+    }, EXEC_TIMEOUT_MS)
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve({ status: 127, signal: null, timedOut: false })
+    })
+    child.on('exit', (code, signal) => {
+      clearTimeout(timer)
+      killGroup()
+      resolve({ status: code, signal, timedOut })
+    })
+  })
+}
+
+function exitText(r) {
+  if (r.timedOut) return `exit 124, timed out after ${EXEC_TIMEOUT_MS / 1000} s`
+  return r.status !== null ? `exit ${r.status}` : `exit ${r.signal}`
+}
+
+// Runs fn(worktree) inside a temporary detached worktree of base, always removing it after.
+async function withBaseWorktree(base, fn) {
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-rehearse-base-'))
+  const wt = path.join(top, 'base')
+  const add = git(['worktree', 'add', '--detach', wt, base])
+  if (add.status !== 0) {
+    fs.rmSync(top, { recursive: true, force: true })
+    throw new RehearsalError(`could not create a worktree of ${base}: ${add.stderr.trim()}`)
+  }
+  try {
+    return await fn(wt)
+  } finally {
+    git(['worktree', 'remove', '--force', '--force', wt])
+    fs.rmSync(top, { recursive: true, force: true })
+    git(['worktree', 'prune'])
+  }
+}
+
+// Why a Verify command that failed on base can never pass, or null when the failure is the
+// expected one (the change is missing). `creates(p)` says whether the packet brings p.
+async function unrunnableReason(command, wt, creates) {
+  const inTree = (t) => (path.isAbsolute(t) ? fs.existsSync(t) : fs.existsSync(path.join(wt, t)))
+  const relative = (t) => normalize(path.isAbsolute(t) ? path.relative(wt, t) : t)
+  const missing = (t) => !inTree(t) && !creates(relative(t))
+  const segments = simpleCommands(command)
+  for (const seg of segments) {
+    const s = syntaxCheck(seg)
+    if (s === null) continue
+    if (s.targets.some((t) => !inTree(t) && creates(relative(t)))) continue
+    const r = await runShell(seg.text, wt)
+    if (r.status !== 0) return `${s.label} fails on base (${exitText(r)})`
+  }
+  for (const seg of segments) {
+    const parts = commandParts(seg.words)
+    if (parts === 'stop') break
+    if (parts === null) continue
+    const { program, args } = parts
+    if (program.includes('/')) {
+      if (missing(program)) return `${program} does not exist on base and the packet does not create it`
+    } else {
+      const found = spawnSync('bash', ['-c', 'command -v -- "$1"', '_', program], { cwd: wt, stdio: 'ignore' })
+      if (found.status !== 0) return `program ${program} not found`
+    }
+    for (const t of fileArgs(program, args)) {
+      if (missing(t)) return `${t} does not exist on base and the packet does not create it`
+    }
+  }
+  return null
+}
+
+// premise FAIL and verify UNRUNNABLE: runs every open packet's premise lines and Verify commands
+// in one temporary worktree of base. A worktree is only made when there is something to run.
+// A path counts as created by the packet when the item or any item it depends on lists it.
+async function checkExec(open, sections, base, bySlug) {
+  const work = []
+  for (const item of open) {
+    const lines = sections.get(item.slug) ?? []
+    const premises = packetPremises(lines)
+    const verify = verifyCommands(lines)
+    if (premises.length > 0 || verify.length > 0) work.push({ item, premises, verify })
+  }
+  if (work.length === 0) return []
+  return withBaseWorktree(base, async (wt) => {
+    const found = []
+    for (const { item, premises, verify } of work) {
+      for (const command of premises) {
+        const r = await runShell(command, wt)
+        if (r.status === 0) continue
+        found.push({ check: 'premise', item: item.slug, command, detail: `${command} (${exitText(r)})`,
+          text: `premise FAIL: ${item.slug}: ${command} (${exitText(r)})` })
+      }
+      const entries = [...item.files]
+      for (const a of ancestorsOf(item.slug, bySlug)) entries.push(...(bySlug.get(a)?.files ?? []))
+      const creates = (p) => entries.some((e) => covers(normalize(e), p))
+      for (const command of verify) {
+        const r = await runShell(command, wt)
+        if (r.status === 0) continue
+        const reason = await unrunnableReason(command, wt, creates)
+        if (reason === null) continue
+        const shown = command.replace(/\s*\\\n\s*/g, ' ').split('\n')[0]
+        found.push({ check: 'verify', item: item.slug, command: shown, detail: `${shown}: ${reason}`,
+          text: `verify UNRUNNABLE: ${item.slug}: ${shown}: ${reason}` })
+      }
+    }
+    return found
+  })
+}
+
+async function main() {
   const argv = process.argv.slice(2)
   let json = false
+  let noExec = false
   let base = null
   const positional = []
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--json') json = true
+    else if (arg === '--no-exec') noExec = true
     else if (arg === '--base') {
       const value = argv[i + 1]
       if (value === undefined || value === '' || value.startsWith('--')) return usage()
@@ -384,7 +893,9 @@ function main() {
       ...checkOverlap(open, bySlug),
       ...checkChain(open, bySlug),
       ...checkRisk(open),
+      ...checkPin(open, base),
     ]
+    if (!noExec) results.push(...await checkExec(open, packetSections(text), base, bySlug))
   } catch (err) {
     if (!(err instanceof RehearsalError)) throw err
     console.error(`brigade-rehearse: ${err.message}`)
@@ -395,12 +906,16 @@ function main() {
   const findings = results.filter((r) => r.level === 'finding')
   const warnings = results.length - findings.length
   for (const r of results) {
+    const { check, level, item, detail, text: line, ...rest } = r
     if (json) {
-      const { check, level, item, detail, ...rest } = r
       console.log(JSON.stringify({ check, level, item, detail, ...rest }))
     } else {
-      console.log(`${r.check}: ${r.item}: ${r.detail}`)
+      console.log(line ?? `${check}: ${item}: ${detail}`)
     }
+  }
+  if (noExec) {
+    if (json) console.error('premises: skipped')
+    else console.log('premises: skipped')
   }
   if (!json) {
     console.log(`rehearsed ${plan.items.length} items against ${base}: ` +
@@ -410,4 +925,4 @@ function main() {
   return findings.length > 0 ? 1 : 0
 }
 
-process.exitCode = main()
+process.exitCode = await main()
