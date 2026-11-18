@@ -84,6 +84,8 @@ writing the section (the operator may be editing in Obsidian).
 ## Optional — Create a ticket
 
 Write a new file; refuse overwrite. Prefer Templater from Obsidian for humans.
+A handoff follow-up sets `status: backlog`, the current ticket's `project`, and
+`related: [<current ticket id>]`.
 
 ## Claim / Design rules
 

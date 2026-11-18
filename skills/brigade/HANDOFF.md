@@ -161,10 +161,18 @@ PR body follows the preset's rule text and every `pr_body` rule.
 
 ## 5. Ticket and comment
 
+First rule every out-of-scope note. Collect the `## Out of scope` lines of every cook report and
+every out-of-scope finding in the verdicts, and add one `## Follow-ups` row each (`SCHEMAS.md`
+§ plan): `filed` as a new ticket, `covered` by an existing ticket, or `dropped` with the reason.
+A filed ticket has a title, a goal, acceptance criteria, the board's backlog status, the same
+project, and a `related` link to this ticket; create it with the source adapter's create-ticket
+operation. A source without one gets the follow-up written into the handoff comment and the row
+ruled `covered` with ticket `handoff comment`. Run `brigade-validate` on PLAN.md after.
+
 Move the ticket to its in-review-equivalent status; post a handoff comment — what changed,
 how it was verified, how to review — plain language, nothing a board reader can't open.
 When the session start listed writing rules, the comment follows the preset's rule text and
-every `ticket_comment` rule.
+every `ticket_comment` rule. The comment lists every follow-up ticket filed.
 
 ## 6. Retro
 

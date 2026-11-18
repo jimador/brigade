@@ -37,7 +37,8 @@ safe construction (e.g. `jq -n --arg`) so arbitrary text can't break the payload
 
 ## Optional operations
 
-- **Create a ticket** — used by idea intake so grilled specs become visible board items.
+- **Create a ticket** — used by idea intake, grooming splits and handoff follow-ups
+  (`HANDOFF.md` § 5) so the work becomes a visible board item.
 - **Link artifacts** — attach a PR URL to the ticket if the source has a native field for
   it (otherwise the handoff comment carries the link).
 

@@ -74,7 +74,8 @@ inside `## UI samples` (SCHEMAS.md). Copy files in; never overwrite a different 
 ## Optional — Create a ticket
 
 Write a new file with the frontmatter above (slugified title as filename); refuse to
-overwrite an existing file. Used by idea intake and grooming splits.
+overwrite an existing file. Used by idea intake, grooming splits and handoff follow-ups. A
+follow-up sets `status: backlog` and `related: [<current ticket id>]`.
 
 ## Claim / Design
 
