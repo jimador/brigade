@@ -209,8 +209,9 @@ after that. Release the dish lease before returning the handoff to the operator.
 5. Rule every actionable comment as a `## PR feedback` row (`SCHEMAS.md` § plan): `accept`,
    `clarify` or `push-back`. A ruling you cannot defend in one line is `clarify`.
 6. Reply before change: post the reply on the comment's own thread before any code changes.
-   Inline: `gh api repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -f body=<text>`;
-   top-level and review summaries: `gh pr comment <n> --body <text>`, quoting the comment.
+   Inline: `gh api repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -f body=<text>`,
+   where `<id>` is the thread root — the comment's `in_reply_to_id` when it has one, otherwise
+   its own `id`; GitHub rejects a reply to a reply. Top-level and review summaries: `gh pr comment <n> --body <text>`, quoting the comment.
    `accept` says what will change, `clarify` asks the question, `push-back` gives the reason
    and an alternative. Record what was posted in `reply`. Moving the ticket to `rework` is
    the operator's go-ahead to post these replies; post nothing else.
@@ -235,8 +236,13 @@ after that. Release the dish lease before returning the handoff to the operator.
 4. Merge with the first method the repo allows, read from
    `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`, in the
    order squash, merge, rebase: `gh pr merge <n> --squash|--merge|--rebase`. For squash and
-   merge, pass the PR's own title and body as `--subject` and `--body`.
-5. Move the ticket to `done`, delete the integration branch, and release the lease.
+   merge, pass the PR's own title and body as `--subject` and `--body`. Then confirm
+   `gh pr view <n> --json state` reports `MERGED` before step 5: on a repo with a merge
+   queue, `gh pr merge` only enqueues. When the PR is queued instead, leave the ticket in
+   `merging`, comment that it is queued, keep the branch, release the lease and stop; a later
+   resume re-checks the state and continues from here.
+5. Only once the state is `MERGED`: move the ticket to `done`, delete the integration branch,
+   and release the lease.
 6. Never merge without approval, never enable auto-merge, and never push to the main line
    directly.
 
