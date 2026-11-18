@@ -19,7 +19,9 @@ Config values (in `.brigade/config.md`):
 - `team_id` — the workspace id (for the task-search endpoint).
 - `user_id` — the human operator's ClickUp member id
   (`curl -s https://api.clickup.com/api/v2/team -H "Authorization: $CLICKUP_TOKEN" | jq '.teams[].members[].user | {id, username}'`).
-- The status-name mapping for `todo / in_progress / in_review / done / blocked`.
+- The status-name mapping for `todo / in_progress / in_review / rework / done / blocked` (and
+  `merging` when used). A board with no native status for `rework` uses the one mapped to `in_progress`; `merging` is
+  used only when `.brigade/config.md` maps it.
   **Statuses are per-list in ClickUp** — discover the native names at init:
 
 ```bash

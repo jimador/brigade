@@ -23,6 +23,9 @@ Config values (in `.brigade/config.md` and/or `~/.brigade/workspaces.md`):
 
 Also: `user` (assignee name), status mapping (identity by default).
 
+A board with no native status for `rework` uses the one mapped to `in_progress`; `merging` is
+used only when `.brigade/config.md` maps it.
+
 ## Ticket file shape
 
 One markdown file per ticket (Templater template: `tickets/_templates/ticket.md`):
@@ -31,7 +34,7 @@ One markdown file per ticket (Templater template: `tickets/_templates/ticket.md`
 ---
 id: welcome
 title: Welcome — acme/web board
-status: backlog               # backlog|scoping|design|todo|in_progress|in_review|done|blocked
+status: backlog               # backlog|scoping|design|todo|in_progress|in_review|rework|merging|done|blocked
 assignee: alex
 kind: chore                   # feature|bug|chore|docs|research|contract
 worker: ""                    # cook roster name; set only on dispatch

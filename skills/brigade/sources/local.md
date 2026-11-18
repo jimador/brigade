@@ -13,7 +13,9 @@ Config values (in `.brigade/config.md`):
   live anywhere on disk). Absolute vault paths are fine.
 - `user` — the operator's name as used in `assignee` frontmatter.
 - Status mapping is identity by default:
-  `backlog | scoping | design | todo | in_progress | in_review | done | blocked`.
+  `backlog | scoping | design | todo | in_progress | in_review | rework | merging | done | blocked`.
+  A board with no native status for `rework` uses the one mapped to `in_progress`; `merging` is
+  used only when `.brigade/config.md` maps it.
 
 One markdown file per ticket:
 
@@ -21,7 +23,7 @@ One markdown file per ticket:
 ---
 id: auth-regression        # defaults to the filename without .md
 title: Fix auth regression on token refresh
-status: todo               # backlog|scoping|design|todo|in_progress|in_review|done|blocked
+status: todo               # backlog|scoping|design|todo|in_progress|in_review|rework|merging|done|blocked
 assignee: alex
 kind: feature              # required before cook when the board uses kind
 worker: ""                 # set on dispatch only

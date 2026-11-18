@@ -41,8 +41,10 @@ curl -s https://api.notion.com/v1/users \
 
   - Property names as they appear in this database — defaults assume `Status` (status
     type), `Assignee` (people type), `Name` (title). Adjust in config if the board differs.
-  - The status-name mapping (native names for `todo / in_progress / in_review / done /
-    blocked`). Discover native options at init:
+  - The status-name mapping (native names for `todo / in_progress / in_review / rework / done /
+    blocked`, and `merging` when used). A board with no native status for `rework` uses the one mapped to `in_progress`; `merging` is
+    used only when `.brigade/config.md` maps it. Discover native
+    options at init:
 
 ```bash
 curl -s "https://api.notion.com/v1/databases/$DATABASE_ID" \

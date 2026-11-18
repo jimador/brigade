@@ -41,17 +41,23 @@ Full contract: [`skills/brigade/sources/TEMPLATE.md`](../skills/brigade/sources/
 
 ## Status mapping
 
-Brigade thinks in five abstract statuses. Your board's native names are mapped once, at
-init, in `.brigade/config.md`:
+Brigade thinks in six abstract statuses, plus an optional seventh. Your board's native names
+are mapped once, at init, in `.brigade/config.md`:
 
 ```
 todo → in_progress → in_review → done       plus  blocked (off-ramp)
+                      in_review → rework → in_progress   (a reviewer sent it back)
+                      in_review → merging → done          (optional: the planner lands it)
 ```
+
+A board with no `rework` status uses its `in_progress` status. Leave `merging` unmapped and
+you merge approved PRs yourself.
 
 Tickets move at exactly three moments — first dispatch, handoff, and human accept — plus
 `blocked` whenever readiness fails and only you can unblock. Work items live in `PLAN.md`,
 not on the board, unless a work item happens to also be a board subtask; those move live,
-never batched.
+never batched. A reviewer or you move a ticket to `rework` or `merging`; brigade picks it up
+from there.
 
 ## Writing your own adapter
 

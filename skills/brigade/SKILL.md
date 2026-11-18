@@ -377,11 +377,16 @@ same-session accelerator only, never the source of truth.
 
 ## Status mapping
 
-Brigade thinks in five abstract statuses; `.brigade/config.md` maps them to the source's
-native names once, at init: `todo → in_progress → in_review → done`, plus `blocked`.
+Brigade thinks in six abstract statuses, plus an optional seventh; `.brigade/config.md` maps
+them to the source's native names once, at init: `todo → in_progress → in_review → done`,
+plus `blocked`, plus `rework` (a reviewer sent the PR back; a board without it uses the
+`in_progress` status), plus the optional `merging` (a human approved the PR and the Planner
+may land it; unmapped means the human merges).
 
 Move the ticket at exactly three moments — first dispatch (`in_progress`), handoff
-(`in_review`), human accept (`done`) — plus `blocked` whenever readiness fails. A work item
+(`in_review`), human accept (`done`) — plus `blocked` whenever readiness fails. A reviewer
+or the operator moves it to `rework` or `merging`; the Planner takes it from there
+(`HANDOFF.md` § 8 and § 9). A work item
 that is also a board ticket moves live, per item, never batched at handoff; one with no board
 ticket gets an optional batched progress comment instead.
 

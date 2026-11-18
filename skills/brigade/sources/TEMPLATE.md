@@ -23,8 +23,12 @@ fields worth reading (acceptance criteria, priority), and the comment thread as 
 ### Op 3 — Update status
 
 Given a `ticket_id` and one of the abstract statuses
-`todo / in_progress / in_review / done / blocked`, set the source's **native** status using
-the mapping in `.brigade/config.md`. State how to confirm the write took effect.
+`todo / in_progress / in_review / rework / done / blocked` (and the optional `merging`), set the
+source's **native** status using the mapping in `.brigade/config.md`. State how to confirm the
+write took effect.
+
+A board with no native status for `rework` uses the one mapped to `in_progress`; `merging` is
+used only when `.brigade/config.md` maps it.
 
 ### Op 4 — Post a comment
 
