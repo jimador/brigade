@@ -602,6 +602,73 @@ function checkDispositions(planFile, body, problems, warnings) {
   }
 }
 
+// --- ticket test plan ------------------------------------------------------------
+//
+// When a ticket comes with its own test plan, the planner copies each item into `## Dish`
+// under `### Ticket test plan` as a `- [ ] TP<k>. <item>` line. This checks that every line
+// carries an id, no id repeats, and every id shows up in some packet's acceptance criteria,
+// so a check the ticket author wrote can't be paraphrased away or dropped without anyone
+// noticing. A plan without the subsection is left alone.
+
+const TICKET_TEST_PLAN_LINE = /^- \[[ xX]\] (TP\d+)\. \S/
+
+// Every run of lines under a line equal to `heading`, each run ending at the next `### ` or
+// `## ` line. Returns one flat list of lines.
+function subsectionLines(lines, heading) {
+  const out = []
+  let inside = false
+  for (const line of lines) {
+    if (line.startsWith('### ') || line.startsWith('## ')) {
+      inside = line.trim() === heading
+      continue
+    }
+    if (inside) out.push(line)
+  }
+  return out
+}
+
+function checkTicketTestPlan(body, level, problems, warnings) {
+  const dish = sectionLines(body, '## Dish')
+  if (dish === null || !dish.some((l) => l.trim() === '### Ticket test plan')) return
+  const ids = []
+  const seen = new Set()
+  for (const line of subsectionLines(dish, '### Ticket test plan')) {
+    if (!line.startsWith('- ')) continue
+    const m = line.match(TICKET_TEST_PLAN_LINE)
+    if (!m) {
+      problems.push(`ticket test plan line "${line.trim()}" has no TP<k>. id`)
+      continue
+    }
+    if (seen.has(m[1])) {
+      problems.push(`duplicate ticket test plan id: ${m[1]}`)
+      continue
+    }
+    seen.add(m[1])
+    ids.push(m[1])
+  }
+
+  // Acceptance criteria text from every `## Packet: ` section, each up to the next `## ` line.
+  const acceptance = []
+  let packet = null
+  for (const line of body) {
+    if (line.startsWith('## ')) {
+      if (packet) acceptance.push(...subsectionLines(packet, '### Acceptance criteria'))
+      packet = line.startsWith('## Packet: ') ? [] : null
+      continue
+    }
+    if (packet) packet.push(line)
+  }
+  if (packet) acceptance.push(...subsectionLines(packet, '### Acceptance criteria'))
+  const owned = acceptance.join('\n')
+
+  const report = level === 'contracts' ? warnings : problems
+  for (const id of ids) {
+    if (!new RegExp(`\\b${id}\\b`).test(owned)) {
+      report.push(`ticket test plan ${id} is in no packet's "### Acceptance criteria"`)
+    }
+  }
+}
+
 function validateFile(file) {
   const problems = []
   const warnings = []
@@ -725,6 +792,7 @@ function validateFile(file) {
         }
       }
       if (kind !== 'research') checkDispositions(file, body, problems, warnings)
+      if (kind !== 'research') checkTicketTestPlan(body, fmValue(fm, 'level'), problems, warnings)
       if (keys.has('writing')) {
         const checks = loadPacketChecks(file, writingPreset(fm))
         if (checks) checkPackets(body, fm.length + 3, checks, warnings)

@@ -154,10 +154,19 @@ entries nested under their key or at its indent), and inline fields come in any 
 with one warning, `C1 checks skipped: <first parse error>`, and the plan does not fail on it;
 never indent one item unlike its siblings.
 
-Body sections, in order: `## Dish` (goal + acceptance criteria from the ticket),
+Body sections, in order: `## Dish` (goal + acceptance criteria from the ticket, and
+`### Ticket test plan` when the ticket has one),
 `## Waves` (planned dispatch order), `## Plan-check dispositions` (when a plan check ran),
 `## Parked` (when questions are held), then one `## Packet: <slug>` per item (see `packet`) — build dishes only; a `kind: research`
 plan has no packet sections.
+
+`### Ticket test plan` sits inside `## Dish` when the ticket has its own test plan (a
+`Validation`, `Test plan` or `Testing` section). Each item of that section is copied word for
+word as one line, `- [ ] TP<k>. <the item>`, numbered from 1. Each `TP<k>` must appear in at
+least one packet's `### Acceptance criteria`, so every ticket-authored check has an owner.
+`brigade-validate` fails a line with no `TP<k>.` id, a duplicate id, and (at
+`level: implementation`, the default) an id no packet owns; at `level: contracts` an unowned
+id is a warning. A plan without the subsection is not checked.
 
 `## Plan-check dispositions` is a table with columns `id | source | ruling | how`: one row per
 id in each `reports/plan-check-<n>.md` `findings:` list (source `plan-check-<n>`) and one per
