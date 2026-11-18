@@ -93,6 +93,13 @@ test('laneOf maps statuses to lanes, unknown ones to backlog', () => {
   assert.equal(laneOf('in_review'), 'in_review')
 })
 
+test('laneOf puts rework in cooking and merging in review', () => {
+  assert.equal(laneOf('rework'), 'in_progress')
+  assert.equal(laneOf('merging'), 'in_review')
+  // Statuses match exactly, so a capitalised one still falls back to backlog.
+  assert.equal(laneOf('Rework'), 'backlog')
+})
+
 const nine = [
   { id: 'a-todo', status: 'todo' },
   ...['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'].reverse().map((id) => ({ id, status: 'done' })),

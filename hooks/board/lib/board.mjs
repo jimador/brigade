@@ -5,8 +5,8 @@
 export const LANES = [
   { key: 'backlog', title: 'BACKLOG', statuses: ['backlog', 'scoping', 'design'] },
   { key: 'todo', title: 'TODO', statuses: ['todo'] },
-  { key: 'in_progress', title: 'COOKING', statuses: ['in_progress'] },
-  { key: 'in_review', title: 'IN REVIEW', statuses: ['in_review'] },
+  { key: 'in_progress', title: 'COOKING', statuses: ['in_progress', 'rework'] },
+  { key: 'in_review', title: 'IN REVIEW', statuses: ['in_review', 'merging'] },
   { key: 'blocked', title: 'BLOCKED', statuses: ['blocked'] },
   { key: 'done', title: 'DONE', statuses: ['done'] },
 ]
