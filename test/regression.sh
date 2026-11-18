@@ -843,7 +843,6 @@ if (envelope.config.models.cookRetry !== null) throw new Error('cookRetry is ' +
 NODE
   config_run "$fixture" doctor >/dev/null ||
     fail "brigade-config doctor rejected a config setting models.cookRetry"
-NODE
 }
 
 onboard_run() { # brigade-onboard against a fixture repo and a fake plugin root

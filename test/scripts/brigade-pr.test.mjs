@@ -38,6 +38,19 @@ function fixture({ team = null, local = null, files = { 'src/widget.js': 'export
   return { dir, head }
 }
 
+// A PATH holding only node and git, both symlinked from wherever they live now, so no review
+// tool beside node (for example `claude` in node's own bin directory) can be found.
+function bareToolPath() {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-pr-nobin-'))
+  fs.symlinkSync(fs.realpathSync(process.execPath), path.join(bin, 'node'))
+  const gitBin = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+    .map((dir) => path.join(dir, 'git'))
+    .find((candidate) => { try { fs.accessSync(candidate, fs.constants.X_OK); return true } catch { return false } })
+  assert.ok(gitBin, 'git must be on PATH to run this test')
+  fs.symlinkSync(fs.realpathSync(gitBin), path.join(bin, 'git'))
+  return bin
+}
+
 // A PATH holding only stub programs named `bins`, plus what git and node need.
 function stubPath(dir, bins, scripts = {}) {
   const bin = path.join(dir, 'stub-bin')
@@ -317,8 +330,7 @@ test('a missing tool is skipped, the next one takes its place, and none at all s
   assert.equal(onlyClaude.verify.tool, 'claude')
   assert.equal(onlyClaude.sameTool, true)
   assert.deepEqual(onlyClaude.skipped.map((s) => s.tool), ['codex', 'cursor'])
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-pr-nobin-'))
-  const none = pr(dir, ['redteam'], { PATH: [empty, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter) })
+  const none = pr(dir, ['redteam'], { PATH: bareToolPath() })
   assert.equal(none.code, 1)
   assert.match(none.out, /no review tool is installed; stop, leave the PR in draft/)
 })
