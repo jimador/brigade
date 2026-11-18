@@ -14,6 +14,10 @@
 //       string or a `#` comment.
 //   E2  a fence closes only on a bare line of the same character, at least as long as the
 //       opener, so a three-backtick line inside a four-backtick block is content.
+//   E1  a quoted summary that wraps onto the next line stays quoted there, so the fields
+//       after its closing quote are still read.
+//   E2  only a list dash at the start of a line lets a quote open after it; a dash inside
+//       a plain summary is text.
 //   I1  warnings never change the exit code, and clean files get no new message.
 //
 // Each test writes throwaway files and runs the real validator on them.
@@ -291,6 +295,60 @@ test('E1: severity comes from the real field, not from quoted text', () => {
   }))
   assert.equal(r.code, 0, r.out)
   assert.doesNotMatch(r.out, /invalid finding severity/, r.out)
+})
+
+// A FAIL verdict whose findings list is written out as given, one line per array item.
+function failVerdict(lines) {
+  return verdict({ findings: ['F0'] })
+    .replace('verdict: PASS', 'verdict: FAIL')
+    .replace(/findings:\n  - [^\n]*\n/, `findings:\n${lines.join('\n')}\n`)
+}
+
+test('E1: a double-quoted summary that wraps keeps the id and severity after it', () => {
+  const r = run('widget-verdict.md', failVerdict([
+    '  - summary: "a long summary that',
+    '      wraps here", id: F1, severity: low',
+  ]))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /FAIL verdict with no findings/, r.out)
+})
+
+test('E1: a closing quote that starts the continuation line does not open a new one', () => {
+  const r = run('widget-verdict.md', failVerdict([
+    '  - summary: "a long summary that wraps here',
+    '      ", id: F1, severity: low',
+  ]))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /FAIL verdict with no findings/, r.out)
+})
+
+test('E1: "id:" and "severity:" on the wrapped half of a quoted summary are not read', () => {
+  const ok = run('widget-verdict.md', failVerdict([
+    '  - summary: "a long summary that',
+    '      cites id: F9 and severity: bogus", id: F1, severity: low',
+    '  - { id: F9, severity: low, summary: nit }',
+  ]))
+  assert.equal(ok.code, 0, ok.out)
+  const dup = run('widget-verdict.md', failVerdict([
+    '  - summary: "a long summary that',
+    '      cites id: F9", id: F1, severity: low',
+    '  - { id: F1, severity: low, summary: nit }',
+  ]))
+  assert.equal(dup.code, 1, dup.out)
+  assert.ok(dup.out.includes('duplicate finding id: F1'), dup.out)
+})
+
+const Q2 = "  - { summary: Fails on the input - 'x, id: F1, severity: high }"
+
+test('E2: a dash inside a plain summary does not let an apostrophe hide the fields', () => {
+  const ok = run('widget-verdict.md', failVerdict([Q2]))
+  assert.equal(ok.code, 0, ok.out)
+  const bad = run('widget-verdict.md', failVerdict([Q2.replace('high', 'bogus')]))
+  assert.equal(bad.code, 1, bad.out)
+  assert.ok(bad.out.includes('invalid finding severity: bogus'), bad.out)
+  const dup = run('widget-verdict.md', failVerdict([Q2, '  - { id: F1, severity: low, summary: nit }']))
+  assert.equal(dup.code, 1, dup.out)
+  assert.ok(dup.out.includes('duplicate finding id: F1'), dup.out)
 })
 
 const G3 = 'Red run:\n````\n```js\nconst a = 1\n## quoted heading\n````\nmutation: flipped'

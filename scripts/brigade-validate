@@ -115,16 +115,23 @@ function nestedFieldValues(fm, listKey, field) {
   // One line at a time, because entries are joined with spaces and a comment has to end
   // at its own line. A quote only opens where a YAML value can start, so the apostrophe
   // in an unquoted `don't` is just text.
+  // An open quote carries on to the next line, because a quoted summary can wrap and
+  // close there. It is dropped where a new list entry or top-level key starts, the same
+  // places the entries are split, so a stray quote never hides the next entry.
+  let quote = null
   const blank = (line) => {
+    if (/^\s*- /.test(line) || /^[a-z_]+:/.test(line)) quote = null
     const out = line.split('')
-    let quote = null
     // Whether a quote here would open a value: true at the start of the line and after
-    // `:`, `[`, `{`, `,` or a list dash, false once any other text has appeared.
+    // `:`, `[`, `{`, `,` or a list dash, false once any other text has appeared. A list
+    // dash is one that starts the line and is followed by a space or the line's end; a
+    // dash anywhere else, like the one in `input - 'x`, is just text.
     let valueStart = true
     for (let i = 0; i < line.length; i++) {
       const c = line[i]
       if (quote === null && c !== '"' && c !== "'" && c !== '#' && !/\s/.test(c)) {
-        valueStart = ':[{,'.includes(c) || (c === '-' && (i === 0 || /\s/.test(line[i - 1])))
+        valueStart = ':[{,'.includes(c) ||
+          (c === '-' && line.slice(0, i).trim() === '' && (i + 1 === line.length || /\s/.test(line[i + 1])))
         continue
       }
       if (quote === '"') {
