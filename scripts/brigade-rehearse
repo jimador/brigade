@@ -19,7 +19,9 @@
 //
 // The base defaults to the plan's `delivery_branch`. A fresh dish only creates that branch at
 // dispatch, after the plan check, so when it is unset or does not exist yet the base falls back
-// to the main line: origin's default branch, else main, else master, else HEAD. The fallback
+// to the main line: the configured main branch (`mainBranch` from `brigade-config resolve`, when
+// a config layer sets it), then that branch on origin, then origin's default branch, else main,
+// else master, else HEAD. The fallback
 // prints one `base: <ref> (...)` line (to stderr with --json, so stdout stays JSON). Git runs in
 // the current directory, so run it from inside the repository the plan describes.
 //
@@ -99,10 +101,37 @@ function isCommit(ref) {
   return git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).status === 0
 }
 
-// The main line to rehearse against when the delivery branch is not there yet: the branch
-// origin/HEAD points at, then main, master and HEAD, whichever resolves first.
+// The main branch a config layer sets, read through the sibling brigade-config so every layer
+// (team, global, local) counts. The built-in default does not count: an unconfigured repo keeps
+// the origin/HEAD-first order. Anything that goes wrong here means "no configured branch", so
+// the fallback behaves as it did before this lookup existed.
+function configuredMainBranch() {
+  const r = spawnSync(process.execPath, [path.join(HERE, 'brigade-config'), 'resolve', '--json'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 })
+  if (r.error || r.status !== 0) return null
+  let out
+  try {
+    out = JSON.parse(r.stdout)
+  } catch {
+    return null
+  }
+  let value = out?.config?.mainBranch
+  if (value !== null && typeof value === 'object') value = value.value
+  if (typeof value !== 'string') return null
+  value = value.trim()
+  // A leading `-` would read as an option to git, so it is not a branch we will try.
+  if (value === '' || value.startsWith('-')) return null
+  if (out?.provenance?.mainBranch === 'defaults') return null
+  return value
+}
+
+// The main line to rehearse against when the delivery branch is not there yet: the configured
+// main branch, the same branch on origin, the branch origin/HEAD points at, then main, master
+// and HEAD, whichever resolves first.
 function mainLine() {
   const candidates = []
+  const configured = configuredMainBranch()
+  if (configured !== null) candidates.push(configured, `origin/${configured}`)
   const originHead = git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
   if (originHead.status === 0 && originHead.stdout.trim() !== '') candidates.push(originHead.stdout.trim())
   candidates.push('main', 'master', 'HEAD')
@@ -331,7 +360,8 @@ function main() {
     } else {
       base = mainLine()
       if (base === null) {
-        console.error('no base to rehearse against: the delivery branch, origin/HEAD, main, master ' +
+        console.error('no base to rehearse against: the delivery branch, the configured main branch, ' +
+          'origin/HEAD, main, master ' +
           'and HEAD all fail to name a commit here; pass --base <ref>')
         return 2
       }

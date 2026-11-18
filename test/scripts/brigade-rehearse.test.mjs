@@ -76,8 +76,19 @@ function writePlan(root, items, { deliveryBranch = 'main', extraFrontmatter = []
   return planPath
 }
 
-function rehearse(root, args) {
-  return spawnSync(process.execPath, [REHEARSE, ...args], { cwd: root, encoding: 'utf8' })
+// The fallback reads the main branch through brigade-config, which follows the project-dir
+// variables and the user's ~/.brigade. Both are cleared so only the temp repo's config counts.
+const BRIGADE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-rehearse-home-'))
+function cleanEnv() {
+  const env = { ...process.env, BRIGADE_HOME }
+  delete env.BRIGADE_PROJECT_DIR
+  delete env.CLAUDE_PROJECT_DIR
+  delete env.CODEX_PROJECT_DIR
+  return env
+}
+
+function rehearse(root, args, script = REHEARSE) {
+  return spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: 'utf8', env: cleanEnv() })
 }
 
 function findingLines(r) {
@@ -342,4 +353,94 @@ test('base E3: an explicit --base that does not resolve exits 2 even when the de
   assert.equal(r.status, 2, r.stdout + r.stderr)
   assert.equal(r.stderr.trim(), 'base feature/not-there does not name a commit here; pass --base <ref>')
   assert.equal(r.stdout, '')
+})
+
+// A repo with `main` and `develop` on different trees: only develop holds src/only-on-develop.js.
+// origin/HEAD points at origin/main, the case the configured branch has to beat.
+function mainAndDevelop() {
+  const root = makeRepo()
+  branchWith(root, 'develop', 'src/only-on-develop.js')
+  const head = git(root, ['rev-parse', 'main']).trim()
+  git(root, ['update-ref', 'refs/remotes/origin/main', head])
+  git(root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'])
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/only-on-develop.js', 'edit']] }],
+    { deliveryBranch: 'feature/not-there' })
+  return { root, plan }
+}
+
+function configureMainBranch(root, value) {
+  writeFile(root, '.brigade/config.local.json', JSON.stringify({ mainBranch: value }) + '\n')
+}
+
+// A copy of the scripts folder with brigade-config swapped for a stub, so the lookup's failure
+// and output shapes can be driven directly. brigade-risk reads its policy from ../skills, so
+// that folder is linked in beside the copy.
+function scriptsWithConfigStub(body) {
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-rehearse-scripts-'))
+  const dir = path.join(top, 'scripts')
+  fs.cpSync(path.join(ROOT, 'scripts'), dir, { recursive: true })
+  fs.symlinkSync(path.join(ROOT, 'skills'), path.join(top, 'skills'))
+  fs.writeFileSync(path.join(dir, 'brigade-config'), body)
+  return path.join(dir, 'brigade-rehearse')
+}
+
+test('base E1: the configured main branch wins the fallback over origin/HEAD and main', () => {
+  const { root, plan } = mainAndDevelop()
+  configureMainBranch(root, 'develop')
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(findingLines(r), [])
+  assert.deepEqual(baseLines(r.stdout), ['base: develop (delivery branch feature/not-there does not exist yet)'])
+  assert.match(r.stdout, /against develop: 0 findings/)
+})
+
+test('base E1: with no local branch, the configured branch on origin is next', () => {
+  const { root, plan } = mainAndDevelop()
+  configureMainBranch(root, 'develop')
+  const dev = git(root, ['rev-parse', 'develop']).trim()
+  git(root, ['update-ref', 'refs/remotes/origin/develop', dev])
+  git(root, ['branch', '-D', 'develop'])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(baseLines(r.stdout), ['base: origin/develop (delivery branch feature/not-there does not exist yet)'])
+})
+
+test('base E1: a nested { value } mainBranch in the config output is accepted', () => {
+  const { root, plan } = mainAndDevelop()
+  const script = scriptsWithConfigStub(
+    "console.log(JSON.stringify({ config: { mainBranch: { value: 'develop' } } }))\n")
+  const r = rehearse(root, [plan], script)
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(baseLines(r.stdout), ['base: develop (delivery branch feature/not-there does not exist yet)'])
+})
+
+test('base E2: without a configured main branch the fallback is unchanged', () => {
+  const { root, plan } = mainAndDevelop()
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(baseLines(r.stdout), ['base: origin/main (delivery branch feature/not-there does not exist yet)'])
+  // With origin/HEAD absent, main is next.
+  git(root, ['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD'])
+  const r2 = rehearse(root, [plan])
+  assert.equal(r2.status, 1, r2.stdout + r2.stderr)
+  assert.deepEqual(baseLines(r2.stdout), ['base: main (delivery branch feature/not-there does not exist yet)'])
+  assert.deepEqual(findingLines(r2),
+    ['premise: one: src/only-on-develop.js is marked (edit) but does not exist at main'])
+})
+
+test('base E2 (adversarial): a configured branch that does not exist, a failing or silent brigade-config fall through', () => {
+  const { root, plan } = mainAndDevelop()
+  configureMainBranch(root, 'release/none')
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(baseLines(r.stdout), ['base: origin/main (delivery branch feature/not-there does not exist yet)'])
+
+  const fresh = mainAndDevelop()
+  for (const body of ["process.exit(3)\n", "console.log('not json')\n", "console.log('{}')\n",
+    "console.log(JSON.stringify({ config: { mainBranch: '--output=x' } }))\n"]) {
+    const r2 = rehearse(fresh.root, [fresh.plan], scriptsWithConfigStub(body))
+    assert.equal(r2.status, 1, body + r2.stdout + r2.stderr)
+    assert.deepEqual(baseLines(r2.stdout),
+      ['base: origin/main (delivery branch feature/not-there does not exist yet)'], body)
+  }
 })
