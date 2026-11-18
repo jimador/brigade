@@ -168,6 +168,13 @@ least one packet's `### Acceptance criteria`, so every ticket-authored check has
 `level: implementation`, the default) an id no packet owns; at `level: contracts` an unowned
 id is a warning. A plan without the subsection is not checked.
 
+On a markdown board, `brigade-validate --ticket <ticket.md> <PLAN.md>` also checks the count.
+The ticket's test plan is the first heading of level 2 or 3 whose text is `Validation`,
+`Test plan` or `Testing` (any case), up to the next heading. Its items are the lines with no
+leading space that start with `- ` (with or without a `[ ]` box) or with a number and `.` or
+`)`. The plan must carry exactly that many `TP<k>` lines; a plan with `TP<k>` lines whose
+ticket has no such section fails too.
+
 `## Plan-check dispositions` is a table with columns `id | source | ruling | how`: one row per
 id in each `reports/plan-check-<n>.md` `findings:` list (source `plan-check-<n>`) and one per
 bullet under a scout brief's `## Risks` (id `R<k>`, source the brief's file stem, e.g. `1`).

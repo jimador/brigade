@@ -669,7 +669,54 @@ function checkTicketTestPlan(body, level, problems, warnings) {
   }
 }
 
-function validateFile(file) {
+// --- ticket test plan count (--ticket) --------------------------------------------------
+//
+// The ownership check above only sees the TP lines the planner wrote. On a markdown board the
+// ticket file is right there, so `--ticket <ticket.md>` counts the items in the ticket's own
+// test plan and makes the plan carry exactly that many TP lines. That catches an item the
+// planner never copied.
+
+const TICKET_TEST_PLAN_HEADING = /^#{2,3}\s+(validation|test plan|testing)\s*$/i
+const ANY_HEADING = /^#{1,6} /
+const TICKET_ITEM_LINE = /^(?:- (?:\[[ xX]\] )?|\d+[.)] )\S/
+
+// The ticket's test plan: the heading text as written and the number of top-level items, or
+// null when the ticket has no such section.
+function ticketTestPlan(text) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((l) => TICKET_TEST_PLAN_HEADING.test(l))
+  if (start === -1) return null
+  const heading = lines[start].match(TICKET_TEST_PLAN_HEADING)[1]
+  let count = 0
+  for (const line of lines.slice(start + 1)) {
+    if (ANY_HEADING.test(line)) break
+    if (TICKET_ITEM_LINE.test(line)) count++
+  }
+  return { heading, count }
+}
+
+function checkTicketTestPlanCount(body, ticketPath, problems) {
+  let ticketText
+  try {
+    ticketText = fs.readFileSync(ticketPath, 'utf8')
+  } catch {
+    problems.push(`cannot read ticket ${ticketPath}`)
+    return
+  }
+  // Count the plan's TP lines the same way the ownership check reads them.
+  const dish = sectionLines(body, '## Dish') ?? []
+  const m = subsectionLines(dish, '### Ticket test plan').filter((l) => TICKET_TEST_PLAN_LINE.test(l)).length
+  const ticket = ticketTestPlan(ticketText)
+  if (ticket === null) {
+    if (m > 0) problems.push(`plan has ${m} TP items but the ticket has no Validation, Test plan or Testing section`)
+    return
+  }
+  if (m !== ticket.count) {
+    problems.push(`ticket test plan has ${m} TP items; the ticket's "${ticket.heading}" section has ${ticket.count}`)
+  }
+}
+
+function validateFile(file, ticketPath = null) {
   const problems = []
   const warnings = []
   let text
@@ -793,6 +840,7 @@ function validateFile(file) {
       }
       if (kind !== 'research') checkDispositions(file, body, problems, warnings)
       if (kind !== 'research') checkTicketTestPlan(body, fmValue(fm, 'level'), problems, warnings)
+      if (kind !== 'research' && ticketPath !== null) checkTicketTestPlanCount(body, ticketPath, problems)
       if (keys.has('writing')) {
         const checks = loadPacketChecks(file, writingPreset(fm))
         if (checks) checkPackets(body, fm.length + 3, checks, warnings)
@@ -1055,6 +1103,17 @@ function repoRoot() {
 function main() {
   const args = process.argv.slice(2)
   const json = args.includes('--json')
+  // `--ticket <path>` can sit anywhere; it and its value are not files to validate.
+  let ticketPath = null
+  const ticketAt = args.indexOf('--ticket')
+  if (ticketAt !== -1) {
+    if (ticketAt + 1 >= args.length) {
+      console.error('brigade-validate: --ticket needs a file path')
+      return 2
+    }
+    ticketPath = args[ticketAt + 1]
+    args.splice(ticketAt, 2)
+  }
   const files = args.filter((a) => a !== '--json')
   const root = repoRoot()
 
@@ -1067,7 +1126,7 @@ function main() {
     return 0
   }
 
-  const results = targets.map(validateFile)
+  const results = targets.map((t) => validateFile(t, ticketPath))
   const bad = results.filter((r) => r.problems.length > 0)
 
   if (json) {
