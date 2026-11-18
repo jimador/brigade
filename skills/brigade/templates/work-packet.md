@@ -24,6 +24,8 @@ those steps, lifted out of the packet.
 - **worktree:** .brigade/worktrees/<delivery-slug>--<item-slug>   (absolute path at dispatch)
 - **depends_on:** [<item-slug>, ...] | none
 - **heavy:** false            # true → dispatches to the heavy Cook from the start
+- **premise:** `grep -q 'export interface Widget' src/foo/types.ts`   # optional, one per fact
+  the packet depends on; brigade-rehearse runs it on the base branch, and a failure is a packet defect
 - **files:** the ONLY files you may touch
   - path/to/file.ts (edit)
   - path/to/new-file.test.ts (create)
@@ -203,7 +205,8 @@ adjacent bugs to leave alone (report them instead).
 - Could a stranger with zero repo knowledge complete this from the packet alone?
 - Are all contracts/anchors **pasted**, not "see file X"?
 - Is every step unambiguous — no "appropriately", "as needed", "look around"?
-- 1–3 files, ≤ ~150 lines, one behavior, mechanically verifiable?
+- 1–3 files, one behavior, mechanically verifiable? Over ~150 changed lines: still one
+  behavior (flag it heavy) or several (split it)?
 - Does an implementation packet's Verify name the contract suite, and do its files exclude
   every contract-owned path? Run `brigade-scope` on the item's branch before it lands.
 - Does the Verify step actually prove the acceptance criteria, and can it fail? A

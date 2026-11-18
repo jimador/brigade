@@ -43,7 +43,7 @@
       },
       {
         "type": "semantic",
-        "value": "the packet ends with a Verify step with exact runnable commands, pastes contracts/anchors rather than referencing files, and stays within 1-3 files"
+        "value": "the packet ends with a Verify step with exact runnable commands, pastes contracts/anchors rather than referencing files, and stays within 1-3 files and one behavior (about 150 changed lines is a splitting heuristic, not a hard limit)"
       }
     ]
   },

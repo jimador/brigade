@@ -282,8 +282,10 @@ decision is blocked on an unknown.
 
 ### Phase 2 — Decompose
 
-Read `DECOMPOSE.md` before writing PLAN.md. The bar every packet clears: 1–3 named files, ≤
-~150 changed lines, one behavior, zero exploration required, mechanically verifiable. Run the
+Read `DECOMPOSE.md` before writing PLAN.md. The bar every packet clears: 1–3 named files, one
+behavior, zero exploration required, mechanically verifiable. About 150 changed lines is a
+splitting heuristic, not a limit: a bigger item that is still one behavior within the file cap
+is flagged heavy; one that spans behaviors is split. Run the
 adversarial plan check when the tier calls for one. Write `PLAN.md` to the `plan` schema, one
 packet per item per `templates/work-packet.md`.
 

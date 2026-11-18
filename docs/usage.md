@@ -96,9 +96,10 @@ read the codebase in parallel and return short briefs with pasted contracts and 
 The tier caps how many scouts run; anything dropped is logged, never silently skipped.
 
 **2 — Decompose.** The Planner splits the ticket into work items that each touch 1–3 named
-files, change roughly ≤150 lines, do one thing, and need zero exploration because
-everything the cook needs is already in the packet. Items in the same wave never share
-files — anything that overlaps gets a dependency edge instead.
+files, do one thing, and need zero exploration because everything the cook needs is already
+in the packet. About 150 changed lines is a splitting heuristic, not a limit: a bigger item
+that is still one thing is flagged heavy, and one that does several things is split. Items in
+the same wave never share files — anything that overlaps gets a dependency edge instead.
 
 This is the expensive thinking, and it happens once. At ★★★ (and at ★★ on triggers) an
 Inspector blind-sketches its own decomposition first, then critiques the Planner's — the

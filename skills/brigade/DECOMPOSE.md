@@ -155,7 +155,12 @@ these limits are a backstop, not where the seams go):
 - Touches **1–3 named files** (plus its own new test file). Field data across
   455 dishes: first-attempt PASS falls from 74% at 0–1 files to 58% at 11+, and rework rises from
   21% to 39%.
-- **≤ ~150 changed lines** expected.
+- **About 150 changed lines is a splitting heuristic, not a limit.** That is roughly what a
+  cheap cook lands in one attempt. A bigger item is fine when it is still one behavior inside
+  the file cap and is flagged `heavy: true`; split it when it spans behaviors. The file cap is
+  the hard bar because size by files, not lines, predicts rework: in 0.29.0 four of seven items
+  ran 1.6–3.2x over 150 lines and passed with zero findings, while across 455 dishes rework
+  rose from 21% at 0–1 files to 39% at 11+.
 - **One behavior** — describable in one sentence without "and".
 - **Zero exploration required** — every contract, snippet, and convention the Cook needs is
   *in the packet*; a hedge like "look around for…" means unfinished research or splitting.
@@ -233,9 +238,17 @@ Three things the check resolves rather than reports:
 
 Before anything else the check runs
 `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-rehearse" <PLAN.md>` and pastes its output: it runs
-the validator, a premise check of every packet's file list against the base branch, contract
-ownership, overlap between independent items, chains of 3+ items on one file, and the risk
-table. Every finding it prints needs a disposition row like any plan-check finding.
+the validator, a premise check of every packet's file list against the base branch, each
+packet's `premise:` lines on the base branch, contract ownership, overlap between independent
+items, chains of 3+ items on one file, and the risk table. It also warns when a test outside an
+item's files pins behavior the item changes, and flags Verify lines that cannot run on the
+base. Every finding it prints needs a disposition row like any plan-check finding.
+
+**Premise lines.** A packet that depends on a fact about the tree (a file says X, a script reads
+key Y) states it as a runnable check under its header lines:
+``- **premise:** `<command>` ``. The command exits 0 when the fact holds. `brigade-rehearse`
+runs every premise on the base branch before dispatch; a failing premise is a packet defect —
+fix the packet, never dispatch it and hope the cook notices.
 
 You fold in what's right. You own the plan; the check is information, not instruction. But
 every finding gets a written ruling: add a `## Plan-check dispositions` row (`SCHEMAS.md`
