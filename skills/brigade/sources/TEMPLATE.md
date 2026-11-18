@@ -42,6 +42,19 @@ safe construction (e.g. `jq -n --arg`) so arbitrary text can't break the payload
 - **Link artifacts** — attach a PR URL to the ticket if the source has a native field for
   it (otherwise the handoff comment carries the link).
 
+## Roadmap tickets (optional)
+
+When a roadmap is projected onto the board, each epic and leaf becomes its
+own ticket. Every source puts the roadmap context on the first line under `## Context`:
+
+```
+Roadmap: <slug>/<node-id> | <epic title> > <parent title> | satisfies <R-ids> | blocked by <ticket ids>
+```
+
+- A roadmap ticket is always top-level. It is never a subtask, even when its parent is an epic.
+- Native relations (blocks, parent links, labels) are optional and adapter-specific. The
+  `## Context` line is the portable record; a source that has no native relation skips it.
+
 ## Adapter rules
 
 - **Auth via one env var**, named in the adapter (e.g. `NOTION_TOKEN`). Document how to get

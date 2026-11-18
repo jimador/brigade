@@ -87,6 +87,16 @@ Write a new file; refuse overwrite. Prefer Templater from Obsidian for humans.
 A handoff follow-up sets `status: backlog`, the current ticket's `project`, and
 `related: [<current ticket id>]`.
 
+Roadmap tickets (see `TEMPLATE.md` § Roadmap tickets) are created through this same op with
+`status: backlog`. They may carry these optional frontmatter keys, all omitted when unused:
+
+- `roadmap` — the roadmap slug the ticket belongs to.
+- `node` — the roadmap node id (epic or leaf) inside that roadmap.
+- `epic` — the id of the epic the node sits under.
+- `parent_ticket` — the ticket id of the parent ticket, always a top-level ticket.
+- `blocked_by: [ids]` — ticket ids this ticket waits on.
+- `satisfies: [ids]` — the requirement ids (R-ids) this ticket delivers.
+
 ## Claim / Design rules
 
 - **Cook path claim:** set `assignee` to the human operator, ensure `kind`, move `todo` →
