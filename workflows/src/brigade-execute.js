@@ -253,8 +253,48 @@ cook's build and pre-push gates fail for reasons that have nothing to do with it
 If there are none to copy, that is fine; say so and carry on. Never create, edit, or
 invent an env file, and never copy one that is not already in the repo.
 
-You never run git add or git commit, never touch any file outside .brigade/, and
-never push. Return the result per the steward schema.
+You never run git add or git commit, except the staged-work commit step, never touch
+any file outside .brigade/, and never push. Return the result per the steward schema.
+`
+
+// The staged-work commit step. A cook whose own git commit was refused by policy leaves its
+// packet's files staged and says committed: false in its report. The workflow cannot read
+// that report, so this steward runs after every done cook, reads it, and commits only when the
+// key says so. This prompt is the only place a steward ever commits.
+const stewardCommitPrompt = (item, worktreePath, reportPath) => `
+You are the Steward running the staged-work commit step for ONE work item, after its cook
+reported done and before the inspector reviews it.
+
+1. Read the cook's report frontmatter: head -20 '${reportPath}'
+   If it does not say committed: false (the key is missing, or says true), the cook
+   committed its own work. Run nothing else and return ok: true with detail
+   'nothing to commit'.
+
+2. It says committed: false, so a policy refusal stopped the cook's git commit and its
+   files should be staged. List them:
+     git -C '${worktreePath}' diff --cached --name-only
+   If that prints nothing, return ok: true with detail 'nothing staged' and commit nothing.
+
+3. Every staged path must be in the packet's file list (the packet is below). If any
+   staged path is not in it, commit nothing: return ok: false with detail naming every
+   path that is not in the list.
+
+4. Commit exactly the staged paths, naming each one after --, single-quoted:
+     git -C '${worktreePath}' commit -m '<message>' -- '<path 1>' '<path 2>' ...
+   <message> is the commit message the cook's report gives for its refused commit; when the
+   report gives none, use 'Implement ${item.slug}'. Never use -a, --all, ., a wildcard, a
+   directory, or a path that git diff --cached did not print, and never run git add.
+
+5. Confirm the commit exists: git -C '${worktreePath}' log --oneline -1
+   If the commit was refused or that line is not your commit, return ok: false quoting the
+   refusal or the line. Otherwise return ok: true with that line as detail.
+
+You never run git add, never push, never edit, move or delete any file, and never commit
+anything except in step 4. Return the result per the steward schema.
+
+THE PACKET (its files list is the only set of paths you may commit):
+
+${item.packet}
 `
 
 const stewardLandPrompt = (worktreePath, branch, reportPath, verdictPath, reportReconstruction, verdictReconstruction) => `
@@ -342,8 +382,9 @@ order and stop at the first failure.
      git -C ${A.repoRoot} status --porcelain
    A dirty tree after cleanup is not silent — record it in the detail you return.
 
-You never run git add or git commit on anything, never touch any file outside
-.brigade/ and git refs beyond what's listed above, and never push.
+You never run git add or git commit on anything, except the staged-work commit step,
+never touch any file outside .brigade/ and git refs beyond what's listed above, and never
+push.
 
 Return the result per the steward schema.
 `
@@ -415,8 +456,8 @@ ok: false with the error in detail. Write no other file.
 // Added to the second inspector's prompt when the first returned a verdict but no file.
 const redoInspectorSentence = (verdictPath) => `A previous inspector returned a verdict without writing ${verdictPath}. Review the diff yourself and write the file with your Write tool before returning; nothing lands without it.`
 
-// Every steward call after worktree creation goes through here: landing, the verdict probe
-// and the transcriber.
+// Every steward call after worktree creation goes through here: the staged-work commit,
+// landing, the verdict probe and the transcriber.
 const stewardAgent = (label, phase, prompt, schema) => guarded(label, () => structuredAgent(prompt, {
   label,
   phase,
@@ -645,6 +686,24 @@ async function runItem(item, promises) {
       blog('blocked', `blocked ${item.slug}: ${blockedReason}`)
       break
     }
+
+    // The staged-work commit step runs for every done cook: the cook's return has no
+    // committed field, so the steward reads the report and commits only when it says
+    // committed: false. A cook that committed itself gets 'nothing to commit' back.
+    // A refusal here is the second one, so the item stops with its staged work in place.
+    // No result at all lets inspection go ahead: landing still refuses a branch with no
+    // commits and leaves the worktree alone.
+    const commitLabel = `commit:${item.slug}:${i}`
+    blog('steward', `commit ${item.slug}: checking for staged work after cook attempt ${i + 1}`)
+    const committed = await stewardAgent(commitLabel, 'Cook', stewardCommitPrompt(item, worktreePath, reportPath), SCHEMA_STEWARD_RETURN)
+    if (committed && committed.ok === false) {
+      attempts.push({ agentType, result: 'blocked', cause: 'blocked-other' })
+      status = 'blocked'
+      blockedReason = `commit refused twice; staged work kept in ${worktreePath}`
+      blog('blocked', `blocked ${item.slug}: ${blockedReason} (${committed.detail})`)
+      break
+    }
+    blog('steward', `commit ${item.slug}: ${committed ? committed.detail : 'commit step returned no result'}`)
 
     // One inspector dispatch. The redo variant is a fresh inspector with the same prompt plus
     // one sentence telling it the previous inspector's verdict file never reached disk.
