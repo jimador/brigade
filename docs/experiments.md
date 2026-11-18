@@ -460,3 +460,19 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   `.brigade/evals/after-execute/`, `.brigade/evals/cook-before-v3/`,
   `.brigade/evals/cook-after-v3/`, `.brigade/evals/existing-before/`, `.brigade/evals/final-main/`; local, never committed).
 
+### E-021 Pipeline postconditions and plan rehearsal reduce tooling defects
+
+- date: 2026-11-18
+- hypothesis: moving postconditions into code (verdict probe, argument validation, steward commit
+  of refused commits) and rehearsing plans with the pipeline's own tools cuts tooling defects and
+  environment blocks per dish without lowering first-attempt PASS.
+- setup: baseline from the field audit of 455 dishes in seven repos (July to November 2026): 30%
+  of 175 blocked cook reports were a refused `git commit`; first-attempt PASS 67% (n=1,623 items
+  with attempt records), 78% in November; items marked done without a verdict file 1.2% in
+  November. Re-measure on the next ten dishes after release 0.51.0 with the same scripts.
+- metric: tooling defects per dish (a gate or tool that blocked correct work, or let wrong work
+  through), counted from analyst retros.
+- result: pending
+- decision: keep watching
+- evidence: local audit `.brigade/research/field-evidence-2026-11-18.md` (never committed); the
+  numbers above are quoted so the entry stands alone.
