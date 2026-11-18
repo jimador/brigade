@@ -1,0 +1,150 @@
+#!/usr/bin/env node
+// brigade-scope — checks the files an item changed against its packet's file list in the
+// PLAN.md. A changed path outside the item's `files` is out of scope; a changed path owned by
+// another item marked `contract: true` is contract-owned (change a merged contract through a
+// new contract item). Pure data in, verdict out: no model, no judgment.
+//
+// Usage:
+//   brigade-scope [--json] [--base <ref>] [--head <ref>] <PLAN.md> <item-slug>
+//
+// Exit codes: 0 scope holds, 1 violations found, 2 usage or I/O error.
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { parsePlan } from './lib/plan.mjs'
+
+function usage() {
+  console.error('usage: brigade-scope [--json] [--base <ref>] [--head <ref>] <PLAN.md> <item-slug>')
+  return 2
+}
+
+// Entries and changed paths are compared in one form: leading `./` stripped, repeated `/`
+// collapsed. A trailing `/` survives normalization and still means "directory".
+function normalize(p) {
+  let s = p.replace(/\/{2,}/g, '/')
+  while (s.startsWith('./')) s = s.slice(2)
+  return s
+}
+
+// An entry ending in `/` allows every path under that directory (`./` normalizes to the empty
+// string, the repository root); any other entry allows exactly that path.
+function covers(entry, changedPath) {
+  if (entry === '' || entry.endsWith('/')) return changedPath.startsWith(entry)
+  return changedPath === entry
+}
+
+// `-z` gives NUL-separated, unquoted paths, so non-ASCII and spaced names arrive intact.
+// `--no-renames` lists a rename as its old path (deleted) and its new path (added).
+function gitChangedFiles(base, head) {
+  const out = execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  return out.split('\0').filter((p) => p !== '').map(normalize)
+}
+
+function isTree(head, p) {
+  try {
+    const type = execFileSync('git', ['cat-file', '-t', `${head}:${p}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return type === 'tree'
+  } catch {
+    return false
+  }
+}
+
+function main() {
+  const argv = process.argv.slice(2)
+  let json = false
+  let base = null
+  let head = 'HEAD'
+  const positional = []
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--json') json = true
+    else if (arg === '--base' || arg === '--head') {
+      const value = argv[i + 1]
+      if (value === undefined || value.startsWith('--')) return usage()
+      if (arg === '--base') base = value
+      else head = value
+      i++
+    } else if (arg.startsWith('--')) return usage()
+    else positional.push(arg)
+  }
+  if (positional.length !== 2) return usage()
+  const [planArg, slug] = positional
+
+  let text
+  try {
+    text = fs.readFileSync(path.resolve(planArg), 'utf8')
+  } catch (err) {
+    console.error(`could not read plan ${planArg}: ${err.message}`)
+    return 2
+  }
+  const plan = parsePlan(text)
+  const item = plan.items.find((it) => it.slug === slug)
+  if (!item) {
+    console.error(`no item named ${slug} in ${planArg}`)
+    return 2
+  }
+  if (base === null) base = plan.frontmatter.delivery_branch
+  if (!base) {
+    console.error('no base: pass --base or set delivery_branch in the plan frontmatter')
+    return 2
+  }
+
+  let changed
+  try {
+    changed = gitChangedFiles(base, head)
+  } catch (err) {
+    const detail = err.stderr ? String(err.stderr).trim() : err.message
+    console.error(`git diff ${base}...${head} failed: ${detail}`)
+    return 2
+  }
+
+  const allowed = item.files.map(normalize)
+
+  // Protected paths: entries of other items that are contract-owned. First owner in plan
+  // order wins when two contract items list overlapping paths. An entry without a trailing
+  // `/` matches only its exact path (C3); when it names a directory, warn so the author
+  // writes it with the slash. The warning never changes the exit code.
+  const protectedEntries = []
+  const warned = new Set()
+  for (const other of plan.items) {
+    if (other.slug === slug || !other.contract) continue
+    for (const raw of other.files) {
+      const entry = normalize(raw)
+      protectedEntries.push({ entry, owner: other.slug })
+      if (entry === '' || entry.endsWith('/') || warned.has(entry)) continue
+      warned.add(entry)
+      if (isTree(head, entry)) {
+        console.error(
+          `warning: contract entry ${entry} is a directory; write it as ${entry}/ to protect its contents`,
+        )
+      }
+    }
+  }
+
+  const outOfScope = []
+  const contractOwned = []
+  for (const changedPath of changed) {
+    if (!allowed.some((entry) => covers(entry, changedPath))) outOfScope.push(changedPath)
+    const hit = protectedEntries.find(({ entry }) => covers(entry, changedPath))
+    if (hit) contractOwned.push({ path: changedPath, owner: hit.owner })
+  }
+  const ok = outOfScope.length === 0 && contractOwned.length === 0
+
+  if (json) {
+    console.log(JSON.stringify({ item: slug, base, head, changed, outOfScope, contractOwned, ok }))
+  } else if (ok) {
+    console.log(`scope OK: ${changed.length} changed files within ${slug}`)
+  } else {
+    for (const p of outOfScope) console.log(`out of scope: ${p}`)
+    for (const c of contractOwned) console.log(`contract-owned: ${c.path} (owned by ${c.owner})`)
+  }
+  return ok ? 0 : 1
+}
+
+process.exitCode = main()
