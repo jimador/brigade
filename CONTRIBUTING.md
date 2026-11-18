@@ -68,7 +68,9 @@ node --check scripts/brigade-evidence
 node --check scripts/brigade-pr
 node --check scripts/brigade-scope
 node --check scripts/brigade-plan-view
+node --check scripts/brigade-rehearse
 node --check scripts/lib/plan.mjs
+node --check scripts/lib/schemas.mjs
 node --check hooks/turn-budget.mjs
 node --check scripts/board-demo
 node --check workflows/config.js

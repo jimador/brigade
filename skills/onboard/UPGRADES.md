@@ -49,6 +49,32 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.51.0
+
+- touches: none
+- what: a dish can come back from PR review. Ticket statuses gain `rework` (a reviewer sent the
+  PR back; a board without it uses `in_progress`) and an optional `merging` (the planner lands an
+  approved PR). `HANDOFF.md` § 8 sweeps PR comments into a ruled `## PR feedback` table and replies
+  on each thread before any change; § 9 lands an approved PR. PLAN.md may carry
+  `### Ticket test plan` (`TP<k>` lines, each owned by a packet), `## PR feedback` and
+  `## Follow-ups`; `brigade-validate` checks them and takes `--ticket <file>`. Cook reports may
+  carry a capped `## Confusions` section the analyst reads. `brigade-status` lists stale
+  worktrees. `brigade-config` reads `tier` and `verification_gate` from `.brigade/config.md` as
+  a layer under the JSON layers. `brigade-scope` lets a contract item change paths other
+  contract items list. `brigade-config prompts --json` now carries the override text, and the
+  workflows apply it; before this, overrides passed as the docs said were dropped silently.
+  The redesign from a 455-dish field audit: a PASS without a verdict file is recovered
+  from the inspector's own returned text, else one fresh inspector; workflows reject malformed args at entry; a cook whose commit is refused reports
+  `committed: false` and the steward commits its staged files; `brigade-rehearse` runs the
+  pipeline's checks over a plan and the plan check uses it; D13 makes a 3+ item chain on one
+  file one slice; the validator warns on oversized items, placeholder model names and red runs
+  with no named mutation; the verdict schema has one source in `scripts/lib/schemas.mjs`;
+  `brigade-coord` gains path leases and `hot-files`; TIERS.md and doctor recommend two-star;
+  `parsePlan` no longer hangs on some plans. The D13 warnings skip landed items and files git
+  marks `linguist-generated`; the repo's `.gitattributes` marks the generated workflow bundles. Existing plans and reports validate unchanged.
+- config: `.brigade/config.md` without a `- rework:` line maps `rework` to itself and falls back
+  to `in_progress`; SessionStart config drift adds the line from the template.
+
 ### 0.50.0
 
 - touches: none
