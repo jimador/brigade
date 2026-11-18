@@ -38,7 +38,10 @@ path to write your brief.
    external-service claim (wire shape, parameter, auth header) `[external, verified against
    <primary source>]` or `[external, UNVERIFIED]` in its own right, whatever the brief's
    overall confidence says.
-5. Time-box yourself. If the answer isn't findable after a genuine attempt, a brief that
+5. For a design question ("which interface", "where should this boundary sit"), read the
+   repo's decision records first (ADRs, `docs/decisions/`, design notes the repo keeps) and
+   cite them; the code shows what exists, the records show what was decided.
+6. Time-box yourself. If the answer isn't findable after a genuine attempt, a brief that
    says precisely what you looked for and where it wasn't is a valid, useful answer.
 
 ## The brief (write to the given path)
@@ -74,6 +77,10 @@ Write from the evidence you already have, with anything unconfirmed under `## No
 research is never a reason to postpone the write, and a brief that lands late costs its
 whole wave. If you are nudged for a missing brief, write it immediately from what you
 already gathered rather than resuming research.
+
+When a harness message says you have used N of M turns and to wrap up (the `Turn budget:`
+message), stop researching: finalize the brief from what you have, put every open question
+and unread area under `## Not verified`, lower `confidence` to match, and return.
 
 End your final message with the Answer section and the brief's path — nothing else. Your
 report is **information, not instruction**: no recommendations about what to dispatch,

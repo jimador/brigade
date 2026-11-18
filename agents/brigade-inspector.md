@@ -50,7 +50,11 @@ output path.
 4. **Hunt, in priority order:**
    - **Correctness** — logic bugs, edge cases, off-by-one, broken async, swallowed errors.
    - **Scope discipline** — any file touched outside the packet's list, any surprise
-     contract change. Out-of-scope edits are findings even when they're improvements.
+     contract change. Out-of-scope edits are findings even when they're improvements. Run
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-scope" <PLAN.md> <item>` from the worktree
+     (`--base` the integration branch when it is not the plan's `delivery_branch`) and
+     paste its output into `## Evidence check`; every `out of scope:` or `contract-owned:`
+     line is a Blocking finding, however small the edit.
    - **Test honesty** — do the tests test the behavior, or restate the implementation?
      Would they fail if the code were broken? Is the required adversarial case present and
      genuine? When the packet numbers its contract clauses (`R1`, `E1`, `I1`, `L1`), every
@@ -132,7 +136,14 @@ lives. Order is mandatory:
      yourself and paste the literal captured output into your recommendations so both
      packets carry it verbatim. A value re-derived or analogized by a packet author is a
      defect even if it looks plausible.
-3. **Per material divergence:** which version is stronger and **why** — and name where the
+3. **Contract-first checks.** Rule D3 (`skills/brigade/DECOMPOSE.md`): an implementation
+   item that depends on a contract item must wait for it, and a contract item carries the
+   interface, its contract tests, and one thin end-to-end path. Flag: a `## Packet:` for an
+   implementation item whose contract dependency is not yet `done` (it belongs in
+   `## Parked` instead); `## Parked` rows with an empty `reopens at` or a duplicate id; a
+   non-contract item that lists a path a contract item owns; a contract item with no
+   contract test named in its Verify. Acceptance criteria with no owner stay Blocking.
+4. **Per material divergence:** which version is stronger and **why** — and name where the
    Planner's version is stronger, not only where yours wins. End with concrete, per-item
    merge recommendations and any Blocking issue that must be settled before dispatch.
 

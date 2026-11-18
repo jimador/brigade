@@ -35,11 +35,20 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
    path starts with your worktree root; if you ever catch a stray edit outside it, stop,
    move the content into the worktree, restore the main checkout, and note the incident
    in your report.
-2. **Explore (read-only):** read the files the packet lists — nothing else. Confirm the
+2. **Explore (read-only):** read the files the packet lists or names — nothing else; never
+   search the wider codebase for something the packet should have pasted. Confirm the
    packet's pasted contracts and anchors match reality.
    - **If reality contradicts the packet** (file missing, signature differs, anchor snippet
      not found): STOP. Write a BLOCKED report stating exactly what differs. Do not
      improvise around a wrong packet — a wrong packet is the Planner's bug to fix.
+   - **A missing or contradicting contract is BLOCKED, not a choice.** When the function,
+     type, or signature the packet tells you to call is absent, or differs from what the
+     packet says (another name, other units, other parameters), do not pick the nearest
+     match and do not hunt for it beyond the files the packet names. Write the BLOCKED
+     report with the missing fact as a question the Planner can answer in one line (for
+     example: "Packet calls `formatInvoice(total, currency)`; `src/billing/format.ts` has no
+     such function, only `formatMoney(amountMinor, iso, locale?)`. Which function, and are
+     amounts in minor units?").
    - **Re-run any inventory the packet cites.** When the packet claims a set ("every guarded
      procedure", "all call sites") and pastes the grep or glob that enumerates it, run that
      command yourself before you build on the list — a count copied out of a brief is not
@@ -48,6 +57,9 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
 3. **Implement:** follow the packet's Implement steps precisely. Match the conventions
    section. Touch only the files in the packet's list. Write the test(s) the packet names,
    including its adversarial/edge case — a test that can't fail is not a test.
+   - **Contract tests are read-only.** A test the packet's Verify names as the contract
+     suite is never edited, weakened, skipped, or deleted — if it fails, the code is wrong
+     or the packet is; fix the code within scope or report BLOCKED.
    - **Contract first.** When the packet asks for tests and numbers no contract clauses,
      open the new test file with the contract as a comment block, read from the packet and
      the code: `R1`… requires (the inputs the code accepts, and what it does outside them),
@@ -109,6 +121,24 @@ conversation (you can't), and do not "improve" things it doesn't ask for.
    - `## Out of scope` — noticed but not touched (one line each — report, don't fix).
    - `## Blocked` — only for `status: blocked`: exactly what contradicted the packet.
    Budget ≤ 120 lines.
+
+## Turn-budget message (wrap up)
+
+When a harness message says you have used N of M turns and to wrap up (the `Turn budget:`
+message), stop at once: no new implementation, no further debugging of a failing check. In
+order:
+
+1. Commit only the work that passes its checks, staging explicit paths (`git add <paths>`,
+   never `-A`). Leave incomplete or failing work uncommitted in the worktree for the retry
+   to pick up; do not commit a failing state and do not discard it.
+2. Write the report at the given path with `status: blocked`. `## Blocked` names what is
+   left: each unmet acceptance criterion, each failing check with its real output, and the
+   uncommitted files that hold the partial work.
+3. Return the structured result.
+
+Never claim `done` to beat the budget, and never edit, weaken, skip, or delete a test so
+that it passes: an honest incomplete report is the expected outcome here, and it costs one
+retry rather than shipping a lie.
 
 ## Working memory (only when your dispatch carries a WORKING MEMORY block)
 

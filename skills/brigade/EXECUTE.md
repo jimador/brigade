@@ -96,6 +96,31 @@ drops the gate-rerun evidence that made it worth anything. Then act on status:
   fix it yourself (announced, minimal diff), re-inspect, then land it the same way. An item
   the tripped breaker never dispatched is handled under `stoppedEarly`.
 
+### Record why an attempt ended
+
+Mirror each non-`done` attempt with a `cause:` (`inspector-fail | turn-limit | wrap-up |
+blocked-missing-fact | blocked-other | no-result`) per the plan schema. Tell `turn-limit`
+from `wrap-up` with `.brigade/state/turn-budget.jsonl`. A line carries an `agent_type` and
+an `at` timestamp, not an item: match both to the item's dispatch window (its attempt's
+start to its report or return) to tie a line to an attempt. An agent that has a `soft` or
+`final` warning line and then returned a `blocked` report with the work committed or parked
+ended by `wrap-up`; one that has no report and ran out of turns is `turn-limit` (or
+`no-result` when no warning and no report exist). An attempt on the `escalation` trigger also
+records `reason: slip | framework-semantics | other`.
+
+A `blocked-missing-fact` is answered, not escalated. Answer the cook's question from the
+briefs on disk, or dispatch one scout when they do not hold it; put the answer into the
+packet, and re-dispatch the item on the same rung with `trigger: answer-retry`. Never move
+up to a stronger model for a missing fact.
+
+### Keep the plan page current
+
+After every PLAN.md change (statuses, attempts, parked rows), run
+`"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-plan-view" <PLAN.md>` and publish or refresh the
+page with the runtime's own page tool, the same file to the same page each time. Operator
+comments on the page become plan edits or `## Parked` rows (`id | question | reopens at |
+raised`), never silent drops. On a cross-runtime handoff, republish from the file.
+
 `stoppedEarly` means the circuit breaker tripped (repeated FAILs across items, or an item's
 ladder exhausted) — evidence of invalid starting assumptions, not bad luck. Do not
 re-dispatch: re-plan from first principles (re-derive what is being built, re-scout the
@@ -127,6 +152,15 @@ PASS lands it: a stand-down check first — `git status --porcelain` against the
 can never contaminate the main checkout; then rebase in the item worktree, `--ff-only` merge
 in the delivery worktree, then removes the worktree and branch. The Planner never runs these
 commands directly; PLAN.md still gets the landed SHA range for traceability.
+
+The scope check gates that landing through the inspector: it runs `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-scope"
+<PLAN.md> <item-slug>` against the item branch, and an `out of scope:` or `contract-owned:`
+line is Blocking, so no PASS and no landing until the diff is fixed and re-inspected. Run it
+yourself only before a landing you perform by hand (rework, rung-3, manual landing).
+
+A blocked or turn-limited attempt lands nothing, so its worktree and branch are kept, work
+left uncommitted included; the retry's steward finds them existing and reuses them as a
+rework, so the next cook picks the partial work up. Only a landed item is removed.
 
 With `graphite_restack: true` in repo config, you own `gt` for landing/rework rebases — the
 script always lands with plain git. After the ledger returns, restack/absorb yourself per
