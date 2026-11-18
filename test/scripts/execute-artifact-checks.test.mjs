@@ -2,6 +2,8 @@
 // runs the generated workflows/brigade-execute.js with an agent() stub, the same way
 // execute-verdict-postcondition.test.mjs does, and reads the prompts the stewards are given.
 // One test per guarantee:
+//   E1  every schema example in workflows/config.js and SCHEMAS.md is bare --- frontmatter with no
+//       yaml fence, and, filled in, validates with a clean ok line and no warning
 //   E2  the land prompt runs brigade-validate on the verdict and the report and treats anything
 //       but an ok line as invalid, handled like a missing file
 //   E2  brigade-validate really prints no ok line for a placeholder model (exit 0) or a fenced
@@ -192,4 +194,82 @@ test('E3: a landing whose teardown was refused still counts as landed and the re
   assert.equal(item.status, 'done')
   assert.equal(item.landedRange, 'a..b')
   assert.ok(logs.some((line) => line.includes(REFUSAL)), logs.join('\n'))
+})
+
+// Every schema example that carries frontmatter: the prompt blocks in workflows/config.js and the
+// type sections of SCHEMAS.md. The common envelope is listed apart: it shows only the keys every
+// type shares, so it is not a whole artifact on its own.
+function schemaExamples() {
+  const config = fs.readFileSync(path.join(ROOT, 'workflows', 'config.js'), 'utf8')
+  const blocks = new Function(config + '; return MD_SCHEMA_BLOCKS')()
+  const md = fs.readFileSync(path.join(ROOT, 'skills', 'brigade', 'SCHEMAS.md'), 'utf8')
+  const examples = Object.entries(blocks).map(([type, text]) => ({ from: `config.js ${type}`, text }))
+  for (const section of md.split(/\n(?=### `)/).slice(1)) {
+    const type = section.match(/^### `([a-z_]+)`/)[1]
+    if (/^doc: /m.test(section)) examples.push({ from: `SCHEMAS.md ${type}`, text: section })
+  }
+  const envelope = md.slice(md.indexOf('## The common envelope'), md.indexOf('## Type registry'))
+  return { examples, envelope }
+}
+
+// Turns an example's frontmatter into a filled-in file the way an agent would: comments dropped,
+// <placeholders> filled, a documented `a|b|c` choice resolved to its first value.
+function instantiate(yaml) {
+  return yaml.split('\n').map((l) => l.replace(/\s+#.*$/, '')).filter((l) => l.trim()).join('\n')
+    .replace(/<[^>]*>/g, 'sample')
+    .replace(/(:\s*)([A-Za-z][\w-]*(?:\|[A-Za-z][\w-]*)+)/g, (_m, lead, alts) => lead + alts.split('|')[0])
+}
+
+// Where each type lives in a dish, and the body it needs to pass.
+const PLACES = {
+  brief: 'briefs/1-sample.md', report: 'reports/sample-cook.md', verdict: 'reports/sample-verdict.md',
+  ledger: 'state/sample.md', plan: 'PLAN.md', research: 'research/sample.md', plan_check: 'reports/plan-check-1.md',
+  analyst: 'analyst.md', design_swag: 'DESIGN.md', review_report: '../../reviews/sample/report.md',
+  red_team: 'reports/red-team-0123abc.md',
+}
+function bodyFor(type, text) {
+  if (type === 'ledger') return '## Canon\n\nC1. Sample.\n\n## World state\n\nW1. [RELIABLE] Sample.\n'
+  const prose = text.replace(/\s+/g, ' ')
+  const at = prose.indexOf('Body sections')
+  const named = at < 0 ? [] : [...prose.slice(at).matchAll(/`(## [^`<]+)`/g)].map((m) => m[1])
+  const sections = [...new Set(named)]
+  if (type === 'plan') sections.push('## Packet: sample')
+  return sections.map((s) => `${s}\n\nSample.\n`).join('\n')
+}
+
+test('E1: every schema example is bare --- frontmatter and validates with a clean ok line', () => {
+  const { examples, envelope } = schemaExamples()
+  const seen = new Set()
+  for (const { from, text } of examples) {
+    assert.doesNotMatch(text, /^```yaml$/m, `${from} still wraps its example in a yaml fence`)
+    const fm = text.match(/^---\n([\s\S]*?)\n---$/m)
+    assert.ok(fm, `${from} has no bare --- frontmatter`)
+    let yaml = instantiate(fm[1])
+    const type = yaml.match(/^doc: (\S+)/m)[1]
+    seen.add(type)
+    // The plan example lists every choice for an item at once; one real item depends on nothing
+    // and gives a reason only on an escalation, and its packet section follows.
+    if (type === 'plan') yaml = yaml.replace('[sample...]', '[]').replace(/,\s*reason: \w+/, '')
+    assert.ok(PLACES[type], `${from}: no place known for type ${type}`)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'execute-artifact-checks-e1-'))
+    scratch.push(dir)
+    const file = path.join(dir, '.brigade', 'dishes', 'sample', PLACES[type])
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `---\n${yaml}\n---\n\n${bodyFor(type, text)}`)
+    const r = spawnSync(process.execPath, [VALIDATE, file], { encoding: 'utf8', cwd: dir, env: { ...process.env, CLAUDE_PROJECT_DIR: dir } })
+    const out = r.stdout + r.stderr
+    assert.equal(r.status, 0, `${from}:\n${out}`)
+    assert.doesNotMatch(out, /^(FAIL|warn)/m, `${from}:\n${out}`)
+    assert.match(out, new RegExp(`^ok\\s+\\S+ \\(${type}\\)$`, 'm'), `${from}:\n${out}`)
+  }
+  for (const type of ['brief', 'report', 'verdict', 'ledger', 'review_report', 'plan', 'research', 'plan_check', 'analyst', 'design_swag', 'red_team']) {
+    assert.ok(seen.has(type), `no ${type} example was checked`)
+  }
+
+  // The common envelope is bare too, and its model is not one the validator calls a placeholder.
+  assert.doesNotMatch(envelope, /^```yaml$/m, 'the common envelope still sits in a yaml fence')
+  const head = envelope.match(/^---\n([\s\S]*?)\n---$/m)
+  assert.ok(head, 'the common envelope has no bare --- frontmatter')
+  const model = instantiate(head[1]).match(/^model: (.*)$/m)[1]
+  assert.ok(!['haiku', '<model>'].includes(model), `envelope model ${model}`)
 })

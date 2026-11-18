@@ -66,9 +66,11 @@ function bodySections(prose) {
 function mismatches(mod, md) {
   const out = []
   const section = verdictSection(md)
-  const fence = section.match(/```yaml\n([\s\S]*?)\n```/)
-  if (!fence) return ['no ```yaml block in the verdict section']
-  const yaml = fence[1]
+  // The example frontmatter sits bare between two `---` lines, as in a real verdict file.
+  if (section.includes('```yaml')) return ['the verdict section wraps its example in a ```yaml fence']
+  const frontmatter = section.match(/^---\n([\s\S]*?)\n---$/m)
+  if (!frontmatter) return ['no bare --- frontmatter block in the verdict section']
+  const yaml = frontmatter[1]
   const keys = yaml.split('\n').map((l) => l.match(/^([a-z_]+):/)).filter(Boolean).map((m) => m[1])
   const own = keys.filter((k) => !ENVELOPE.includes(k) && !OPTIONAL.includes(k))
   if (JSON.stringify(own) !== JSON.stringify(mod.VERDICT.keys)) {

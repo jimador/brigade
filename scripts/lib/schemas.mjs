@@ -20,13 +20,13 @@ export const VERDICT = {
   sections: ['## Verdict', '## Findings', '## Evidence check'],
   doc: `Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 
-\`\`\`yaml
+---
 doc: verdict
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: inspector
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 verdict: PASS                      # PASS|FAIL
 attempt_reviewed: 1
@@ -35,7 +35,7 @@ findings:
   - { id: F1, severity: blocking|high|medium|low, location: "src/foo.ts:42",
       summary: <one line> }
 trivial_only: false               # true = all findings annotation-only, no redispatch needed
-\`\`\`
+---
 
 Body sections, in order: \`## Verdict\` (one line), \`## Findings\` (per finding: what's
 wrong, why it matters, concrete fix direction — ids matching frontmatter), \`## Evidence

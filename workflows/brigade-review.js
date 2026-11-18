@@ -237,13 +237,13 @@ const SCHEMA_REVIEW_RETURN = { type: 'object', required: ['findings', 'contextTi
 const MD_SCHEMA_BLOCKS = {
   brief: `Producer: scout. Consumers: Planner (packet-writing), Inspector (plan check).
 
-\`\`\`yaml
+---
 doc: brief
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: scout
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
 confidence: high                   # high|medium|low
@@ -251,7 +251,7 @@ sources:                          # authority: the code itself, nothing else
   - src/auth/session.ts:10-48
   - package.json:12
 urls: []                          # only if the question required external docs
-\`\`\`
+---
 
 Body sections, in order: \`## Answer\` (2–5 sentences, first), \`## Contracts\` (pasted
 signatures with locations), \`## Anchors\` (pasted snippets where changes land),
@@ -259,13 +259,13 @@ signatures with locations), \`## Anchors\` (pasted snippets where changes land),
 Budget: ≤ 150 lines. Everything pasted is verbatim from the working tree.`,
   report: `Producer: cook / cook-heavy. Consumers: Planner (triage), Inspector (review).
 
-\`\`\`yaml
+---
 doc: report
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: cook
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 status: done                       # done|blocked
 attempt: 1                        # 2+ = rework pass
@@ -276,7 +276,7 @@ commands:                         # every Verify command run, in order
   - bun test src/foo.test.ts
 findings_addressed: []            # rework only: finding id → how resolved
 ledger: <path|null>               # working-memory ledger, when the dispatch carried one
-\`\`\`
+---
 
 Body sections, in order: \`## Summary\` (what changed, why, ≤ 5 lines), \`## Evidence\`
 (verbatim tail of each command's output — the verdict line must be visible),
@@ -287,7 +287,7 @@ part and what you assumed; leave it out when nothing was unclear; ≤ 8 lines), 
 Authority: the working tree and the commands' real output. Budget: ≤ 120 lines.`,
   ledger: `Cook working memory — one per item at .brigade/dishes/<dish>/state/<item>.md.
 
-\`\`\`yaml
+---
 doc: ledger
 schema: 1
 dish: <dish-slug>
@@ -297,7 +297,7 @@ model: <model id of the last writer>
 created: <ISO8601 first seeding>
 attempt: <highest attempt that wrote this ledger>
 updated: <ISO8601 stamp of the last write>
-\`\`\`
+---
 
 Body sections in order: ## Canon (<= 20 numbered C<n>. units seeded from the packet,
 NEVER edited — a wrong Canon unit is a packet defect: report BLOCKED), ## World state
@@ -311,13 +311,13 @@ final update, quote the live World state in Evidence, set ledger: in the frontma
   // @schemas:begin verdict-doc
   verdict: `Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 
-\`\`\`yaml
+---
 doc: verdict
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: inspector
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 verdict: PASS                      # PASS|FAIL
 attempt_reviewed: 1
@@ -326,7 +326,7 @@ findings:
   - { id: F1, severity: blocking|high|medium|low, location: "src/foo.ts:42",
       summary: <one line> }
 trivial_only: false               # true = all findings annotation-only, no redispatch needed
-\`\`\`
+---
 
 Body sections, in order: \`## Verdict\` (one line), \`## Findings\` (per finding: what's
 wrong, why it matters, concrete fix direction — ids matching frontmatter), \`## Evidence
@@ -341,7 +341,7 @@ Consumers: operator, later finding-to-packet dispatch. Advisory — no PASS/FAIL
 doc: review_report
 schema: 1
 role: inspector
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 input: { kind: branch, ref: feat/x }        # kind: branch|range|pr; ref: as given
 range: <base>..<head>

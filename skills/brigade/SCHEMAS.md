@@ -34,17 +34,15 @@ conformance of the artifacts it reviews.
 
 Every brigade artifact starts with frontmatter carrying at least:
 
-```yaml
 ---
 doc: report            # the type, from the registry below
 schema: 1              # bump only when a type changes incompatibly
 dish: <dish-slug>
 item: <item-slug>      # omit for dish-level docs (plan, analyst)
 role: cook             # producer: planner|scout|cook|cook-heavy|inspector|analyst
-model: haiku           # the model that actually produced it
+model: <model id that wrote this file>  # the model that actually produced it
 created: 2026-07-04T03:10:00Z
 ---
-```
 
 Conventions for all types:
 
@@ -101,12 +99,12 @@ readiness — groom it (the companion `groom` skill, `skills/groom/SKILL.md`) or
 
 Producer: Planner. Consumers: Planner (resume), Inspector (plan check), Analyst.
 
-```yaml
+---
 doc: plan
 schema: 1
 dish: <dish-slug>
 role: planner
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 ticket: <source ticket id>         # verbatim, copy-pasteable
 ticket_url: <url|null>
@@ -126,7 +124,7 @@ items:                             # the DAG, one entry per work item
                    result: done|failed|blocked,
                    cause: inspector-fail|turn-limit|wrap-up|blocked-missing-fact|blocked-other|no-result,
                    reason: slip|framework-semantics|other }] }
-```
+---
 
 Optional additions (schema stays 1; a plan without them validates as before):
 
@@ -254,13 +252,13 @@ is reported on the line where it starts.
 
 Producer: scout. Consumers: Planner (packet-writing), Inspector (plan check).
 
-```yaml
+---
 doc: brief
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: scout
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
 confidence: high                   # high|medium|low
@@ -268,7 +266,7 @@ sources:                          # authority: the code itself, nothing else
   - src/auth/session.ts:10-48
   - package.json:12
 urls: []                          # only if the question required external docs
-```
+---
 
 Body sections, in order: `## Answer` (2–5 sentences, first), `## Contracts` (pasted
 signatures with locations), `## Anchors` (pasted snippets where changes land),
@@ -281,13 +279,13 @@ Producer: a researcher (model set by depth, below). Consumers: Planner (synthesi
 operator. Where a `brief` orients the Planner, a `research` document IS the deliverable of
 a research work item: a decision-grade report on one question, candidate, or survey area.
 
-```yaml
+---
 doc: research
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: scout
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 depth: light                       # light|medium|heavy
 confidence: high                   # high|medium|low
@@ -295,7 +293,7 @@ sources:                          # repo claims: the code itself
   - src/auth/session.ts:10-48
 urls:                             # every external claim cites a full URL
   - https://...
-```
+---
 
 `depth` sets both the researcher and the report — one axis, chosen per item when the plan
 is written (independent of the dish's service tier, which still governs planning, plan
@@ -319,13 +317,13 @@ such.
 
 Producer: cook / cook-heavy. Consumers: Planner (triage), Inspector (review).
 
-```yaml
+---
 doc: report
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: cook
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 status: done                       # done|blocked
 attempt: 1                        # 2+ = rework pass
@@ -337,7 +335,7 @@ commands:                         # every Verify command run, in order
   - bun test src/foo.test.ts
 findings_addressed: []            # rework only: finding id → how resolved
 ledger: <path|null>               # working-memory ledger, when the dispatch carried one
-```
+---
 
 Body sections, in order: `## Summary` (what changed, why, ≤ 5 lines), `## Evidence`
 (verbatim tail of each command's output — the verdict line must be visible),
@@ -355,13 +353,13 @@ commits them before landing.
 
 Producer: inspector. Consumers: Planner (merge/rework decision), Analyst.
 
-```yaml
+---
 doc: verdict
 schema: 1
 dish: <dish-slug>
 item: <item-slug>
 role: inspector
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 verdict: PASS                      # PASS|FAIL
 attempt_reviewed: 1
@@ -370,7 +368,7 @@ findings:
   - { id: F1, severity: blocking|high|medium|low, location: "src/foo.ts:42",
       summary: <one line> }
 trivial_only: false               # true = all findings annotation-only, no redispatch needed
-```
+---
 
 Body sections, in order: `## Verdict` (one line), `## Findings` (per finding: what's
 wrong, why it matters, concrete fix direction — ids matching frontmatter), `## Evidence
@@ -389,17 +387,17 @@ Producer: inspector (plan check mode). Consumer: Planner. Every attempt keeps it
 file — `plan-check-1.md`, `plan-check-2.md` — and none is ever overwritten; the attempt that
 got replaced is usually the one that explains what the plan got wrong.
 
-```yaml
+---
 doc: plan_check
 schema: 1
 dish: <dish-slug>
 role: inspector
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 blind_sketch_first: true          # sworn: sketch written before reading PLAN.md
 findings: [M1, M2, L1]            # every finding id this check raised; PLAN.md rules on each one
 blocking: []                      # ids from findings that must settle before dispatch
-```
+---
 
 Body sections, in order: `## Blind sketch` (own decomposition: titles + files + edges),
 `## Comparison` (coverage, disjointness, granularity, packet spot-checks),
@@ -409,12 +407,12 @@ Body sections, in order: `## Blind sketch` (own decomposition: titles + files + 
 
 Producer: analyst. Consumers: Planner, the user, future brain-upgrade passes.
 
-```yaml
+---
 doc: analyst
 schema: 1
 dish: <dish-slug>
 role: analyst
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 mode: standard         # standard|intensive — intensive is the ★★★ end-of-dish retro
 items_total: 8
@@ -424,7 +422,7 @@ conflicts: 0
 proposals:
   - { id: P1, destination: learnings|heuristic|installed-brain|tooling,
       change: <one line>, evidence: <artifact path or file:line> }
-```
+---
 
 Body sections, in order: `## Scorecard` (one line per axis: metric, number, worst
 offender), `## Proposal ledger` (intensive only — one line per prior-retro proposal:
@@ -442,12 +440,12 @@ Producer: Design agent (`agents/brigade-design.md`), first pass and every revisi
 Consumers: operator (curation), later Planner when the ticket is promoted. **Not** a
 substitute for cook packets.
 
-```yaml
+---
 doc: design_swag
 schema: 1
 role: design
 dish: <dish-slug>
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 ticket: <source ticket id>
 ticket_url: <url|null>
@@ -457,7 +455,7 @@ size_swag: M                       # XS|S|M|L|XL|unknown — estimate only
 revisits: 0                        # number of revisit sessions applied to this ledger
 sources:
   - path/to/file.ts:10-40
-```
+---
 
 Body sections, in order: `## What this seems to be`, `## Likely shape of work`,
 `## Codebase grounding`, `## Decisions so far`, `## Open questions`, `## Not yet specified`,
@@ -494,12 +492,11 @@ Missing → the Designer runs `/impeccable init` with the operator before any ca
 Producer: review workflow (inspector Mode 3 findings, planner-assembled). Consumers:
 operator, later finding-to-packet dispatch. Advisory — no PASS/FAIL.
 
-```yaml
 ---
 doc: review_report
 schema: 1
 role: inspector
-model: haiku
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 input: { kind: branch, ref: feat/x }        # kind: branch|range|pr; ref: as given
 range: <base>..<head>
@@ -511,7 +508,6 @@ findings:
       summary: <one line>, files: [src/foo.ts], fix: <acceptance-criteria-shaped direction>,
       verify_hint: <how to confirm>, confirmed: true }
 ---
-```
 
 Body sections, in order: `## Scope` (what was reviewed, base/head, context tier and why),
 `## Findings` (grouped by severity within dimension; each finding packet-shaped),
@@ -526,13 +522,12 @@ Producer: Planner, from the find and verify pass outputs (`HANDOFF.md` § 3). Co
 PR body's Red-team review section, the Analyst. One file per reviewed head; a new head gets a
 new file and none is overwritten.
 
-```yaml
 ---
 doc: red_team
 schema: 1
 dish: <dish-slug>
 role: planner
-model: opus
+model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 head: 0123abcdef                  # the sha the review covers
 range: main...0123abcdef          # must end at head
@@ -541,7 +536,6 @@ verify: { tool: claude, command: "claude -p \"Verify pass. ...\"" }
 findings: { confirmed: 1, refuted: 2 }
 verdict: clean                    # clean|open|override|stopped
 ---
-```
 
 Body sections, in order: `## Find pass` (where its output is saved, candidate count),
 `## Verify pass` (each candidate: reproduced, traced or refuted, with the evidence),
@@ -558,7 +552,7 @@ Producer: cook (heavy items and rework attempts — dispatches whose prompt carr
 `MEMORY.md` § The Planner's ledger). Consumers: the next attempt's cook (inheritance), Inspector
 (Canon audit), Analyst. Protocol: `MEMORY.md` next to this file.
 
-```yaml
+---
 doc: ledger
 schema: 1
 dish: <dish-slug>
@@ -568,7 +562,7 @@ model: <model id of the last writer>
 created: <ISO8601>                # first seeding
 attempt: 1                        # highest attempt that wrote this ledger
 updated: <ISO8601>                # stamp of the last write
-```
+---
 
 Body sections, in order: `## Canon` (≤ 20 numbered `C<n>.` units, seeded from the packet,
 never edited — a wrong Canon unit is a packet defect reported BLOCKED), `## World state`

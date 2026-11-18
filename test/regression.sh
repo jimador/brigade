@@ -1576,9 +1576,9 @@ if config.get("workingMemory") is not True:
     raise SystemExit(f"expected workingMemory=true, got {config.get('workingMemory')!r}")
 PY
 
-  # Test MD_SCHEMA_BLOCKS.ledger fence rendering.
-  node -e "const src=require('fs').readFileSync('$ROOT/workflows/config.js','utf8'); const s=new Function(src+'; return MD_SCHEMA_BLOCKS.ledger')(); process.exit(/^\x60\x60\x60yaml$/m.test(s) && !s.includes(String.fromCharCode(92)) ? 0 : 1)" ||
-    fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger fence rendering is broken"
+  # Test MD_SCHEMA_BLOCKS.ledger frontmatter rendering: bare --- lines, no yaml fence, no stray backslash.
+  node -e "const src=require('fs').readFileSync('$ROOT/workflows/config.js','utf8'); const s=new Function(src+'; return MD_SCHEMA_BLOCKS.ledger')(); process.exit(/^---\n[\s\S]*\n---$/m.test(s) && !s.includes('\x60\x60\x60') && !s.includes(String.fromCharCode(92)) ? 0 : 1)" ||
+    fail "workflows/config.js MD_SCHEMA_BLOCKS.ledger frontmatter rendering is broken"
 }
 
 test_execute_artifact_verification() {
@@ -1994,10 +1994,14 @@ for (const type of ['brief', 'report', 'verdict', 'ledger']) {
     throw new Error(`MD_SCHEMA_BLOCKS.${type} not found`);
   }
 
-  // Extract the YAML fence from the block.
-  const match = block.match(/\`\`\`yaml\n([\s\S]*?)\n\`\`\`/);
+  // Extract the frontmatter: the example is written bare, between two `---` lines, the way
+  // a real artifact starts. A ```yaml fence here gets copied into real files.
+  if (/\`\`\`yaml/.test(block)) {
+    throw new Error(`MD_SCHEMA_BLOCKS.${type} still wraps its example in a yaml fence`);
+  }
+  const match = block.match(/^---\n([\s\S]*?)\n---$/m);
   if (!match) {
-    throw new Error(`No YAML fence found in MD_SCHEMA_BLOCKS.${type}`);
+    throw new Error(`No bare --- frontmatter found in MD_SCHEMA_BLOCKS.${type}`);
   }
 
   // Check that schema: 1 is present.
@@ -2070,11 +2074,9 @@ for (const [type, spec] of Object.entries(fixtures)) {
 }
 NODE
 
-  # Run brigade-validate on each extracted example. Each one must pass with no FAIL
-  # line and print either its clean "(<type>)" ok line or only the placeholder-model
-  # warning: the schema examples use `model: haiku` on non-cook roles, which the
-  # validator flags on purpose so real files name the model that wrote them.
-  w3_warn='looks like the schema placeholder; write the model that produced this file'
+  # Run brigade-validate on each extracted example. Each one must print its clean
+  # "ok ... (<type>)" line and nothing else: no FAIL, and no warning either, so the
+  # examples never teach a placeholder model value the validator flags.
   for type in brief report verdict ledger; do
     case "$type" in
       brief)
@@ -2098,14 +2100,11 @@ NODE
     if printf '%s\n' "$output" | grep -q '^FAIL'; then
       fail "brigade-validate reported a problem for $type example: $output"
     fi
-    if printf '%s\n' "$output" | grep -q "^ok .*($type)\$"; then
-      continue
+    if printf '%s\n' "$output" | grep -q '^warn'; then
+      fail "brigade-validate warned on $type example: $output"
     fi
-    printf '%s\n' "$output" | grep -q '^warn' ||
+    printf '%s\n' "$output" | grep -q "^ok .*($type)\$" ||
       fail "brigade-validate did not report ok for $type example: $output"
-    other_warns="$(printf '%s\n' "$output" | grep '^warn' | grep -Fv "$w3_warn" || true)"
-    [ -z "$other_warns" ] ||
-      fail "brigade-validate warned on $type example beyond the placeholder model: $other_warns"
   done
 }
 
