@@ -968,6 +968,21 @@ function validateFile(file, ticketPath = null) {
         const n = confusions.filter((l) => l.trim() !== '').length
         if (n > 8) problems.push(`report "## Confusions" has ${n} non-empty lines; budget is 8`)
       }
+      // `committed: false` says a policy refusal blocked `git commit` and the packet's files are
+      // staged for the steward to commit. Leaving the key out means true. A quoted value counts
+      // the same as a bare one, and a trailing `# comment` is ignored.
+      const committedRaw = fmValue(fm, 'committed')
+      if (committedRaw !== null) {
+        const committed = committedRaw.replace(/\s+#.*$/, '').replace(/^(["'])(.*)\1$/, '$2')
+        if (!['true', 'false'].includes(committed)) {
+          problems.push(`invalid report committed: ${committed}`)
+        } else if (committed === 'false' && status === 'done') {
+          const evidence = sectionLines(body, '## Evidence') || []
+          if (!evidence.some((l) => /refus/i.test(l))) {
+            problems.push('committed: false needs the refusal quoted in ## Evidence')
+          }
+        }
+      }
       break
     }
     case 'verdict': {

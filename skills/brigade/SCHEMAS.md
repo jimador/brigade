@@ -332,6 +332,7 @@ attempt: 1                        # 2+ = rework pass
 branch: wip/<delivery-slug>/<item-slug>
 files_changed:                    # must be ⊆ the packet's file list
   - { path: src/foo.ts, change: <one line> }
+committed: true                   # false = a policy refusal blocked git commit; the packet's files are staged
 commands:                         # every Verify command run, in order
   - bun test src/foo.test.ts
 findings_addressed: []            # rework only: finding id → how resolved
@@ -345,6 +346,10 @@ touched), `## Confusions` (optional: one line per packet part that read two ways
 part and what you assumed; leave it out when nothing was unclear; ≤ 8 lines), and for
 `status: blocked` a `## Blocked` section stating exactly what contradicted the packet.
 Authority: the working tree and the commands' real output. Budget: ≤ 120 lines.
+
+`committed: false` (optional; absent means true) says a policy refusal blocked `git commit` and
+the packet's files are staged on the item branch; `## Evidence` quotes the refusal. The steward
+commits them before landing.
 
 ### `verdict` — inspector review (`reports/<item>-verdict.md`)
 
