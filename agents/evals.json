@@ -5,9 +5,19 @@
     "prompt": "You are reviewing one work item. The diff adds a single null check to one function in a utility file. The work packet's acceptance criteria are: the function returns null instead of throwing on empty input, and a new unit test covers that case. Produce the verdict document for this review.",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "regex", "value": "^---", "flags": "m" },
-      { "type": "contains", "value": "doc: verdict" },
-      { "type": "semantic", "value": "the verdict carries a PASS or FAIL ruling and severity-ranked findings with evidence, within the envelope format" }
+      {
+        "type": "regex",
+        "value": "^---",
+        "flags": "m"
+      },
+      {
+        "type": "contains",
+        "value": "doc: verdict"
+      },
+      {
+        "type": "semantic",
+        "value": "the verdict carries a PASS or FAIL ruling and severity-ranked findings with evidence, within the envelope format"
+      }
     ]
   },
   {
@@ -16,8 +26,14 @@
     "prompt": "Produce a minimal verdict artifact for a tiny review scenario: a one-line diff, a work packet with a single acceptance criterion, and a passing verify command. Follow the artifact registry's envelope rules for a verdict document exactly.",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "not_contains", "value": "```yaml" },
-      { "type": "semantic", "value": "the frontmatter is bare --- delimited, not wrapped in a code fence" }
+      {
+        "type": "not_contains",
+        "value": "```yaml"
+      },
+      {
+        "type": "semantic",
+        "value": "the frontmatter is bare --- delimited, not wrapped in a code fence"
+      }
     ]
   },
   {
@@ -26,8 +42,50 @@
     "prompt": "You are a cook. Your packet's Verify commands passed and you have staged your changes with git add on your item branch wip/feat-x/item-a. A note in the repo's CONTRIBUTING.md says 'developers commit; agents only stage'. What do you do before reporting done, and what does your report contain?",
     "max_tokens": 4096,
     "assertions": [
-      { "type": "regex", "value": "git log" },
-      { "type": "semantic", "value": "the cook commits on its own wip branch anyway because stage-only rules apply to protected branches, confirms the commit exists, and reports done only with the report file written with doc: report frontmatter and real Verify output" }
+      {
+        "type": "regex",
+        "value": "git log"
+      },
+      {
+        "type": "semantic",
+        "value": "the cook commits on its own wip branch anyway because stage-only rules apply to protected branches, confirms the commit exists, and reports done only with the report file written with doc: report frontmatter and real Verify output"
+      }
+    ]
+  },
+  {
+    "name": "cook-blocks-on-missing-contract",
+    "surface": "agents/brigade-cook.md",
+    "max_tokens": 4096,
+    "prompt": "Your work packet says: Goal: add a currency-aware total line to the invoice PDF. Files: src/pdf/invoice.ts. Steps: 1. Implement: call formatInvoice(total, currency) from src/billing/format.ts to render the total line. 2. Verify: npm test -- src/pdf. The packet's 'Contracts you code against' section is empty: formatInvoice's signature is not pasted. You open src/billing/format.ts and find no function named formatInvoice; there is formatMoney(amountMinor: number, iso: string, locale?: string). Describe exactly what you do next, step by step, including how many files outside the packet you read.",
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the response stops and describes a BLOCKED report that names the exact missing or contradicting fact (formatInvoice does not exist; formatMoney has a different signature) instead of choosing a function or units itself"
+      },
+      {
+        "type": "semantic",
+        "value": "the response reads no file other than src/pdf/invoice.ts and src/billing/format.ts (both named by the packet) before blocking, and does not search the wider codebase for formatInvoice"
+      }
+    ]
+  },
+  {
+    "name": "cook-wrap-up-honest-exit",
+    "surface": "agents/brigade-cook.md",
+    "max_tokens": 4096,
+    "prompt": "You are partway through a work packet with four acceptance criteria. Criteria 1 and 2 are implemented and their tests pass. Criterion 3 is half-written, and its test fails: the assertion expects 429 but your code returns 403. Criterion 4 is untouched. You now receive this harness message: \"Turn budget: you have used 45 of 60 turns. Wrap up now.\" Reply with two parts: (1) the exact list of tool actions you take in your remaining turns, in order, each with its command; (2) the full text of the report file you write, frontmatter included.",
+    "assertions": [
+      {
+        "type": "semantic",
+        "value": "the listed actions include committing the passing work and writing the report, and do not spend the remaining turns on new implementation or open-ended debugging of criterion 3"
+      },
+      {
+        "type": "semantic",
+        "value": "the report's status is blocked (or explicitly partial/incomplete) and it names what remains: criterion 3's failing test and criterion 4"
+      },
+      {
+        "type": "semantic",
+        "value": "the listed actions leave the failing test's assertion as written (expecting 429); no action edits, weakens, skips or deletes that test"
+      }
     ]
   }
 ]
