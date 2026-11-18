@@ -131,8 +131,17 @@ why, how it ended); it is where escalation history lives, so the analyst scores 
 plan instead of re-reading report trails.
 
 Body sections, in order: `## Dish` (goal + acceptance criteria from the ticket),
-`## Waves` (planned dispatch order), then one `## Packet: <slug>` per item (see `packet`)
-— build dishes only; a `kind: research` plan has no packet sections.
+`## Waves` (planned dispatch order), `## Plan-check dispositions` (when a plan check ran),
+then one `## Packet: <slug>` per item (see `packet`) — build dishes only; a `kind: research`
+plan has no packet sections.
+
+`## Plan-check dispositions` is a table with columns `id | source | ruling | how`: one row per
+id in each `reports/plan-check-<n>.md` `findings:` list (source `plan-check-<n>`) and one per
+bullet under a scout brief's `## Risks` (id `R<k>`, source the brief's file stem, e.g. `1`).
+`ruling` is `fixed` (the packet now does it; `how` names the packet), `pinned` (a named test
+holds it; `how` names the test), or `accepted` (`how` gives the reason). `brigade-validate`
+fails the plan while a plan-check id has no row or an unknown ruling, and warns for a missing
+Risks row. Dropped plan-check findings came back as the rework round in four dishes running.
 The `items` list in frontmatter is the machine state; body packets carry the detail. Keep
 frontmatter `status` current at every transition — resume trusts it.
 
@@ -322,7 +331,8 @@ role: inspector
 model: haiku
 created: 2026-07-04T03:10:00Z
 blind_sketch_first: true          # sworn: sketch written before reading PLAN.md
-blocking: []                      # list of must-settle-before-dispatch items
+findings: [M1, M2, L1]            # every finding id this check raised; PLAN.md rules on each one
+blocking: []                      # ids from findings that must settle before dispatch
 ```
 
 Body sections, in order: `## Blind sketch` (own decomposition: titles + files + edges),

@@ -187,7 +187,12 @@ Three things the check resolves rather than reports:
   into the plan-check packet with an explicit overlap instruction — a file both plans touch
   is a blocking coordination point, not something commit ordering can be trusted to sort out.
 
-You fold in what's right. You own the plan; the check is information, not instruction. A bad
+You fold in what's right. You own the plan; the check is information, not instruction. But
+every finding gets a written ruling: add a `## Plan-check dispositions` row (`SCHEMAS.md`
+§ plan) for each plan-check id and each scout brief `## Risks` bullet, ruled `fixed`, `pinned`
+by a named test, or `accepted` with a reason. `brigade-validate` refuses the plan until every
+plan-check id has one. Four dishes running dropped a finding the check had already named, and
+each came back as a rework round. A bad
 decomposition costs far more than one sonnet pass, and the tier already priced that trade.
 
 ## The planning checkpoint
@@ -198,6 +203,6 @@ if any) and get one confirmation before creating branches — the single plannin
 ## Complete when
 
 PLAN.md validates (`brigade-validate`), every packet clears the bar above, the plan check
-(when the tier runs one) is folded in, and the operator has confirmed the plan once. Release
+(when the tier runs one) is folded in with a disposition row per finding, and the operator has confirmed the plan once. Release
 the dish lease before yielding for that confirmation. After it, never re-plan or re-confirm:
 the next stop is handoff, and `EXECUTE.md` names the only conditions that interrupt it.

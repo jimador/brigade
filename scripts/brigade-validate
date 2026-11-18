@@ -418,6 +418,115 @@ function checkPackets(body, firstLine, checks, warnings) {
   if (block) endBlock()
 }
 
+// --- plan-check dispositions --------------------------------------------------
+//
+// Every finding a plan check raised, and every risk a scout brief listed, must be ruled
+// on in PLAN.md before dispatch: fixed in a packet, pinned by a named test, or accepted
+// with a reason. Four dishes in a row dropped a finding the plan check had already named,
+// and each one came back as a rework round. Plan checks that predate the `findings:` key
+// carry no ids, so finished dishes keep validating.
+
+const DISPOSITION_RULINGS = ['fixed', 'pinned', 'accepted']
+const FINDING_ID = /^[A-Za-z][A-Za-z0-9._-]*$/
+
+// A frontmatter list of ids, inline (`key: [A1, B2]`) or block style (`- A1` lines).
+function idList(fm, key) {
+  const inline = fmValue(fm, key)
+  if (inline === null) return null
+  if (inline.startsWith('[')) {
+    return inline
+      .replace(/^\[|\]$/g, '')
+      .split(',')
+      .map((x) => x.trim().replace(/^["']|["']$/g, ''))
+      .filter((x) => x !== '')
+  }
+  if (inline !== '') return [inline]
+  return listEntries(fm, key).map((e) => e.trim().replace(/^- /, '').trim().replace(/^["']|["']$/g, ''))
+}
+
+// The lines of one `## <heading>` section, up to the next `## ` heading.
+function sectionLines(body, heading) {
+  const start = body.findIndex((l) => l.trim() === heading || l.startsWith(`${heading} `))
+  if (start < 0) return null
+  const out = []
+  for (let i = start + 1; i < body.length; i++) {
+    if (body[i].startsWith('## ')) break
+    out.push(body[i])
+  }
+  return out
+}
+
+// Rows of the dispositions table, keyed `<source>|<id>`. Columns: id, source, ruling, how.
+function dispositionRows(body) {
+  const lines = sectionLines(body, '## Plan-check dispositions')
+  if (lines === null) return null
+  const rows = new Map()
+  for (const line of lines) {
+    if (!line.trim().startsWith('|')) continue
+    const cells = line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+    if (cells.length < 4) continue
+    if (/^-+$/.test(cells[0].replace(/:/g, '')) || cells[0].toLowerCase() === 'id') continue
+    rows.set(`${cells[1]}|${cells[0]}`, { ruling: cells[2].toLowerCase(), how: cells[3] })
+  }
+  return rows
+}
+
+function readFrontmatterAndBody(file) {
+  try {
+    const parts = splitFrontmatter(fs.readFileSync(file, 'utf8'), file)
+    return parts.error ? null : parts
+  } catch {
+    return null
+  }
+}
+
+function checkDispositions(planFile, body, problems, warnings) {
+  const dishDir = path.dirname(planFile)
+  const reportsDir = path.join(dishDir, 'reports')
+  const checks = fs.existsSync(reportsDir)
+    ? fs.readdirSync(reportsDir).filter((f) => /^plan-check-\d+\.md$/.test(f)).sort()
+    : []
+  const required = [] // { source, id, hard }
+  for (const name of checks) {
+    const parts = readFrontmatterAndBody(path.join(reportsDir, name))
+    if (!parts || fmValue(parts.fm, 'doc') !== 'plan_check') continue
+    const ids = idList(parts.fm, 'findings')
+    if (ids === null) continue // written before plan checks listed their finding ids
+    for (const id of ids) required.push({ source: name.replace(/\.md$/, ''), id, hard: true })
+  }
+  const rows = dispositionRows(body)
+  if (required.length === 0 && rows === null) return
+
+  // Each bullet under a brief's `## Risks` is ruled on as `R<k>` with the brief's file stem as source.
+  const briefsDir = path.join(dishDir, 'briefs')
+  if (fs.existsSync(briefsDir)) {
+    for (const name of fs.readdirSync(briefsDir).filter((f) => f.endsWith('.md')).sort()) {
+      const parts = readFrontmatterAndBody(path.join(briefsDir, name))
+      if (!parts || fmValue(parts.fm, 'doc') !== 'brief') continue
+      const risks = (sectionLines(parts.body, '## Risks') || []).filter((l) => /^\s*- /.test(l))
+      risks.forEach((_, k) => required.push({ source: name.replace(/\.md$/, ''), id: `R${k + 1}`, hard: false }))
+    }
+  }
+
+  if (rows === null) {
+    problems.push('plan has plan-check findings but no "## Plan-check dispositions" section')
+    return
+  }
+  for (const { source, id, hard } of required) {
+    const row = rows.get(`${source}|${id}`)
+    const report = hard ? problems : warnings
+    if (!row) {
+      report.push(`${source} ${id} has no row in "## Plan-check dispositions"`)
+      continue
+    }
+    if (!DISPOSITION_RULINGS.includes(row.ruling)) {
+      report.push(`${source} ${id} ruling "${row.ruling}" is not one of ${DISPOSITION_RULINGS.join('|')}`)
+    } else if (row.ruling !== 'fixed' && row.how === '') {
+      report.push(`${source} ${id} is ${row.ruling} but names no test or reason`)
+    }
+  }
+}
+
 function validateFile(file) {
   const problems = []
   const warnings = []
@@ -531,10 +640,23 @@ function validateFile(file) {
           }
         }
       }
+      if (kind !== 'research') checkDispositions(file, body, problems, warnings)
       if (keys.has('writing')) {
         const checks = loadPacketChecks(file, writingPreset(fm))
         if (checks) checkPackets(body, fm.length + 3, checks, warnings)
         else warnings.push(WRITING_SKIPPED)
+      }
+      break
+    }
+    case 'plan_check': {
+      const ids = idList(fm, 'findings')
+      if (ids !== null) {
+        for (const id of ids) {
+          if (!FINDING_ID.test(id)) problems.push(`plan_check finding id "${id}" must be a short token like M1 or B2`)
+        }
+        for (const b of idList(fm, 'blocking') || []) {
+          if (FINDING_ID.test(b) && !ids.includes(b)) problems.push(`plan_check blocking id ${b} is not listed in findings`)
+        }
       }
       break
     }

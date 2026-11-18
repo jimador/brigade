@@ -49,6 +49,15 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.49.0
+
+- touches: none
+- what: a plan check lists its finding ids in `findings:`, and PLAN.md carries a
+  `## Plan-check dispositions` table ruling on each one (`fixed`, `pinned` by a named test, or
+  `accepted` with a reason) plus each scout brief `## Risks` bullet. `brigade-validate` fails
+  the plan while a plan-check id has no row, and warns for a missing Risks row. Plan checks
+  written before the key carry no ids, so open dishes keep validating.
+
 ### 0.48.0
 
 - touches: none

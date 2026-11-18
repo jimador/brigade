@@ -138,7 +138,8 @@ lives. Order is mandatory:
 
 No PASS/FAIL in this mode — the deliverable is the comparison, written as a
 `plan_check`-type artifact (frontmatter: `doc: plan_check`, `blind_sketch_first`,
-`blocking`; body: `## Blind sketch`, `## Comparison`, `## Recommendations`; ≤ 150 lines).
+`findings` (an id per finding, like `B1`, `M1`, `L1`, used as the heading of each
+recommendation), `blocking` (the subset that must settle first); body: `## Blind sketch`, `## Comparison`, `## Recommendations`; ≤ 150 lines).
 The Planner owns the plan and decides what to fold in.
 
 ## Mode 3 — Standalone diff review (advisory, no packet)
