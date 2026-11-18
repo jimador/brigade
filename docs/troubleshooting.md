@@ -58,7 +58,8 @@ Other causes:
 - **steward-create failed** — usually a worktree or branch left over from an earlier run.
   `git worktree list`, then remove the stale one.
 - **escalation ladder exhausted** — every rung ran and none passed inspection. The Planner
-  fixes this one itself, announced, with a minimal diff, re-inspected before landing.
+  fixes this one itself, announced, with a minimal diff, re-inspected by a fresh inspector
+  before landing.
 - **circuit breaker already tripped** — the item never got a cook. Handled by the
   stopped-early path below, not individually.
 

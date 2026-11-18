@@ -78,6 +78,9 @@ brigade-validate --json         # structured results
 brigade-bundle                  # regenerate workflows/ from workflows/src/
 brigade-bundle --check          # fail if generated output is stale
 
+brigade-scope <PLAN.md> <item>   # is the item's diff inside its files and clear of contract-owned paths
+brigade-plan-view <PLAN.md>     # render PLAN.md as one HTML page beside it (never committed)
+
 brigade-coord list              # active Claude/Codex dish owners
 brigade-coord status <dish>     # inspect one dish lease
 ```
@@ -139,7 +142,7 @@ Brigade never guesses a value to keep moving. A blocked item comes back as a
 Answer it and re-run execute.
 
 Ladder exhausted with no PASS is the one case the Planner fixes itself — announced, with a
-minimal diff, re-inspected before landing.
+minimal diff, re-inspected by a fresh inspector before landing.
 
 ## The Planner's ledger
 

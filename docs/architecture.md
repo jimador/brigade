@@ -109,6 +109,7 @@ Everything lives under `.brigade/`, which is never committed (init adds it to
   LEARNINGS.md               # append-only retro notes
   dishes/<slug>/
     PLAN.md                  # the DAG + every work packet
+    plan-view.html           # optional page rendered from PLAN.md (brigade-plan-view); never committed
     DESIGN.md                # design swag, when there was one
     CONTEXT.md               # gathered context sources
     briefs/                  # scout briefs
@@ -160,6 +161,12 @@ scoped agent type outright — `brigade:brigade-cook`, `brigade:brigade-cook-hea
 to an unanchored regex, where a shorter name would swallow the longer one by accident
 rather than by intent. The scouts, the analyst, and the design agent are deliberately
 outside it: they write nothing the validator has a schema for.
+
+A PostToolUse hook (`hooks/turn-budget.mjs`) counts a running brigade subagent's tool calls and
+warns it twice as it nears `maxTurns`, so it wraps up and reports instead of dying silent. The
+`budgets` config key tunes it. Contract-first planning rides the same rails: plan items carry
+a `level`, and an item marked `contract: true` owns its paths, which `brigade-scope` enforces
+against every later item's diff.
 
 The SessionStart hook matches `fork` alongside `startup|resume|clear|compact`, so a forked
 session gets the same mechanical snapshot the parent had rather than planning against

@@ -20,9 +20,11 @@ CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
                     (scripts/brigade-eval)
 scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
                     brigade-coord, brigade-subagent-line, brigade-risk, brigade-evidence,
-                    brigade-onboard, brigade-eval, brigade-pr
+                    brigade-onboard, brigade-eval, brigade-pr, brigade-scope,
+                    brigade-plan-view
+scripts/lib/        plan.mjs, the shared PLAN.md parser (brigade-scope, brigade-plan-view)
 hooks/              SessionStart state injection, PreToolUse git guard,
-                    SubagentStop artifact-validate gate
+                    SubagentStop artifact-validate gate, PostToolUse turn-budget warning
 workflows/src/      hand-edited Workflow script sources
 workflows/config.js policy consts + config merging, spliced into all three scripts
 workflows/*.js      GENERATED — never hand-edit
@@ -64,6 +66,10 @@ node --check scripts/brigade-risk
 node --check scripts/brigade-eval
 node --check scripts/brigade-evidence
 node --check scripts/brigade-pr
+node --check scripts/brigade-scope
+node --check scripts/brigade-plan-view
+node --check scripts/lib/plan.mjs
+node --check hooks/turn-budget.mjs
 node --check scripts/board-demo
 node --check workflows/config.js
 for f in hooks/board/lib/*.mjs; do node --check "$f" || exit 1; done

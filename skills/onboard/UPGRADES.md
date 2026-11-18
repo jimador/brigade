@@ -49,6 +49,19 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.50.0
+
+- touches: none
+- what: planning goes one level at a time and slices contract-first. PLAN.md frontmatter may
+  carry `level`; items may carry `contract`; attempts may carry `cause`, `reason` and the
+  `answer-retry` trigger; PLAN.md may carry a `## Parked` section. New plan fields are
+  optional and validation of existing plans is unchanged (new contract-first rules apply only
+  to plans that use the new fields). New helpers: `brigade-scope` checks an item's diff
+  against its files and contract-owned paths, `brigade-plan-view` renders PLAN.md as one HTML
+  page, and `brigade-risk` flags `design_review` paths. A PostToolUse hook warns running
+  subagents before `maxTurns` (`budgets` config key). Every verdict now needs a fresh
+  sonnet-or-stronger reviewer, and contract tests are read-only for cooks.
+
 ### 0.49.0
 
 - touches: none

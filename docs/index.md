@@ -10,8 +10,8 @@ A Claude Code plugin that turns one session into the planner of a parallel dev f
 
 - **[quickstart.md](quickstart.md)** — nothing to a merged PR in ten minutes, no service
   or token required
-- **[usage.md](usage.md)** — every phrase, slash command, and shell command, and what each
-  actually does
+- **[usage.md](usage.md)** — every phrase, slash command, and shell command (including the
+  plan view and the scope check), and what each actually does
 
 ## Configure it
 

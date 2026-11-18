@@ -2,7 +2,7 @@
 name: brigade
 description: "Runs one Claude Code session as the Planner of a parallel coding fleet against a ticket board (Notion, ClickUp, Obsidian, or local markdown): scouts research, the planner decomposes one ticket into small disjoint work packets, cooks implement them in git worktrees, an inspector gates every diff, items land in dependency order, and one PR is handed off. Use it to work an assigned ticket or board, run a dish end to end, resume a dish, or swag a ticket's design. Triggers on brigade, brigade heavy, brigade light, work my board, work my tickets, continue the dish, parallelize this ticket, run the fleet, swag this ticket, flesh out the design. Not for grooming a whole board (groom) or first-time setup (onboard)."
 argument-hint: "[ticket-id|dish-slug] [heavy|light]"
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-status:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-evidence:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-status:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-coord:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-evidence:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-risk:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-pr:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-scope:*) Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-plan-view:*)
 ---
 
 # Brigade
@@ -133,6 +133,8 @@ Asking and stopping:
 - `brigade-evidence` — classifies a gate command's scope and covers a full-scope claim.
 - `brigade-risk` — evaluates changed files against the heavy-flag risk table.
 - `brigade-pr`: picks the red-team tools and writes their brief; renders and checks the PR body.
+- `brigade-scope` — checks an item's diff against its packet's files and contract-owned paths.
+- `brigade-plan-view` — renders PLAN.md as one HTML page beside it; a view, never committed.
 - `brigade-onboard` — checks and applies one-time repo setup (`.git/info/exclude`, board config).
 
 They cost zero model tokens; prefer them over re-reading artifacts. The SessionStart hook

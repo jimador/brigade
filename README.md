@@ -259,10 +259,12 @@ board's own code and draws every frame with it; the whole run plays in under 30 
 | `scripts/brigade-validate` | zero-token schema conformance checker for dish artifacts |
 | `scripts/brigade-evidence` | zero-token verification-scope classifier — stops a targeted pass being read as repo green |
 | `scripts/brigade-pr` | zero-token handoff helper: picks the red-team tools and writes their brief, renders the PR body from the configured template, and checks it |
+| `scripts/brigade-scope` | zero-token scope check: an item's diff against its packet's file list and the paths owned by `contract: true` items |
+| `scripts/brigade-plan-view` | zero-token renderer: one HTML page of a dish's `PLAN.md` (graph, items, parked questions); a view beside the plan, never committed |
 | `scripts/brigade-bundle` | regenerates `workflows/brigade-*.js`; `--check` catches drift |
 | `scripts/board-demo` | regenerates the board demo in this README from the board's own drawing code; `--check` catches drift |
 | `workflows/` | the three Workflow scripts — `brigade-research.js`, `brigade-execute.js`, `brigade-review.js` — and the policy consts spliced into them |
-| `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, and a SubagentStop artifact-validate gate |
+| `hooks/` | SessionStart state injection, a PreToolUse git-hygiene guard, a SubagentStop artifact-validate gate, and a PostToolUse turn-budget warning for running subagents |
 | `hooks/board/` | the live board pane (`/brigade-board`): the task board with agents as pixel sprites coloured by model, a context meter, Messages and Learnings panels, and a detail box on click in the terminal, from a button on desktop |
 | `evals/` | `claude plugin eval` suite: eleven expected-workflow cases with scaffolded fixtures; results stay local |
 | `docs/intent.md`, `docs/experiments.md` | what the plugin optimizes for, and the log of hypotheses tested — result and decision per experiment |
