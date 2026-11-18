@@ -106,6 +106,11 @@ function parseFlow(s, errors, n) {
       if (i >= s.length) { err('unclosed [ list'); return out }
       if (s[i] === ']') { i++; return out }
       if (s[i] === ',') { i++; continue }
+      // A stray `}` used to stall this loop forever: the plain scalar stops at `}` without taking
+      // it, and nothing else here moved past it. A brace-expansion path such as
+      // `files: [src/{a,b}.txt]` leaves exactly that behind once `,` splits it. Report it and step
+      // over it; every other character is consumed by value(), so the loop always advances.
+      if (s[i] === '}') { err('unexpected } in a [ list (quote an entry that contains { or })'); i++; continue }
       const v = value()
       if (v !== '') out.push(v)
     }

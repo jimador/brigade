@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parsePlan } from '../../scripts/lib/plan.mjs'
@@ -348,4 +349,33 @@ test('the module has no imports', () => {
   const source = fs.readFileSync(path.join(ROOT, 'scripts', 'lib', 'plan.mjs'), 'utf8')
   assert.doesNotMatch(source, /^\s*import\s/m)
   assert.doesNotMatch(source, /\brequire\(|\bimport\(/)
+})
+
+// Runs parsePlan in a child process with a time limit, so a parser that loops forever fails the
+// test instead of hanging the whole suite. Returns the parsed plan, or null if it timed out.
+function parseWithTimeout(text) {
+  const lib = path.join(ROOT, 'scripts', 'lib', 'plan.mjs')
+  const code = `import(${JSON.stringify(new URL(`file://${lib}`).href)}).then((m) => {
+    const p = m.parsePlan(require('fs').readFileSync(0, 'utf8'))
+    process.stdout.write(JSON.stringify({ items: p.items.map((i) => [i.slug, i.files]), errors: p.errors }))
+  })`
+  const run = spawnSync(process.execPath, ['-e', code], { input: text, timeout: 5000, encoding: 'utf8' })
+  if (run.error || run.signal) return null
+  return JSON.parse(run.stdout)
+}
+
+test('a brace inside a flow list entry is reported instead of stalling the parser', () => {
+  const plan = parseWithTimeout(`${HEAD}items:\n  - { slug: demo, files: [src/{a,b}.txt] }\n---\n`)
+  assert.notEqual(plan, null, 'parsePlan did not return within 5 s')
+  assert.deepEqual(plan.errors, ['frontmatter line 4: unexpected } in a [ list (quote an entry that contains { or })'])
+  assert.deepEqual(plan.items, [['demo', ['src/{a', 'b', '.txt']]])
+})
+
+test('the brace construct repeated three times still returns, one error each', () => {
+  const entry = (slug) => `  - { slug: ${slug}, files: [acme/{x,y}.md] }\n`
+  const plan = parseWithTimeout(`${HEAD}items:\n${entry('alex')}${entry('acme')}${entry('demo')}notes: [a}, b}, c}]\n---\n`)
+  assert.notEqual(plan, null, 'parsePlan did not return within 5 s')
+  assert.deepEqual(plan.items.map((i) => i[0]), ['alex', 'acme', 'demo'])
+  assert.equal(plan.errors.length, 6)
+  assert.ok(plan.errors.every((e) => /unexpected \} in a \[ list/.test(e)), plan.errors.join('\n'))
 })
