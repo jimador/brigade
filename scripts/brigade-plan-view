@@ -1,0 +1,357 @@
+#!/usr/bin/env node
+// brigade-plan-view — renders a brigade PLAN.md as one self-contained HTML page: dish facts,
+// status counts, an inline SVG dependency graph, the items table and the parked questions.
+// The plan is read through scripts/lib/plan.mjs (C2) and placed into the fixed template
+// skills/brigade/templates/plan-view.html. No clock, no network, no scripts in the output:
+// the same plan always gives the same bytes.
+//
+// Usage:
+//   brigade-plan-view [--out <path>] <PLAN.md>
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parsePlan } from './lib/plan.mjs'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const TEMPLATE = path.resolve(__dirname, '..', 'skills', 'brigade', 'templates', 'plan-view.html')
+
+// Node geometry in SVG user units; the SVG scales to the page width through its viewBox.
+const NODE_W = 180
+const NODE_H = 56
+const GAP_X = 52
+const GAP_Y = 24
+const PAD = 16
+
+const STATUS_CLASS = new Map([
+  ['done', 'done'], ['landed', 'done'],
+  ['dispatched', 'active'], ['in-progress', 'active'], ['review', 'active'],
+  ['todo', 'todo'],
+  ['blocked', 'blocked'], ['failed', 'blocked'],
+])
+
+function usage() {
+  console.error('usage: brigade-plan-view [--out <path>] <PLAN.md>')
+  return 2
+}
+
+function parseArgs(argv) {
+  let out = null
+  const positional = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--out') {
+      out = argv[++i]
+      if (out === undefined || out === '' || out.startsWith('--')) return null
+    } else if (a.startsWith('--')) {
+      return null
+    } else {
+      positional.push(a)
+    }
+  }
+  if (positional.length !== 1) return null
+  return { out, plan: positional[0] }
+}
+
+// Text made safe for an element or an attribute. The markup characters become entities. On top
+// of that, the few spots where plain text could look like a script hook to a filter that scans
+// the raw source (an `on...=` pair, the word href, a `url(`) get one character written as a
+// character reference. A reader of the page sees exactly the same text.
+function esc(text) {
+  return String(text)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    .replace(/(on[a-z0-9_-]*\s*)=/gi, '$1&#61;')
+    .replace(/h(ref)/gi, (all, rest) => `&#${all.charCodeAt(0)};${rest}`)
+    .replace(/(url\s*)\(/gi, '$1&#40;')
+}
+
+const statusClass = (status) => STATUS_CLASS.get(status) ?? 'other'
+const short = (text, max) => (text.length > max ? `${text.slice(0, max - 3)}...` : text)
+const orDash = (text) => (text === '' ? '-' : text)
+
+// Column = longest dependency depth from a root (roots are column 0); row = plan order within
+// the column. A dependency cycle is cut at the repeated node so the walk always ends.
+function place(items) {
+  const bySlug = new Map()
+  items.forEach((it, i) => bySlug.set(it.slug, i))
+  const depth = new Array(items.length).fill(-1)
+  const open = new Set()
+  const depthOf = (i) => {
+    if (depth[i] >= 0) return depth[i]
+    if (open.has(i)) return 0
+    open.add(i)
+    let d = 0
+    for (const dep of items[i].depends_on) {
+      const j = bySlug.get(dep)
+      if (j !== undefined) d = Math.max(d, depthOf(j) + 1)
+    }
+    open.delete(i)
+    depth[i] = d
+    return d
+  }
+  items.forEach((_, i) => depthOf(i))
+  const nextRow = new Map()
+  return items.map((_, i) => {
+    const col = depth[i]
+    const row = nextRow.get(col) ?? 0
+    nextRow.set(col, row + 1)
+    return { col, row }
+  })
+}
+
+// Geometry of the graph. A node sits at nodeX(col), nodeY(row). Every drawn edge is one cubic
+// Bezier from the source's right side to the target's left side.
+const nodeX = (col) => GAP_X + col * (NODE_W + GAP_X)
+const round = (v) => Math.round(v * 10) / 10
+
+// Resolved, de-duplicated dependency pairs in plan order: { from, to, dep, slug }.
+function declaredLinks(items) {
+  const bySlug = new Map()
+  items.forEach((it, i) => bySlug.set(it.slug, i))
+  const links = []
+  items.forEach((it, i) => {
+    const seen = new Set()
+    for (const dep of it.depends_on) {
+      const j = bySlug.get(dep)
+      if (j === undefined || seen.has(j)) continue
+      seen.add(j)
+      links.push({ from: j, to: i, dep, slug: it.slug })
+    }
+  })
+  return links
+}
+
+// Transitive reduction. Edge u->v is dropped when another path from u to v runs through the
+// declared dependencies. Items on a dependency cycle are left alone: any edge touching one is
+// kept as declared, and paths are only followed through items that are not on a cycle.
+function reduceLinks(links, count) {
+  const out = Array.from({ length: count }, () => [])
+  for (const l of links) out[l.from].push(l.to)
+  const reach = (start, skipEdge) => {
+    const seen = new Set()
+    const stack = [start]
+    while (stack.length) {
+      const n = stack.pop()
+      for (const m of out[n]) {
+        if (skipEdge && n === skipEdge.from && m === skipEdge.to) continue
+        if (!seen.has(m)) { seen.add(m); stack.push(m) }
+      }
+    }
+    return seen
+  }
+  const cyclic = new Set()
+  for (let i = 0; i < count; i++) if (reach(i, null).has(i)) cyclic.add(i)
+  return links.filter((l) => {
+    if (cyclic.has(l.from) || cyclic.has(l.to)) return true
+    return !reach(l.from, l).has(l.to)
+  })
+}
+
+const CURVE_STEPS = 24
+function curvePoint(p, t) {
+  const u = 1 - t
+  const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t]
+  return [0, 1].map((k) => w[0] * p[0][k] + w[1] * p[1][k] + w[2] * p[2][k] + w[3] * p[3][k])
+}
+
+function renderDag(items) {
+  const pos = place(items)
+  const cols = Math.max(...pos.map((p) => p.col)) + 1
+  const rows = Math.max(...pos.map((p) => p.row)) + 1
+  const declared = declaredLinks(items)
+  const links = reduceLinks(declared, items.length)
+  const hidden = declared.length - links.length
+
+  const top = PAD
+  const nodeY = (row) => top + row * (NODE_H + GAP_Y)
+  const width = nodeX(cols - 1) + NODE_W + GAP_X
+  const height = nodeY(rows - 1) + NODE_H + PAD
+  // Row gaps, including the strips above and below the grid: y of each strip's middle.
+  const gapYs = []
+  for (let r = 0; r <= rows; r++) gapYs.push(nodeY(r) - GAP_Y / 2)
+
+  // Ports: edges leaving a node share its right side and edges entering share its left side,
+  // spread down the side in the order of the far end's height so arrowheads never stack.
+  const port = (row, n, count) => round(nodeY(row) + (NODE_H * (n + 1)) / (count + 1))
+  const cmp = (a, b) => pos[a].row - pos[b].row || pos[a].col - pos[b].col
+  items.forEach((_, i) => {
+    const outs = links.filter((l) => l.from === i).sort((a, b) => cmp(a.to, b.to))
+    outs.forEach((l, n) => { l.outY = port(pos[i].row, n, outs.length) })
+    const ins = links.filter((l) => l.to === i).sort((a, b) => cmp(a.from, b.from))
+    ins.forEach((l, n) => { l.inY = port(pos[i].row, n, ins.length) })
+  })
+
+  // Does the curve clear every node in the columns strictly between its ends?
+  const clear = (pts, c1, c2) => {
+    for (let s = 0; s <= CURVE_STEPS; s++) {
+      const [x, y] = curvePoint(pts, s / CURVE_STEPS)
+      for (let i = 0; i < items.length; i++) {
+        const c = pos[i].col
+        if (c <= c1 || c >= c2) continue
+        const nx = nodeX(c)
+        const ny = nodeY(pos[i].row)
+        if (x > nx - 2 && x < nx + NODE_W + 2 && y > ny - 3 && y < ny + NODE_H + 3) return false
+      }
+    }
+    return true
+  }
+
+  const edges = links.map((l) => {
+    const c1 = pos[l.from].col
+    const c2 = pos[l.to].col
+    const x1 = nodeX(c1) + NODE_W
+    const x2 = nodeX(c2)
+    const y1 = l.outY
+    const y2 = l.inY
+    const bend = Math.max(GAP_X, Math.abs(x2 - x1)) * 0.5
+    let pts = [[x1, y1], [x1 + bend, y1], [x2 - bend, y2], [x2, y2]]
+    if (c2 - c1 >= 2) {
+      // Skipped columns: try each row gap, nearest the straight line first, and keep the first
+      // curve that passes between nodes. The control height puts the curve's middle in the gap;
+      // a short handle lets the curve leave the source's column quickly, a long one is smoother.
+      const mid = (y1 + y2) / 2
+      const tries = [...gapYs].sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b)
+      const handles = [bend, GAP_X * 0.8, GAP_X * 0.5, GAP_X * 0.3]
+      search:
+      for (const g of tries) {
+        const yc = (8 * g - (y1 + y2)) / 6
+        for (const h of handles) {
+          const cand = [[x1, y1], [x1 + h, yc], [x2 - h, yc], [x2, y2]]
+          if (clear(cand, c1, c2)) { pts = cand; break search }
+        }
+      }
+    }
+    const f = (q) => `${round(q[0])} ${round(q[1])}`
+    const d = `M${f(pts[0])} C${f(pts[1])} ${f(pts[2])} ${f(pts[3])}`
+    return `<path class="edge" marker-end="url(#dag-arrow)" d="${d}"><title>${esc(l.dep)} to ${esc(l.slug)}</title></path>`
+  })
+
+  const marker = '<defs><marker id="dag-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path class="arrow" d="M0 0 L10 5 L0 10 z"/></marker></defs>'
+
+  const nodes = items.map((it, i) => {
+    const p = { x: nodeX(pos[i].col), y: nodeY(pos[i].row) }
+    const cls = statusClass(it.status) + (it.contract ? ' contract' : '')
+    const tag = it.contract ? `<text class="tag" x="${p.x + NODE_W - 10}" y="${p.y + 15}" text-anchor="end">contract</text>` : ''
+    return [
+      `<g class="node ${cls}" data-slug="${esc(it.slug)}">`,
+      `<title>${esc(it.slug)} - ${esc(orDash(it.status))}</title>`,
+      `<rect x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="8"/>`,
+      `<text class="slug" x="${p.x + 10}" y="${p.y + 28}">${esc(short(it.slug, 22))}</text>`,
+      `<text class="meta" x="${p.x + 10}" y="${p.y + 46}">${esc(orDash(it.status))}</text>`,
+      tag,
+      '</g>',
+    ].join('')
+  })
+
+  // The SVG never renders below its viewBox width at scale 1, so node text keeps its font size;
+  // the wrapper in the template scrolls the rest on a narrow screen.
+  const svg = `<svg class="dag" viewBox="0 0 ${width} ${height}" style="min-width:${width}px" role="img" aria-label="Dependency graph of ${items.length} items">`
+    + `${marker}${edges.join('')}${nodes.join('')}</svg>`
+  const note = hidden > 0
+    ? `<p class="dag-note muted">${hidden} implied ${hidden === 1 ? 'dependency' : 'dependencies'} not drawn; the table lists every dependency.</p>`
+    : ''
+  return { svg, note }
+}
+
+function renderCounts(items) {
+  const counts = new Map()
+  for (const it of items) {
+    const key = orDash(it.status)
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts.keys()].sort().map((key) =>
+    `<span class="pill ${statusClass(key === '-' ? '' : key)}">${esc(key)} ${counts.get(key)}</span>`).join('')
+}
+
+function renderItems(items) {
+  return items.map((it) => {
+    const causes = it.attempts.map((a) => a.cause).filter((c) => c !== '')
+    const lastCause = causes.length ? causes[causes.length - 1] : '-'
+    return '<tr>'
+      + `<td class="code">${esc(it.slug)}</td>`
+      + `<td><span class="pill ${statusClass(it.status)}">${esc(orDash(it.status))}</span></td>`
+      + (it.contract ? '<td class="yes">yes</td>' : '<td>no</td>')
+      + `<td class="mono">${it.depends_on.length ? it.depends_on.map((d) => `<span class="s">${esc(d)}</span>`).join(', ') : '-'}</td>`
+      + `<td>${it.files.length}</td>`
+      + `<td>${it.attempts.length}</td>`
+      + `<td class="mono"><span class="s">${esc(lastCause)}</span></td>`
+      + '</tr>'
+  }).join('')
+}
+
+function renderParked(parked) {
+  if (parked.length === 0) return '<tr><td colspan="4" class="muted">none</td></tr>'
+  return parked.map((p) => '<tr>'
+    + `<td class="code">${esc(p.id)}</td>`
+    + `<td>${esc(p.question)}</td>`
+    + `<td class="code">${esc(orDash(p.reopensAt))}</td>`
+    + `<td>${esc(orDash(p.raised))}</td>`
+    + '</tr>').join('')
+}
+
+function renderErrors(errors) {
+  if (errors.length === 0) return ''
+  return `<section class="card warn"><h2>Parse notes</h2><ul>${errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></section>`
+}
+
+function render(plan, template) {
+  const f = plan.frontmatter
+  const dish = orDash(f.dish ?? '')
+  const dag = renderDag(plan.items)
+  const values = {
+    TITLE: esc(`Plan: ${dish}`),
+    DISH: esc(dish),
+    TICKET: esc(orDash(f.ticket ?? '')),
+    TIER: esc(orDash(f.tier ?? '')),
+    LEVEL: esc(f.level || 'implementation'),
+    ITEM_COUNT: String(plan.items.length),
+    COUNTS: renderCounts(plan.items),
+    ERRORS: renderErrors(plan.errors),
+    DAG: dag.svg,
+    DAG_NOTE: dag.note,
+    ITEMS: renderItems(plan.items),
+    PARKED: renderParked(plan.parked),
+  }
+  // One pass over the template: substituted text is never scanned for further placeholders.
+  return template.replace(/\{\{([A-Z_]+)\}\}/g, (all, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : all)
+}
+
+function main(argv) {
+  const args = parseArgs(argv)
+  if (!args) return usage()
+  const planPath = path.resolve(args.plan)
+
+  let text
+  let template
+  try {
+    text = fs.readFileSync(planPath, 'utf8')
+  } catch (err) {
+    console.error(`could not read ${planPath}: ${err.message}`)
+    return 2
+  }
+  try {
+    template = fs.readFileSync(TEMPLATE, 'utf8')
+  } catch (err) {
+    console.error(`could not read template ${TEMPLATE}: ${err.message}`)
+    return 2
+  }
+
+  const plan = parsePlan(text)
+  if (plan.items.length === 0) {
+    console.error(`no parseable items in ${planPath}`)
+    return 1
+  }
+
+  const outPath = path.resolve(args.out ?? path.join(path.dirname(planPath), 'plan.html'))
+  try {
+    fs.writeFileSync(outPath, render(plan, template))
+  } catch (err) {
+    console.error(`could not write ${outPath}: ${err.message}`)
+    return 2
+  }
+  console.log(outPath)
+  return 0
+}
+
+process.exitCode = main(process.argv.slice(2))

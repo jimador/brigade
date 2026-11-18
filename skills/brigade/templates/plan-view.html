@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --fg: #1d2330; --muted: #5b6372; --line: #d5d9e0;
+  --done: #2e7d32; --active: #1565c0; --todo: #5f6673; --blocked: #b3261e; --other: #6a4fb3;
+  --contract: #b26a00; --edge: #8a93a3; --on-status: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c; --card: #1d222a; --fg: #e6e9ef; --muted: #9aa3b2; --line: #343b47;
+    --done: #3f9d44; --active: #3b82d6; --todo: #6b7383; --blocked: #d64c43; --other: #8b6fd6;
+    --contract: #e8a33d; --edge: #6f7889; --on-status: #ffffff;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.4rem; margin: 0 0 12px; overflow-wrap: anywhere; }
+h2 { font-size: 1.05rem; margin: 28px 0 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 0; }
+.facts div { min-width: 0; }
+.facts dt { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+.facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.pill { display: inline-block; padding: 1px 8px; margin: 2px 4px 2px 0; border-radius: 999px; font-size: .8rem; color: var(--on-status); background: var(--other); white-space: nowrap; }
+.pill.done { background: var(--done); }
+.pill.active { background: var(--active); }
+.pill.todo { background: var(--todo); }
+.pill.blocked { background: var(--blocked); }
+.pill.other { background: var(--other); }
+.pill.contract { background: none; color: var(--contract); border: 1px solid var(--contract); }
+.dag { display: block; width: 100%; height: auto; }
+.dag-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.dag .arrow { fill: var(--edge); }
+.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
+.dag .node rect { stroke: none; fill: var(--other); }
+.dag .node.done rect { fill: var(--done); }
+.dag .node.active rect { fill: var(--active); }
+.dag .node.todo rect { fill: var(--todo); }
+.dag .node.blocked rect { fill: var(--blocked); }
+.dag .node.contract rect { stroke: var(--contract); stroke-width: 3; stroke-dasharray: 6 3; }
+.dag text { fill: var(--on-status); font-family: inherit; }
+.dag .slug { font-size: 14px; font-weight: 600; }
+.dag .meta { font-size: 12px; opacity: .92; }
+.dag .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+@media (max-width: 700px) { .items { min-width: 640px; } }
+.items td.mono .s { white-space: nowrap; }
+.dag-note { margin: 6px 0 0; font-size: .85rem; }
+.items td.code { white-space: nowrap; }
+.parked { min-width: 480px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+td.code, td.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em; overflow-wrap: anywhere; }
+td.yes { color: var(--contract); font-weight: 700; }
+.muted { color: var(--muted); }
+.warn { border-color: var(--blocked); }
+.warn ul { margin: 6px 0 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{TITLE}}</h1>
+  <dl class="card facts">
+    <div><dt>Dish</dt><dd>{{DISH}}</dd></div>
+    <div><dt>Ticket</dt><dd>{{TICKET}}</dd></div>
+    <div><dt>Tier</dt><dd>{{TIER}}</dd></div>
+    <div><dt>Level</dt><dd>{{LEVEL}}</dd></div>
+    <div><dt>Items</dt><dd>{{ITEM_COUNT}}</dd></div>
+  </dl>
+  <p>{{COUNTS}}</p>
+  {{ERRORS}}
+
+  <h2>Dependencies</h2>
+  <div class="card dag-scroll">{{DAG}}</div>
+  {{DAG_NOTE}}
+
+  <h2>Items</h2>
+  <div class="scroll">
+    <table class="items">
+      <thead><tr><th>Slug</th><th>Status</th><th>Contract</th><th>Depends on</th><th>Files</th><th>Attempts</th><th>Last cause</th></tr></thead>
+      <tbody>{{ITEMS}}</tbody>
+    </table>
+  </div>
+
+  <h2>Parked</h2>
+  <div class="scroll">
+    <table class="parked">
+      <thead><tr><th>Id</th><th>Question</th><th>Reopens at</th><th>Raised</th></tr></thead>
+      <tbody>{{PARKED}}</tbody>
+    </table>
+  </div>
+</main>
+</body>
+</html>
