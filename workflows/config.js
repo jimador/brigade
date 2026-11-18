@@ -104,6 +104,37 @@ function withPromptOverrides(basePrompt, fragments) {
   return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${usable.join('\n\n')}\n`
 }
 
+// Turns args.promptOverrides into the per-role text the scripts hand to withPromptOverrides.
+// Callers pass one of two shapes: a plain `{ <role>: [text…] }` map, or the whole output of
+// `brigade-config prompts --json`, which keeps the text under `.text` next to an `overrides`
+// listing of where each fragment came from. Reading only the first shape used to drop every
+// override without a word, so this accepts both and sets `dropped` when something was passed
+// but no role ended up with any text — the caller logs that once instead of staying silent.
+function resolvePromptExtras(raw) {
+  const isMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  const hasText = (v) => (typeof v === 'string' ? v.trim().length > 0 : Array.isArray(v) && v.some(hasText))
+  const anyRoleHasText = (map) => Object.keys(map).some((role) => hasText(map[role]))
+  if (raw === undefined || raw === null) return { extras: {}, dropped: false }
+  if (!isMap(raw)) {
+    // A bare string, number or list is no shape we know; only an empty one is harmless.
+    const empty = raw === '' || (Array.isArray(raw) && raw.length === 0)
+    return { extras: {}, dropped: !empty }
+  }
+  if (isMap(raw.text)) {
+    // The `prompts --json` shape. A repo with no overrides at all yields empty maps, which
+    // is not worth a warning; override entries with no text behind them are.
+    const listed = Object.keys(raw.text).length > 0 || (isMap(raw.overrides) && Object.keys(raw.overrides).length > 0)
+    return { extras: raw.text, dropped: listed && !anyRoleHasText(raw.text) }
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'overrides')) {
+    // An older `brigade-config` listed where overrides live but not their text.
+    return { extras: {}, dropped: true }
+  }
+  if (Object.keys(raw).length === 0) return { extras: {}, dropped: false }
+  if (!anyRoleHasText(raw)) return { extras: {}, dropped: true }
+  return { extras: raw, dropped: false }
+}
+
 // Adds the repo's writing rules for one artifact (report, verdict or brief) to the end of
 // the prompt of the agent that writes it, so each agent sees its own rules and no one
 // else's. `writing` is args.writing, the output of `brigade-config writing --json`. It

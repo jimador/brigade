@@ -110,6 +110,37 @@ function withPromptOverrides(basePrompt, fragments) {
   return `${basePrompt}\n\nADDITIONAL INSTRUCTIONS (from this operator's brigade configuration — they add to, never remove, the rules above):\n\n${usable.join('\n\n')}\n`
 }
 
+// Turns args.promptOverrides into the per-role text the scripts hand to withPromptOverrides.
+// Callers pass one of two shapes: a plain `{ <role>: [text…] }` map, or the whole output of
+// `brigade-config prompts --json`, which keeps the text under `.text` next to an `overrides`
+// listing of where each fragment came from. Reading only the first shape used to drop every
+// override without a word, so this accepts both and sets `dropped` when something was passed
+// but no role ended up with any text — the caller logs that once instead of staying silent.
+function resolvePromptExtras(raw) {
+  const isMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  const hasText = (v) => (typeof v === 'string' ? v.trim().length > 0 : Array.isArray(v) && v.some(hasText))
+  const anyRoleHasText = (map) => Object.keys(map).some((role) => hasText(map[role]))
+  if (raw === undefined || raw === null) return { extras: {}, dropped: false }
+  if (!isMap(raw)) {
+    // A bare string, number or list is no shape we know; only an empty one is harmless.
+    const empty = raw === '' || (Array.isArray(raw) && raw.length === 0)
+    return { extras: {}, dropped: !empty }
+  }
+  if (isMap(raw.text)) {
+    // The `prompts --json` shape. A repo with no overrides at all yields empty maps, which
+    // is not worth a warning; override entries with no text behind them are.
+    const listed = Object.keys(raw.text).length > 0 || (isMap(raw.overrides) && Object.keys(raw.overrides).length > 0)
+    return { extras: raw.text, dropped: listed && !anyRoleHasText(raw.text) }
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'overrides')) {
+    // An older `brigade-config` listed where overrides live but not their text.
+    return { extras: {}, dropped: true }
+  }
+  if (Object.keys(raw).length === 0) return { extras: {}, dropped: false }
+  if (!anyRoleHasText(raw)) return { extras: {}, dropped: true }
+  return { extras: raw, dropped: false }
+}
+
 // Adds the repo's writing rules for one artifact (report, verdict or brief) to the end of
 // the prompt of the agent that writes it, so each agent sees its own rules and no one
 // else's. `writing` is args.writing, the output of `brigade-config writing --json`. It
@@ -329,8 +360,11 @@ function resolveReviewDimensions(overrides) {
 // The harness sometimes hands us args as a JSON string instead of an object — normalize once, up front.
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
-// Text an operator's config layers add to every inspector dispatch (Review + Verify).
-const PROMPT_EXTRAS = A.promptOverrides || {}
+// Text an operator's config layers add to agent prompts, by role. Accepts the plain role map
+// or the whole `brigade-config prompts --json` output, and says so when a value carried no text.
+const PROMPT_RESOLVED = resolvePromptExtras(A.promptOverrides)
+const PROMPT_EXTRAS = PROMPT_RESOLVED.extras
+if (PROMPT_RESOLVED.dropped) blog('planner', 'prompt overrides were passed but carried no text; pass the whole output of brigade-config prompts --json')
 
 // PR titles/bodies and ticket text are written by whoever the review is about, not by us
 // or the operator — wrap that text in explicit markers wherever it lands in a prompt, so
@@ -1210,7 +1244,7 @@ Return the steward result: ok, detail.`,
 
   try {
     const resolveResult = await agent(
-      withPromptOverrides(resolvePrompt(), (A.promptOverrides || {}).steward),
+      withPromptOverrides(resolvePrompt(), PROMPT_EXTRAS.steward),
       {
         label: 'steward-resolve',
         phase: 'Resolve',

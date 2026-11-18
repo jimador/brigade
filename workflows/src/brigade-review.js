@@ -8,8 +8,11 @@ export const meta = {
 // The harness sometimes hands us args as a JSON string instead of an object — normalize once, up front.
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
-// Text an operator's config layers add to every inspector dispatch (Review + Verify).
-const PROMPT_EXTRAS = A.promptOverrides || {}
+// Text an operator's config layers add to agent prompts, by role. Accepts the plain role map
+// or the whole `brigade-config prompts --json` output, and says so when a value carried no text.
+const PROMPT_RESOLVED = resolvePromptExtras(A.promptOverrides)
+const PROMPT_EXTRAS = PROMPT_RESOLVED.extras
+if (PROMPT_RESOLVED.dropped) blog('planner', 'prompt overrides were passed but carried no text; pass the whole output of brigade-config prompts --json')
 
 // PR titles/bodies and ticket text are written by whoever the review is about, not by us
 // or the operator — wrap that text in explicit markers wherever it lands in a prompt, so
@@ -889,7 +892,7 @@ Return the steward result: ok, detail.`,
 
   try {
     const resolveResult = await agent(
-      withPromptOverrides(resolvePrompt(), (A.promptOverrides || {}).steward),
+      withPromptOverrides(resolvePrompt(), PROMPT_EXTRAS.steward),
       {
         label: 'steward-resolve',
         phase: 'Resolve',

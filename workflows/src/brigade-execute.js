@@ -11,7 +11,11 @@ const A = typeof args === 'string' ? JSON.parse(args) : args
 // inspector agent types, parallelism, and the circuit-breaker thresholds are all
 // overridable without touching this script.
 const POLICY = resolvePolicy(A.tier, A.overrides)
-const PROMPT_EXTRAS = A.promptOverrides || {}
+// Text an operator's config layers add to agent prompts, by role. Accepts the plain role map
+// or the whole `brigade-config prompts --json` output, and says so when a value carried no text.
+const PROMPT_RESOLVED = resolvePromptExtras(A.promptOverrides)
+const PROMPT_EXTRAS = PROMPT_RESOLVED.extras
+if (PROMPT_RESOLVED.dropped) blog('planner', 'prompt overrides were passed but carried no text; pass the whole output of brigade-config prompts --json')
 // The repo's writing rules per artifact (`brigade-config writing --json`); may be absent.
 const WRITING = A.writing
 
