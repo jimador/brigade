@@ -21,7 +21,8 @@
 //   brigade-config layers [--json]         which layer files exist, in precedence order
 //   brigade-config prompts [--json]        override stacks, by name
 //   brigade-config prompt <name>           the resolved override text for one name
-//   brigade-config doctor [--json]         validate every layer; explain what is wrong
+//   brigade-config doctor [--json]         validate every layer; explain what is wrong;
+//                                          print advisory notes (never a failure)
 //   brigade-config writing [--json] [--preset <name>]
 //                                          the writing rules and checks for each artifact
 //
@@ -965,15 +966,29 @@ function printPrompt(name) {
   }
 }
 
+// Advice doctor gives that is never a failure. Right now that is one thing: a repo whose
+// resolved tier is three-star. Field data showed no first-attempt quality gain over
+// two-star, so the operator should pick three-star per dish on purpose, not by default.
+function doctorNotes() {
+  const { config, provenance } = resolveConfig()
+  const notes = []
+  if (config.tier === 'three-star') {
+    notes.push(`tier is three-star (set by ${provenance.tier || 'defaults'}); three-star showed no first-attempt quality gain over two-star in field data — prefer it per dish (TIERS.md)`)
+  }
+  return notes
+}
+
 function printDoctor(json) {
   const problems = validate()
+  const notes = doctorNotes()
   if (json) {
-    console.log(JSON.stringify({ ok: problems.length === 0, problems }, null, 2))
-  } else if (!problems.length) {
-    console.log('brigade-config: all layers valid')
+    console.log(JSON.stringify({ ok: problems.length === 0, problems, notes }, null, 2))
   } else {
+    if (!problems.length) console.log('brigade-config: all layers valid')
     for (const p of problems) console.error(`brigade-config: [${p.layer}] ${p.problem}${p.file ? ` (${p.file})` : ''}`)
+    for (const note of notes) console.log(`note: ${note}`)
   }
+  // Notes are advice only; the exit code depends on problems alone.
   return problems.length === 0 ? 0 : 1
 }
 

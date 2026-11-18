@@ -28,6 +28,13 @@ configured default (★★ out of the box), **brigade light** for ★.
 | analyst retro | every dish (intensive) + every 10 items (standard) | every dish | every 3rd dish or on request |
 | code review depth | 8 dimensions, verify blocking+high ×2 | 4 groups (+product with source), verify blocking ×1 | 1 merged pass, no verify |
 
+**What the tier buys.** Across 455 dishes in seven repos (July to November 2026), first-attempt
+PASS was 67% at three-star (n=1,245 items) and 66% at two-star (n=363); rework and escalation
+rates were alike. Keep two-star as the repo default and choose three-star per dish, on the
+difficult-planning triggers below or when you want the extra review depth.
+`scripts/brigade-config doctor` prints a note, never a failure, when a repo's resolved tier is
+three-star.
+
 **Overriding the planning model.** The tier's planning row is the default, not a lock. Set
 `plannerModel` in any config layer (global, team, or repo-local JSON) to the model this
 repo's Planner should run on — a model alias or full id (`fable`, `opus`, `sonnet`,
