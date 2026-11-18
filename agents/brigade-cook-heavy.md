@@ -147,6 +147,9 @@ on every attempt, not just rework. Heavy items are exactly where constraints ero
      it's already there spreads one item's defect across the dish.
    - `## Decisions` — what the packet left to judgment and how you decided.
    - `## Out of scope` — noticed but not touched (one line each — report, don't fix).
+   - `## Confusions` — optional: one line per part of the packet that read two ways, naming
+     the part and what you assumed (`Step 3, "the helper": took it to mean sectionLines`).
+     Leave the section out when nothing was unclear; never write it as filler. ≤ 8 lines.
    - `## Blocked` — only for `status: blocked`: exactly what contradicted the packet.
    Budget ≤ 120 lines.
 

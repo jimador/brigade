@@ -43,6 +43,10 @@ the duties in the Intensive mode section.
 - **Research quality** — scout briefs that were wrong or unused, questions that should
   have been asked and weren't (visible as BLOCKED reports or FAIL findings that a brief
   would have prevented).
+- **Packet clarity** — read every `## Confusions` section in the cook reports. A packet part
+  that two or more cooks named, or that one cook named on an item that then failed review, is
+  evidence for a change to the packet template or `DECOMPOSE.md`; cite the reports. No
+  Confusions anywhere is not proof the packets were clear: weigh it against rework.
 - **Gate honesty** — reports with weak/missing evidence that still advanced; verdicts
   that PASSed something a later stage caught.
 - **Attempts per landed item** — for items that reached `done`, count every attempt in PLAN.md
