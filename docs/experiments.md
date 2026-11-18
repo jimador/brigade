@@ -203,12 +203,14 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   before-fail planned to edit the failing test). The shipped hook measured ~50 ms on the first
   call per agent and ~29 ms after; `brigade-config` spawned once per agent. Also recorded: a
   turn-limit death was logged as `result: failed`, indistinguishable from an inspector FAIL. n = 3
-  a cell is directional, not significant.
+  a cell is directional, not significant. On final main (all items landed, 3 runs): 2/3; the
+  failed run left criterion 3 partially written with a failing test, and the judge found it
+  "ambiguous whether it avoids open-ended debugging of criterion 3".
 - decision: adopt
 - evidence: the numbers above, quoted from the dish's eval runs and spike
   (`.brigade/evals/baseline2/`, `.brigade/evals/after-execute/`, `.brigade/evals/cook-before-v3/`,
-  `.brigade/evals/cook-after-v3/`; local, never committed); text in `agents/brigade-cook.md`
-  § Turn-budget message.
+  `.brigade/evals/cook-after-v3/`, `.brigade/evals/final-main/`; local, never committed); text in
+  `agents/brigade-cook.md` § Turn-budget message.
 
 ### E-009 Mechanical scope check makes contract tests read-only to implementing cooks
 
@@ -247,10 +249,12 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   implementation questions before the port; after, a run parked them with reopen gates but also
   wrote adapter semantics into the contract. Counter-case 3/3 before, 3/3 after: no
   over-tabling. n = 3 is directional. Open risk: tabling, in particular adapter semantics leaking into a
-  contract that is meant to stay behind the port.
+  contract that is meant to stay behind the port. On final main (all items landed, 3 runs): 2/3;
+  the failed run deferred an interface-shaping question (window semantics, the lifecycle choice)
+  to the operator instead of settling it.
 - decision: adopt
 - evidence: the numbers above, quoted from the dish's eval runs (`.brigade/evals/baseline/`,
-  `.brigade/evals/after-planning/`; local, never committed). Basis (SECONDARY, not run here):
+  `.brigade/evals/after-planning/`, `.brigade/evals/final-main/`; local, never committed). Basis (SECONDARY, not run here):
   rolling-wave planning (PMBOK) and "Lean Software Development" (2003) for the last responsible
   moment.
 
@@ -268,10 +272,12 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   implementation wrote its own tests, no early end-to-end path). No-speculative-abstraction 3/3
   before, 2/3 after; the one after-fail is a judge error, its own detail ending "making this a pass
   on the core behavior". n = 3
-  is directional.
+  is directional. On final main (all items landed, 3 runs): contract-first 3/3;
+  no-speculative-abstraction 2/3, the failed run a judge self-contradiction (its detail says the
+  response "satisfies the criterion's core requirements").
 - decision: adopt
 - evidence: the numbers above, quoted from the dish's eval runs (`.brigade/evals/baseline/`,
-  `.brigade/evals/after-planning/`; local, never committed). Basis (SECONDARY, not run here):
+  `.brigade/evals/after-planning/`, `.brigade/evals/final-main/`; local, never committed). Basis (SECONDARY, not run here):
   "The Wrong Abstraction" (2016), "Refactoring" (1999) for the rule of three, "On the criteria to
   be used in decomposing systems into modules" (1972, Communications of the ACM), and "A
   Philosophy of Software Design" for deep modules and design-it-twice.
@@ -294,12 +300,14 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   assertion, with detail that calls the criterion "arguably satisfied". Run 3: it read
   `src/pdf/invoice.ts` and pre-filled a question proposing `formatMoney` with minor units. Whether that is a defect or
   the decision-ready-question norm (options plus a recommendation) is untested, so the drop from
-  2/3 to 0/3 stays unexplained until it is. n = 3 is directional.
+  2/3 to 0/3 stays unexplained until it is. n = 3 is directional. On final main (all items
+  landed, 3 runs): 2/3; the failed run 2 was judged "only partially" matching: the judge says it "does not actually stop
+  and ask the Planner" and "states a unit-mismatch concern without fully deferring the choice".
 - decision: keep watching; next run: an assertion that accepts a recommended option in the
   question, then check the after-text again.
 - evidence: the numbers above, quoted from the dish's eval runs (`.brigade/evals/cook-before-v3/`,
-  `.brigade/evals/cook-after-v3/`; local, never committed); text in `agents/brigade-cook.md`
-  § The loop, step 2.
+  `.brigade/evals/cook-after-v3/`, `.brigade/evals/final-main/`; local, never committed); text in
+  `agents/brigade-cook.md` § The loop, step 2.
 
 ### E-013 Design review tiered by reversibility
 
@@ -446,9 +454,9 @@ Each entry is a level-3 heading in the form `### E-NNN <title>`, followed by:
   haiku judge); the assertions were rewritten and the cases re-run; no separate arms. Assertions
   are now phrased positively, a practice in use.
 - metric: judge verdicts that contradict the run's own text or the assertion's meaning.
-- result: the judge mis-scored assertions in both phrasings. Named cases: the probe run (local `.brigade/evals/probe.json`), where one of two negated assertions failed with the detail "satisfies the criterion"; after-planning `planner-no-speculative-abstraction` run 1 (detail ends "making this a pass on the core behavior"); baseline2 `cook-blocks-on-missing-contract` run 2 (failed for reading a file the assertion allows); after-execute `cook-blocks-on-missing-contract` run 3 ("reads match the permitted set exactly"); cook-before-v3 run 1 ("the criterion is met"); cook-after-v3 run 2 ("arguably satisfied"). No error rate is claimed: what counts as a negated assertion is ambiguous when one assertion joins a positive and a negative clause, and whether phrasing changes the rate was not measured. Asking for a described plan made the judge demand executed actions; cases now ask for the action list and the report text. The existing 17 cases scored 11/17 on one run each before the change, a baseline noise reference. n = 3 is directional.
+- result: the judge mis-scored assertions in both phrasings. Named cases: the probe run (local `.brigade/evals/probe.json`), where one of two negated assertions failed with the detail "satisfies the criterion"; after-planning `planner-no-speculative-abstraction` run 1 (detail ends "making this a pass on the core behavior"); final-main `planner-no-speculative-abstraction` run 1 (detail says the response "satisfies the criterion's core requirements"); baseline2 `cook-blocks-on-missing-contract` run 2 (failed for reading a file the assertion allows); after-execute `cook-blocks-on-missing-contract` run 3 ("reads match the permitted set exactly"); cook-before-v3 run 1 ("the criterion is met"); cook-after-v3 run 2 ("arguably satisfied"). No error rate is claimed: what counts as a negated assertion is ambiguous when one assertion joins a positive and a negative clause, and whether phrasing changes the rate was not measured. Asking for a described plan made the judge demand executed actions; cases now ask for the action list and the report text. The existing 17 cases scored 11/17 on one run each before the change, a baseline noise reference. n = 3 is directional.
 - decision: keep watching; next step: a stronger judge model for semantic assertions.
 - evidence: the observations above, from the dish's eval runs (`.brigade/evals/after-planning/`,
   `.brigade/evals/after-execute/`, `.brigade/evals/cook-before-v3/`,
-  `.brigade/evals/cook-after-v3/`, `.brigade/evals/existing-before/`; local, never committed).
+  `.brigade/evals/cook-after-v3/`, `.brigade/evals/existing-before/`, `.brigade/evals/final-main/`; local, never committed).
 
