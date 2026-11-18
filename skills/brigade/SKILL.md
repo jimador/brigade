@@ -185,6 +185,10 @@ Resolve once per dish (zero model tokens):
 "${CLAUDE_PLUGIN_ROOT}/scripts/brigade-config" writing --json     # writing preset, rules, and checks, by artifact
 ```
 
+Settings come from five layers, later winning key by key: the built-in defaults,
+`.brigade/config.md` (its `tier` and `verification_gate` only), then the global, team and
+local JSON files.
+
 Pass the resolved settings into every workflow script as `overrides`, the prompt stacks as
 `promptOverrides`, and the output of `brigade-config writing --json` as `writing`. A `doctor`
 failure is a readiness failure — name the file and key before

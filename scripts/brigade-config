@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 // brigade-config — resolve the layered brigade configuration, at zero model tokens.
 //
-// Brigade reads its settings from four layers. Later layers win, key by key, so a
+// Brigade reads its settings from five layers. Later layers win, key by key, so a
 // person can change one thing without restating everything above it:
 //
 //   1. defaults   built into this file (what brigade does with no config at all)
-//   2. global     ~/.brigade/config.json                 personal, every repo
-//   3. team       <repo>/brigade.config.json             committed, shared
-//   4. local      <repo>/.brigade/config.local.json      personal, this repo, never committed
+//   2. config.md  <repo>/.brigade/config.md              only `tier` and `verification_gate`
+//                                                        from its `## Repo` section
+//   3. global     ~/.brigade/config.json                 personal, every repo
+//   4. team       <repo>/brigade.config.json             committed, shared
+//   5. local      <repo>/.brigade/config.local.json      personal, this repo, never committed
 //
-// Prompt and agent overrides use the same four layers, but they STACK instead of
+// Prompt and agent overrides use the JSON layers, but they STACK instead of
 // replacing: every layer that has a file for a name contributes text, appended in
 // layer order, so a repo can tighten a global rule without losing it.
 //
@@ -235,15 +237,58 @@ function layerFiles() {
   const home = process.env.BRIGADE_HOME || path.join(os.homedir(), '.brigade')
   return [
     { name: 'defaults', file: null, overrideDir: null },
+    { name: 'config.md', file: path.join(root, '.brigade', 'config.md'), overrideDir: null, markdown: true },
     { name: 'global', file: path.join(home, 'config.json'), overrideDir: path.join(home, 'overrides') },
     { name: 'team', file: path.join(root, 'brigade.config.json'), overrideDir: path.join(root, '.brigade-overrides') },
     { name: 'local', file: path.join(root, '.brigade', 'config.local.json'), overrideDir: path.join(root, '.brigade', 'overrides') },
   ]
 }
 
+// Pull the two settings brigade-config honours out of the onboarding file
+// `.brigade/config.md`: `tier` and `verification_gate` (as `gate`), and only from its
+// `## Repo` section, so a look-alike bullet elsewhere in the file changes nothing.
+// A key with no usable value is left out, so the layers below it still show through.
+function readConfigMarkdown(text) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => /^## Repo\s*$/.test(line))
+  if (start === -1) return {}
+  let end = lines.findIndex((line, i) => i > start && line.startsWith('## '))
+  if (end === -1) end = lines.length
+  const section = lines.slice(start + 1, end)
+  const data = {}
+  for (let i = 0; i < section.length; i++) {
+    const tier = section[i].match(/^- tier:(.*)$/)
+    if (tier) {
+      // Drop a trailing ` # comment` (the template annotates the allowed values that way).
+      const value = tier[1].replace(/\s#.*$/, '').trim()
+      if (value) data.tier = value
+      continue
+    }
+    if (/^- verification_gate:/.test(section[i])) {
+      const gate = []
+      // Commands are taken as written, `#` included: a shell command can legitimately hold one.
+      // A command starting with `<` is the template's unfilled placeholder, so it is skipped.
+      for (let j = i + 1; j < section.length; j++) {
+        const command = section[j].match(/^\s{2,}- (.+)$/)
+        if (!command) break
+        if (!command[1].startsWith('<')) gate.push(command[1])
+      }
+      if (gate.length) data.gate = gate
+    }
+  }
+  return data
+}
+
 function readLayer(layer) {
   if (!layer.file) return { ...layer, present: false, data: DEFAULTS, error: null }
   if (!fs.existsSync(layer.file)) return { ...layer, present: false, data: {}, error: null }
+  if (layer.markdown) {
+    try {
+      return { ...layer, present: true, data: readConfigMarkdown(fs.readFileSync(layer.file, 'utf8')), error: null }
+    } catch (err) {
+      return { ...layer, present: true, data: {}, error: `unreadable file: ${err.message}` }
+    }
+  }
   try {
     const raw = fs.readFileSync(layer.file, 'utf8')
     const data = JSON.parse(raw)
@@ -833,7 +878,9 @@ function getByPath(config, dotted) {
 function printResolve(json) {
   const { config, provenance, layers } = resolveConfig()
   if (json) {
-    console.log(JSON.stringify({ config, provenance, layers: layers.map((l) => ({ layer: l.name, file: l.file, present: l.present })) }, null, 2))
+    // A repo with no config.md gets exactly the listing it had before that layer existed.
+    const listed = layers.filter((l) => !(l.markdown && !l.present))
+    console.log(JSON.stringify({ config, provenance, layers: listed.map((l) => ({ layer: l.name, file: l.file, present: l.present })) }, null, 2))
     return
   }
   console.log('## brigade config (merged; "from" is the winning layer)')
@@ -867,11 +914,11 @@ function printLayers(json) {
   console.log('## config layers (later wins)')
   for (const l of layers) {
     const mark = l.file === null ? 'built in' : l.present ? 'found' : 'absent'
-    console.log(`  ${l.layer.padEnd(8)} ${mark.padEnd(8)} ${l.file || '(defaults in brigade-config)'}`)
+    console.log(`  ${l.layer.padEnd(9)} ${mark.padEnd(8)} ${l.file || '(defaults in brigade-config)'}`)
     if (l.overrideDir) {
-      console.log(`  ${''.padEnd(8)} overrides ${l.overrideDirPresent ? 'found ' : 'absent '} ${l.overrideDir}`)
+      console.log(`  ${''.padEnd(9)} overrides ${l.overrideDirPresent ? 'found ' : 'absent '} ${l.overrideDir}`)
     }
-    if (l.error) console.log(`  ${''.padEnd(8)} ERROR    ${l.error}`)
+    if (l.error) console.log(`  ${''.padEnd(9)} ERROR    ${l.error}`)
   }
 }
 
