@@ -28,6 +28,7 @@ Companion paths below are relative to this skill's directory; helper scripts liv
 | --- | --- |
 | Starting a dish | `### Phase 0 — Intake` below |
 | Resuming any dish | `## Resuming a dish` |
+| Back from PR review, or landing an approved PR | `HANDOFF.md` § 8–9 |
 | First run in this repo | `/brigade:onboard` (`SETUP.md`) |
 | Handed a whole board | the companion `groom` skill |
 | Swagging a design, no cook | `### Design swag` |
@@ -373,6 +374,7 @@ source, never the installed copy; and it always compacts the section it touches.
    `git worktree list`, the plan's branches, and unread files in `reports/`. Trust the
    filesystem over the plan if they disagree, and fix the plan.
 3. Tell the user in two lines where the dish stands, then continue from the current phase.
+4. A ticket in `rework` or `merging` resumes at `HANDOFF.md` § 8 or § 9.
 
 Never re-plan or re-confirm work that's already merged; each planning level's checkpoint happened
 when that level was first approved. Resuming mid-execute: build `items` from PLAN.md's current
