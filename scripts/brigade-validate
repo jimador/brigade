@@ -2,17 +2,20 @@
 // brigade-validate — zero-token conformance checks for brigade artifacts.
 //
 // Validates the typed artifacts a dish produces (plan, briefs, reports,
-// verdicts, plan checks, analyst reports) against the registry in SCHEMAS.md:
+// verdicts, plan checks, analyst reports) and a roadmap's files (ROADMAP.md,
+// nodes, batches, briefs) against the registry in SCHEMAS.md:
 // envelope keys, enum values, plan-item DAG sanity, and body length budgets.
 // The Planner runs this instead of re-reading artifacts with model tokens, and
 // a clean pass is part of what makes runs reproducible: state lives in
 // frontmatter that machines (and the next session) can trust.
 //
 // Usage:
-//   brigade-validate                 # validate every dish under .brigade/
+//   brigade-validate                 # validate every dish and roadmap under .brigade/
 //   brigade-validate <path.md>...    # validate specific artifact files
 //   brigade-validate <dish-dir>      # validate one dish: PLAN.md, analyst.md, DESIGN.md and the
 //                                    # *.md files in briefs/ reports/ research/ state/
+//   brigade-validate <roadmap-dir>   # validate one roadmap: ROADMAP.md and the *.md files in
+//                                    # nodes/ batches/ briefs/
 //   brigade-validate <dir>           # any other directory: the *.md files directly inside it
 //   brigade-validate --json          # machine-readable results
 //
@@ -49,6 +52,13 @@ const TYPES = {
   ledger: { keys: ['dish', 'item', 'attempt', 'updated'], budget: 80 },
   review_report: { keys: ['input', 'context_tier', 'tier', 'findings'], budget: 250 },
   red_team: { keys: ['head', 'range', 'find', 'verify', 'findings', 'verdict'], budget: 150 },
+  roadmap: { keys: ['dish', 'mode', 'focus', 'max_depth', 'next_ids'], budget: null },
+  roadmap_node: {
+    keys: ['id', 'level', 'parent', 'title', 'drill', 'satisfies', 'covers', 'depends_on', 'ticket', 'status',
+      'size_swag', 'sources'],
+    budget: 60,
+  },
+  roadmap_batch: { keys: ['state', 'operations', 'receipts'], budget: null },
 }
 const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
 const RECOMMENDED = ['role', 'model', 'created']
@@ -809,11 +819,12 @@ function checkItemFiles(items, warnings, planFile) {
   }
 }
 
-// A frontmatter scalar without quotes or a trailing `# comment`.
+// A frontmatter scalar without quotes or a trailing `# comment`. A key followed only by a
+// comment (`focus:   # node id`) reads as empty.
 function plainValue(fm, key) {
   const raw = fmValue(fm, key)
   if (raw === null) return null
-  return raw.replace(/\s+#.*$/, '').replace(/^(["'])(.*)\1$/, '$2').trim()
+  return raw.replace(/(^|\s+)#.*$/, '').replace(/^(["'])(.*)\1$/, '$2').trim()
 }
 
 // The model value the schema examples carry, read from the verdict example so this check
@@ -1184,6 +1195,195 @@ function checkTicketTestPlanCount(body, ticketPath, problems) {
   }
 }
 
+// --- roadmap artifacts ---------------------------------------------------------
+//
+// A roadmap folder holds ROADMAP.md, one file per node and one per batch. Each file is checked
+// on its own here: keys, enums and section order. Checks that need the whole folder (cycles,
+// dangling ids, coverage) belong to brigade-roadmap, not to this script.
+
+const ROADMAP_MODES = ['bfs', 'dfs']
+const ROADMAP_SECTIONS = ['## Intent', '## Original request', '## Systems', '## Inventory', '## Requirements',
+  '## Decisions', '## Open questions', '## Out of scope', '## Batches']
+const REQUIREMENT_KINDS = ['functional', 'inventory', 'parity', 'risk', 'constraint']
+const REQUIREMENT_STATUSES = ['proposed', 'accepted', 'dropped']
+const SYSTEM_ACCESS = ['ok', 'missing']
+const NODE_ID = /^[EFST]-\d{3,}$/
+const NODE_LEVELS = { E: 'epic', F: 'feature', S: 'story', T: 'task' }
+const NODE_DRILLS = ['open', 'split', 'leaf', 'parked']
+const TICKET_STATUSES = ['backlog', 'scoping', 'design', 'todo', 'in_progress', 'in_review', 'rework', 'merging',
+  'done', 'blocked']
+const SIZES = ['XS', 'S', 'M', 'L', 'XL', 'unknown']
+const LEAF_SECTIONS = ['## Goal', '## Context', '## Acceptance criteria', '## Constraints', '## Out of scope']
+const BRANCH_SECTIONS = ['## Goal', '## Children']
+const BATCH_STATES = ['proposed', 'approved', 'applied']
+const BATCH_OPS = ['create_node', 'update_node', 'publish', 'link', 'status']
+const BATCH_SECTIONS = ['## Proposal', '## Dispositions']
+
+// The `## ` headings of a body in order, skipping any inside a fenced block.
+function bodyHeadings(body) {
+  const out = []
+  let fence = null
+  for (const line of body) {
+    const marker = line.match(FENCE)
+    if (fence !== null) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && marker[2].trim() === '') fence = null
+    } else if (marker) {
+      fence = marker[1]
+    } else if (line.startsWith('## ')) {
+      out.push(line.trim())
+    }
+  }
+  return out
+}
+
+// Every section in `sections` must be present, and they must appear in that order. Other
+// headings may sit between them.
+function checkSectionOrder(body, doc, sections, problems) {
+  const headings = bodyHeadings(body)
+  const at = (s) => headings.findIndex((h) => h === s || h.startsWith(`${s} `))
+  let last = -1
+  let lastName = null
+  for (const s of sections) {
+    const i = at(s)
+    if (i < 0) {
+      problems.push(`${doc} missing "${s}" section`)
+      continue
+    }
+    if (i < last) problems.push(`${doc} sections out of order: "${s}" must come after "${lastName}"`)
+    else { last = i; lastName = s }
+  }
+}
+
+// One markdown table row's cells. A `\|` is a pipe inside a cell, not a column break.
+function tableCells(line) {
+  const cells = []
+  let cell = ''
+  const text = line.trim().replace(/^\|/, '')
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\\' && text[i + 1] === '|') { cell += '|'; i++; continue }
+    if (text[i] === '|') { cells.push(cell.trim()); cell = ''; continue }
+    cell += text[i]
+  }
+  if (cell.trim() !== '') cells.push(cell.trim())
+  return cells
+}
+
+// Checks one enum column of the first table under `heading`, found by its header name. A table
+// with no rows passes; a table with rows but without the column is a problem.
+function checkTableEnum(body, heading, column, allowed, problems) {
+  const lines = sectionLines(body, heading)
+  if (lines === null) return
+  const rows = lines.filter((l) => l.trim().startsWith('|')).map(tableCells)
+  if (rows.length === 0) return
+  const header = rows[0].map((c) => c.toLowerCase())
+  const data = rows.slice(1).filter((cells) => !cells.every((c) => /^:?-+:?$/.test(c)))
+  if (data.length === 0) return
+  const col = header.indexOf(column)
+  const name = heading.replace(/^## /, '')
+  if (col < 0) {
+    problems.push(`roadmap ${name} table has no "${column}" column`)
+    return
+  }
+  for (const cells of data) {
+    const value = (cells[col] || '').replace(/^`(.*)`$/, '$1')
+    if (!allowed.includes(value)) {
+      problems.push(`roadmap ${name} row ${cells[0] || '?'}: invalid ${column} "${value}" (allowed: ${allowed.join('|')})`)
+    }
+  }
+}
+
+// True when a frontmatter key holds a list: `[...]` inline, or `- ` entries on the lines below.
+function isListValue(fm, key) {
+  const raw = fmValue(fm, key)
+  if (raw === null) return false
+  const value = raw.replace(/(^|\s+)#.*$/, '').trim()
+  if (value.startsWith('[')) return value.endsWith(']')
+  return value === '' && listEntries(fm, key).length > 0
+}
+
+function checkRoadmap(fm, body, problems) {
+  const mode = plainValue(fm, 'mode')
+  if (mode !== null && !ROADMAP_MODES.includes(mode)) {
+    problems.push(`invalid roadmap mode: ${mode} (allowed: ${ROADMAP_MODES.join('|')})`)
+  }
+  const focus = plainValue(fm, 'focus')
+  if (focus !== null && focus !== '' && !NODE_ID.test(focus)) {
+    problems.push(`roadmap focus must be a node id like E-001 or empty (got ${focus})`)
+  }
+  if (mode === 'dfs' && focus === '') problems.push('roadmap focus is required when mode is dfs')
+  const depth = plainValue(fm, 'max_depth')
+  if (depth !== null && !/^\d+$/.test(depth)) problems.push(`roadmap max_depth must be a whole number (got ${depth})`)
+  const next = plainValue(fm, 'next_ids')
+  if (next !== null) {
+    const map = next.match(/^\{(.*)\}$/)
+    const entries = map ? map[1].split(',').map((e) => e.trim()).filter((e) => e !== '') : []
+    if (!map || entries.some((e) => !/^[A-Za-z]+:\s*\d+$/.test(e))) {
+      problems.push(`roadmap next_ids must be a flow map like { E: 2, F: 5, S: 1, T: 1 } (got ${next})`)
+    }
+  }
+  checkSectionOrder(body, 'roadmap', ROADMAP_SECTIONS, problems)
+  checkTableEnum(body, '## Systems', 'access', SYSTEM_ACCESS, problems)
+  checkTableEnum(body, '## Requirements', 'kind', REQUIREMENT_KINDS, problems)
+  checkTableEnum(body, '## Requirements', 'status', REQUIREMENT_STATUSES, problems)
+}
+
+function checkRoadmapNode(fm, body, problems) {
+  const id = plainValue(fm, 'id')
+  if (id !== null && !NODE_ID.test(id)) problems.push(`roadmap_node id must match E-/F-/S-/T- plus 3+ digits (got ${id})`)
+  const level = plainValue(fm, 'level')
+  const levels = Object.values(NODE_LEVELS)
+  if (level !== null && !levels.includes(level)) {
+    problems.push(`invalid roadmap_node level: ${level} (allowed: ${levels.join('|')})`)
+  } else if (level !== null && id !== null && NODE_ID.test(id) && NODE_LEVELS[id[0]] !== level) {
+    problems.push(`roadmap_node level ${level} does not match id ${id} (expected ${NODE_LEVELS[id[0]]})`)
+  }
+  const parent = plainValue(fm, 'parent')
+  if (parent !== null && level !== null && levels.includes(level)) {
+    if (level === 'epic' && parent !== '') problems.push(`roadmap_node epic must have an empty parent (got ${parent})`)
+    if (level !== 'epic' && parent === '') problems.push(`roadmap_node ${level} needs a parent`)
+    if (parent !== '' && !NODE_ID.test(parent)) problems.push(`roadmap_node parent must be a node id (got ${parent})`)
+  }
+  const title = plainValue(fm, 'title')
+  if (title !== null && title === '') problems.push('roadmap_node title is empty')
+  const drill = plainValue(fm, 'drill')
+  if (drill !== null && !NODE_DRILLS.includes(drill)) {
+    problems.push(`invalid roadmap_node drill: ${drill} (allowed: ${NODE_DRILLS.join('|')})`)
+  }
+  for (const key of ['satisfies', 'covers', 'depends_on', 'sources']) {
+    if (fmValue(fm, key) !== null && !isListValue(fm, key)) problems.push(`roadmap_node ${key} must be a list (write [] when empty)`)
+  }
+  if (drill === 'leaf' && !plainValue(fm, 'repo')) problems.push('roadmap_node leaf needs a repo')
+  const status = plainValue(fm, 'status')
+  if (status !== null && status !== '' && !TICKET_STATUSES.includes(status)) {
+    problems.push(`invalid roadmap_node status: ${status} (allowed: ${TICKET_STATUSES.join('|')}, or empty before publish)`)
+  }
+  const size = plainValue(fm, 'size_swag')
+  if (size !== null && !SIZES.includes(size)) problems.push(`invalid roadmap_node size_swag: ${size} (allowed: ${SIZES.join('|')})`)
+  if (drill === 'leaf') checkSectionOrder(body, 'roadmap_node leaf', LEAF_SECTIONS, problems)
+  else if (NODE_DRILLS.includes(drill)) checkSectionOrder(body, 'roadmap_node', BRANCH_SECTIONS, problems)
+}
+
+function checkRoadmapBatch(fm, body, problems) {
+  const state = plainValue(fm, 'state')
+  if (state !== null && !BATCH_STATES.includes(state)) {
+    problems.push(`invalid roadmap_batch state: ${state} (allowed: ${BATCH_STATES.join('|')})`)
+  }
+  for (const key of ['operations', 'receipts']) {
+    if (fmValue(fm, key) !== null && !isListValue(fm, key)) problems.push(`roadmap_batch ${key} must be a list (write [] when empty)`)
+  }
+  const unquote = (v) => (v || '').replace(/^(["'])(.*)\1$/, '$2').trim()
+  listEntryLines(fm, 'operations').forEach((lines, i) => {
+    const fields = entryFields(lines)[0]
+    const op = unquote(fields?.top.get('op'))
+    const target = unquote(fields?.top.get('target'))
+    if (!BATCH_OPS.includes(op)) {
+      problems.push(`roadmap_batch operation ${i + 1}: invalid op "${op}" (allowed: ${BATCH_OPS.join('|')})`)
+    }
+    if (target === '') problems.push(`roadmap_batch operation ${i + 1}: missing target`)
+  })
+  checkSectionOrder(body, 'roadmap_batch', BATCH_SECTIONS, problems)
+}
+
 function validateFile(file, ticketPath = null) {
   const problems = []
   const warnings = []
@@ -1212,7 +1412,9 @@ function validateFile(file, ticketPath = null) {
   }
 
   for (const k of contract.keys) if (!keys.has(k)) problems.push(`missing ${doc} key: ${k}`)
-  if (['report', 'verdict', 'plan_check', 'brief', 'analyst'].includes(doc)) checkPlaceholderModel(fm, warnings)
+  if (['report', 'verdict', 'plan_check', 'brief', 'analyst', 'roadmap', 'roadmap_node', 'roadmap_batch'].includes(doc)) {
+    checkPlaceholderModel(fm, warnings)
+  }
 
   if (contract.budget !== null) {
     // The workflow adds one attribution line under a file it wrote out for an agent; that line
@@ -1528,6 +1730,15 @@ function validateFile(file, ticketPath = null) {
       }
       break
     }
+    case 'roadmap':
+      checkRoadmap(fm, body, problems)
+      break
+    case 'roadmap_node':
+      checkRoadmapNode(fm, body, problems)
+      break
+    case 'roadmap_batch':
+      checkRoadmapBatch(fm, body, problems)
+      break
     default:
       break
   }
@@ -1551,21 +1762,45 @@ function collectDishTargets(dir) {
   return targets
 }
 
-function collectDefaultTargets(root) {
-  const b = path.join(root, '.brigade', 'dishes')
-  if (!fs.existsSync(b)) return []
+// The files of one roadmap: ROADMAP.md and the markdown files directly inside nodes/,
+// batches/ and briefs/, each folder in name order.
+function collectRoadmapTargets(dir) {
   const targets = []
-  for (const dish of fs.readdirSync(b)) {
-    const dir = path.join(b, dish)
-    if (!fs.statSync(dir).isDirectory()) continue
-    targets.push(...collectDishTargets(dir))
+  const top = path.join(dir, 'ROADMAP.md')
+  if (fs.existsSync(top)) targets.push(top)
+  for (const sub of ['nodes', 'batches', 'briefs']) {
+    const d = path.join(dir, sub)
+    if (!fs.existsSync(d)) continue
+    for (const f of fs.readdirSync(d).sort()) if (f.endsWith('.md')) targets.push(path.join(d, f))
   }
   return targets
 }
 
-// A directory argument becomes the files inside it. A dish directory (it has PLAN.md or
-// one of the artifact folders) expands to its artifacts; any other directory expands to
-// the *.md files directly inside it. Plain file arguments pass through unchanged.
+// Every dish under .brigade/dishes/ and every roadmap under .brigade/roadmaps/.
+function collectDefaultTargets(root) {
+  const targets = []
+  for (const [folder, collect] of [['dishes', collectDishTargets], ['roadmaps', collectRoadmapTargets]]) {
+    const b = path.join(root, '.brigade', folder)
+    if (!fs.existsSync(b)) continue
+    for (const name of fs.readdirSync(b)) {
+      const dir = path.join(b, name)
+      if (!fs.statSync(dir).isDirectory()) continue
+      targets.push(...collect(dir))
+    }
+  }
+  return targets
+}
+
+// A roadmap directory has ROADMAP.md, nodes/ or batches/. It is checked before the dish test
+// because a roadmap's briefs/ folder would otherwise make it look like a dish.
+function isRoadmapDir(dir) {
+  return ['ROADMAP.md', 'nodes', 'batches'].some((f) => fs.existsSync(path.join(dir, f)))
+}
+
+// A directory argument becomes the files inside it. A roadmap directory expands to its
+// files, a dish directory (it has PLAN.md or one of the artifact folders) to its artifacts,
+// and any other directory to the *.md files directly inside it. Plain file arguments pass
+// through unchanged.
 function isDishDir(dir) {
   return fs.existsSync(path.join(dir, 'PLAN.md')) ||
     ['briefs', 'reports', 'research', 'state'].some((sub) => fs.existsSync(path.join(dir, sub)))
@@ -1579,6 +1814,7 @@ function expandArg(arg) {
     return [arg] // let validateFile report it as unreadable
   }
   if (!stat.isDirectory()) return [arg]
+  if (isRoadmapDir(arg)) return collectRoadmapTargets(arg)
   if (isDishDir(arg)) return collectDishTargets(arg)
   return fs.readdirSync(arg).filter((f) => f.endsWith('.md')).sort().map((f) => path.join(arg, f))
 }
@@ -1627,7 +1863,7 @@ function main() {
     if (json) console.log(JSON.stringify({ checked: 0, ok: true, results: [] }))
     else console.log(files.length > 0
       ? 'brigade-validate: nothing to check (no markdown artifacts in the given paths)'
-      : 'brigade-validate: nothing to check (no .brigade/dishes artifacts found)')
+      : 'brigade-validate: nothing to check (no .brigade/dishes or .brigade/roadmaps artifacts found)')
     return 0
   }
 

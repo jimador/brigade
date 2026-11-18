@@ -22,6 +22,9 @@ conformance of the artifacts it reviews.
   - `analyst`
   - `design_swag`
   - `design_language`
+  - `roadmap`
+  - `roadmap_node`
+  - `roadmap_batch`
   - `review_report`
   - `red_team`
   - `ledger`
@@ -67,7 +70,10 @@ Producer: humans, idea intake, or a grooming pass. Consumer: Planner (intake), D
 
 On markdown boards (local/obsidian), frontmatter carries at least: `id`, `title`, `status`
 (`backlog|scoping|design|todo|in_progress|in_review|rework|merging|done|blocked`), `assignee`,
-optional `kind`, `worker`, `workspace`, `project`, `repo`. Brigade's body contract remains these
+optional `kind`, `worker`, `workspace`, `project`, `repo`. A ticket published from a roadmap also
+carries optional `roadmap` (slug), `node` (node id), `epic` (the epic's ticket id), `parent_ticket`,
+`blocked_by` (list of ticket ids) and `satisfies` (list of requirement ids); intake treats an
+unfinished `blocked_by` ticket as a readiness question. Brigade's body contract remains these
 sections in order (a well-groomed ticket makes Phase 0–2 dramatically cheaper):
 
 - `## Goal` — the outcome in one short paragraph, user-visible behavior first.
@@ -262,7 +268,7 @@ model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
 confidence: high                   # high|medium|low
-sources:                          # authority: the code itself, nothing else
+sources:                          # authority: the code, or read-only command output
   - src/auth/session.ts:10-48
   - package.json:12
 urls: []                          # only if the question required external docs
@@ -271,7 +277,11 @@ urls: []                          # only if the question required external docs
 Body sections, in order: `## Answer` (2–5 sentences, first), `## Contracts` (pasted
 signatures with locations), `## Anchors` (pasted snippets where changes land),
 `## Conventions`, `## Risks`, `## Not verified` (what confidence hinges on).
-Budget: ≤ 150 lines. Everything pasted is verbatim from the working tree.
+Budget: ≤ 150 lines. Authority is the code itself, or, for a system that is not code (a
+warehouse catalog, an object storage bucket, a running deployment), the output of a read-only
+command: paste the literal command and its output, with secrets, account ids and personal data
+masked. Everything pasted is verbatim from the working tree or that output; a command that
+changes anything is never evidence.
 
 ### `research` — deep-research deliverable (`research/<item>.md`, research dishes)
 
@@ -486,6 +496,90 @@ Elevation & Depth, Shapes, Components, Do's and Don'ts) plus the sidecar
 `.impeccable/design.json` (`schemaVersion: 2`, tokens, tonal ramps, component HTML/CSS).
 Packets and UI samples reference tokens by their design.json **names**, never raw values.
 Missing → the Designer runs `/impeccable init` with the operator before any capture.
+
+### `roadmap` — a multi-ticket plan (`.brigade/roadmaps/<slug>/ROADMAP.md`)
+
+Producer: Planner, during `/brigade:roadmap`. Consumers: the operator, `brigade-roadmap`
+(checks, frontier), later dishes picking up a published leaf. One per roadmap folder; nodes,
+batches and briefs sit beside it in `nodes/`, `batches/` and `briefs/`.
+
+```yaml
+doc: roadmap
+schema: 1
+dish: warehouse-migration          # the roadmap slug
+role: planner
+model: opus
+created: 2026-07-04T03:10:00Z
+mode: dfs                          # bfs|dfs — the drill order
+focus: E-001                       # node id to drill under; required when mode is dfs, else ""
+max_depth: 4                       # deepest level the drill rounds may reach
+next_ids: { E: 2, F: 1, S: 1, T: 1 }   # next counter per id prefix; ids are never reused
+```
+
+Body sections, in order: `## Intent`, `## Original request` (verbatim), `## Systems` (table:
+id | kind | locator | command | access, where `access` is `ok|missing` and `command` is the
+read-only command a scout may run), `## Inventory` (table: id | system | thing | evidence |
+covered by | excluded by), `## Requirements` (table: id | kind | statement | source | status,
+where `kind` is `functional|inventory|parity|risk|constraint` and `status` is
+`proposed|accepted|dropped`), `## Decisions`, `## Open questions` (the `design_swag` line
+formats, each scoped by node id), `## Out of scope`, `## Batches` (one log line per batch).
+`brigade-validate` checks the keys, the section order and the three enum columns; ids that point
+at nothing, cycles and coverage gaps are `brigade-roadmap check`'s job.
+
+### `roadmap_node` — one epic, feature, story or task (`<roadmap>/nodes/<id>.md`)
+
+Producer: Planner, through confirmed batches. Consumers: `brigade-roadmap`, the board projection
+(a published leaf becomes a ticket), the operator.
+
+```yaml
+doc: roadmap_node
+schema: 1
+dish: warehouse-migration          # the roadmap slug
+role: planner
+model: opus
+created: 2026-07-04T03:10:00Z
+id: T-003                          # E-|F-|S-|T- + 3+ digit counter; opaque, never reused
+level: task                        # epic|feature|story|task — must match the id's letter
+parent: S-002                      # empty ("") only on an epic
+title: Copy nightly sales tables to the new warehouse
+drill: leaf                        # open|split|leaf|parked
+satisfies: [R-004]                 # requirement ids
+covers: [I-012]                    # inventory row ids
+depends_on: [T-002]                # node ids
+repo: /path/to/repo                # required when drill is leaf
+ticket: ""                         # board ticket id once published
+status: ""                         # ticket status once published (ticket vocabulary), else ""
+size_swag: S                       # XS|S|M|L|XL|unknown
+sources:
+  - briefs/3-sales-tables.md
+```
+
+Body sections, in order: a leaf carries the ticket body contract, `## Goal`, `## Context`,
+`## Acceptance criteria`, `## Constraints`, `## Out of scope`; any other node carries `## Goal`
+and `## Children` (one line per child id). Budget: ≤ 60 lines.
+
+### `roadmap_batch` — one confirmed round of changes (`<roadmap>/batches/<n>.md`)
+
+Producer: Planner, one per drill or publish round. Consumers: the operator (confirmation),
+resume (an `approved` batch that is not `applied` is replayed from its receipts).
+
+```yaml
+doc: roadmap_batch
+schema: 1
+dish: warehouse-migration          # the roadmap slug
+role: planner
+model: opus
+created: 2026-07-04T03:10:00Z
+state: approved                    # proposed|approved|applied
+operations:                        # in apply order
+  - { op: create_node, target: T-003 }   # op: create_node|update_node|publish|link|status
+  - { op: publish, target: T-003 }
+receipts:                          # one per applied operation: ticket id, read-back ok
+  - { target: T-003, ticket: ACME-41, read_back: ok }
+```
+
+Body sections, in order: `## Proposal` (what the round changes and why), `## Dispositions` (the
+operator's answer and each inspector finding's ruling).
 
 ### `review_report` — standalone code review (`.brigade/reviews/<slug>/report.md`)
 
