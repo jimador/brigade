@@ -136,7 +136,7 @@ expensive way to discover it.
 
 ## When an agent's write is refused
 
-A reviewer or writer's Write can be refused by the harness. Its artifact still has to land.
+A refused Write still has to land its artifact.
 
 - Every dispatched reviewer or writer is told: when its Write is refused, put the exact full
   artifact text at the end of its final message, and do not work around the refusal.
