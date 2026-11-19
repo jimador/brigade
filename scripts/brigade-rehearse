@@ -16,11 +16,16 @@
 //             a trailing `# comment` after the closing backtick is allowed
 //   verify UNRUNNABLE  a Verify command fails on the base for a reason the change cannot fix:
 //             a `node --check` / `bash -n` that fails there, or a script or program it runs that
-//             is missing there and that the packet does not create
+//             is missing there and that the packet does not create; what a line needs is looked
+//             up right before that line runs, so files the block makes or removes later never
+//             count, and an operand counts as an option by its text once quotes are removed
+//   verify incomplete  a Verify line never ran because the block ended before it (an `exit`,
+//             or the time limit); `set -e` and `set -o errexit` are turned back off after every
+//             line, so an expected failure never ends the block
 //
 // Each finding prints as one line `<check>: <item>: <detail>`; a chain warning prints as
 // `chain: <file>: <slugs in order>`, a pin warning as one summary line per item
-// `pin: <item>: <n> test files reference its edited files: a, b, c (+k more)`; the last two
+// `pin: <item>: <n> test files reference its edited files: a, b, c (+k more)`; the last three
 // checks print in the shapes their names show. With --json, each prints as one JSON object
 // per line.
 //
@@ -28,8 +33,8 @@
 // reset to the base (tracked changes discarded, untracked and ignored files removed) before
 // each packet, so nothing one packet's commands leave behind reaches the next, and removed
 // afterwards. Each premise runs in its own shell; each fenced Verify block runs as one script,
-// lines in order, so `cd` and variables carry from line to line, and a marker after each
-// command records its exit status and directory. Each premise and each block has a 60 s limit.
+// lines in order, so `cd` and variables carry from line to line; a probe before each command
+// records what diagnosing it needs and a marker after it records its exit status. Each premise and each block has a 60 s limit.
 // --no-exec skips running them and prints `premises: skipped` (to stderr with --json).
 //
 // Usage:
@@ -676,15 +681,16 @@ function literalOperand(w) {
 // The operands a simple command executes, which are the only words checked as files: the script
 // of `node` (every test path under `node --test`), the script of `bash` or `sh`. Every other
 // argument, a search pattern included, is never treated as a file, and the program itself is
-// checked by the caller.
+// checked by the caller. Words are judged by their text once the quotes are gone, the way the
+// program sees them, so `"--test-name-pattern=two words"` is an option like its unquoted form.
 function fileArgs(program, args) {
   const name = path.posix.basename(program)
   const operands = args.filter((a) => a.redirect === null)
-  const option = (a) => !a.quoted && /^[-+]./.test(a.text)
+  const option = (a) => /^[-+]./.test(a.text)
   const out = []
   if (name === 'node') {
-    if (operands.some((a) => !a.quoted && NODE_INLINE.has(a.text))) return []
-    const testRun = operands.some((a) => !a.quoted && a.text === '--test')
+    if (operands.some((a) => !a.dynamic && NODE_INLINE.has(a.text))) return []
+    const testRun = operands.some((a) => !a.dynamic && a.text === '--test')
     let skipNext = false
     for (const a of operands) {
       if (skipNext) {
@@ -703,7 +709,7 @@ function fileArgs(program, args) {
   }
   if (SHELLS.has(name)) {
     // `-c` (alone or in a flag cluster such as `-ec`) runs a string, and `-s` reads stdin.
-    if (operands.some((a) => !a.quoted && /^-[A-Za-z]*[cs][A-Za-z]*$/.test(a.text))) return []
+    if (operands.some((a) => !a.dynamic && /^-[A-Za-z]*[cs][A-Za-z]*$/.test(a.text))) return []
     let skipNext = false
     for (const a of operands) {
       if (skipNext) {
@@ -728,7 +734,7 @@ function syntaxCheck(seg) {
   const name = path.posix.basename(parts.program)
   // A rerun in a fresh shell would not see the block's variables, so such a segment is left alone.
   if (seg.words.some((w) => w.dynamic)) return null
-  const flags = parts.args.filter((a) => !a.quoted).map((a) => a.text)
+  const flags = parts.args.map((a) => a.text)
   if (name === 'node' && (flags.includes('--check') || flags.includes('-c'))) {
     return { label: 'node --check', targets: fileArgs(parts.program, parts.args) }
   }
@@ -830,97 +836,151 @@ function blockUnits(commands) {
   return units
 }
 
+// What diagnosing a unit has to know about the moment it ran: the syntax checks it makes, the
+// programs it runs and the files it executes, up to a `cd` (past it, relative paths no longer
+// start where the unit did). `paths` and `programs` are what the probe before the unit looks up.
+function unitNeeds(unit) {
+  const checks = []
+  const runs = []
+  for (const seg of simpleCommands(unit)) {
+    const parts = commandParts(seg.words)
+    if (parts === 'stop') break
+    if (parts === null) continue
+    const s = syntaxCheck(seg)
+    if (s !== null) checks.push({ ...s, text: seg.text })
+    runs.push({ program: parts.program, files: fileArgs(parts.program, parts.args) })
+  }
+  const paths = new Set()
+  const programs = new Set()
+  for (const c of checks) for (const t of c.targets) paths.add(t)
+  for (const r of runs) {
+    if (r.program.includes('/')) paths.add(r.program)
+    else programs.add(r.program)
+    for (const t of r.files) paths.add(t)
+  }
+  return { checks, runs, paths: [...paths], programs: [...programs] }
+}
+
+const shellQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`
+
+// The probe the script runs right before unit i, in the block's own shell, so what it sees is
+// the tree, the directory and the PATH that unit sees: whether each path exists, whether each
+// program resolves, and the exit status of each syntax check. It keeps $? for the unit and ends
+// with the `D` row, so a unit with a `D` row is one the block reached.
+function probeScript(i, needs, marks) {
+  const lines = ['__brigade_rehearse_s=$?', '{']
+  needs.paths.forEach((p, k) => {
+    lines.push(`builtin test -e ${shellQuote(p)}; builtin printf 'F ${i} ${k} %s\\n' "$?"`)
+  })
+  needs.programs.forEach((p, k) => {
+    lines.push(`builtin command -v -- ${shellQuote(p)} >/dev/null 2>&1; builtin printf 'C ${i} ${k} %s\\n' "$?"`)
+  })
+  needs.checks.forEach((c, k) => {
+    lines.push(`( ${c.text}\n) </dev/null >/dev/null 2>&1; builtin printf 'S ${i} ${k} %s\\n' "$?"`)
+  })
+  lines.push(`builtin printf 'D ${i} %s\\n' "$(builtin pwd -P 2>/dev/null || builtin printf '%s' "$PWD")"`)
+  lines.push(`} >> ${marks}`, '__brigade_rehearse_status "$__brigade_rehearse_s"')
+  return lines.join('\n')
+}
+
 // Runs one fenced Verify block as a single bash script in wt, its units in order in one shell, so
-// `cd` and variables carry over and a failing line does not stop the rest. After each unit a
-// marker line records the unit's exit status and the shell's directory, then restores the
-// status. Returns one { unit, cwd, result } per unit, where cwd is the directory the unit started
-// in and result is null when the unit never ran. A unit that started but left no marker (it
-// exited the script, or the time limit ran out) gets the script's own result.
+// `cd` and variables carry over and a failing line does not stop the rest: the marker after each
+// unit records its exit status and turns `set -e` back off, so an errexit the block sets never
+// ends the script at the next expected failure. Before each unit a probe records what diagnosis
+// needs (see probeScript), since later lines may create, repair or remove those files.
+// Returns one { unit, needs, facts, result, stoppedAt } per unit: result is null when the unit
+// never ran, and then stoppedAt names the unit the block ended at (null when it ended before the
+// first) and that run's result. A unit that started but left no marker (it exited the script,
+// or the time limit ran out) gets the script's own result.
 async function runVerifyBlock(commands, wt) {
   const units = blockUnits(commands)
+  const needs = units.map(unitNeeds)
   const top = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-rehearse-marks-'))
-  const marks = path.join(top, 'marks')
-  const quoted = `'${marks.replace(/'/g, `'\\''`)}'`
+  const marks = shellQuote(path.join(top, 'marks'))
   const script = ['__brigade_rehearse_status() { return "$1"; }']
   units.forEach((unit, i) => {
-    script.push(unit, `__brigade_rehearse_s=$?; printf '%s %s %s\\n' ${i} "$__brigade_rehearse_s" "$PWD" >> ${quoted}; ` +
-      '__brigade_rehearse_status "$__brigade_rehearse_s"')
+    script.push(probeScript(i, needs[i], marks), unit,
+      `__brigade_rehearse_s=$?; builtin printf '%s %s\\n' ${i} "$__brigade_rehearse_s" >> ${marks}; ` +
+      'builtin set +e; __brigade_rehearse_status "$__brigade_rehearse_s"')
   })
   let whole
   let recorded = ''
   try {
     whole = await runShell(script.join('\n'), wt)
-    recorded = fs.existsSync(marks) ? fs.readFileSync(marks, 'utf8') : ''
+    const file = path.join(top, 'marks')
+    recorded = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
   } finally {
     fs.rmSync(top, { recursive: true, force: true })
   }
   const byUnit = new Map()
+  const facts = units.map(() => ({ dir: null, exists: new Map(), found: new Map(), syntax: [] }))
   for (const row of recorded.split('\n')) {
-    const m = /^(\d+) (\d+) (.*)$/.exec(row)
-    if (m) byUnit.set(Number(m[1]), { status: Number(m[2]), dir: m[3] })
+    let m = /^(\d+) (\d+)$/.exec(row)
+    if (m) {
+      byUnit.set(Number(m[1]), { status: Number(m[2]), signal: null, timedOut: false })
+      continue
+    }
+    m = /^([FCS]) (\d+) (\d+) (\d+)$/.exec(row)
+    if (m) {
+      const [i, k, code] = [Number(m[2]), Number(m[3]), Number(m[4])]
+      const f = facts[i]
+      if (f === undefined) continue
+      if (m[1] === 'F') f.exists.set(needs[i].paths[k], code === 0)
+      else if (m[1] === 'C') f.found.set(needs[i].programs[k], code === 0)
+      else f.syntax[k] = code
+      continue
+    }
+    m = /^D (\d+) (.*)$/.exec(row)
+    if (m && facts[Number(m[1])] !== undefined) facts[Number(m[1])].dir = m[2]
   }
   const runs = []
-  let cwd = wt
-  let stopped = false
+  let stoppedAt = null
   units.forEach((unit, i) => {
     const mark = byUnit.get(i)
-    if (stopped) runs.push({ unit, cwd, result: null })
+    const base = { unit, needs: needs[i], facts: facts[i], stoppedAt: null }
+    if (stoppedAt === null && facts[i].dir === null) stoppedAt = { unit: units[i - 1] ?? null, result: whole }
+    if (stoppedAt !== null) runs.push({ ...base, result: null, stoppedAt })
     else if (mark === undefined) {
-      runs.push({ unit, cwd, result: whole })
-      stopped = true
-    } else {
-      runs.push({ unit, cwd, result: { status: mark.status, signal: null, timedOut: false } })
-      cwd = mark.dir
-    }
+      runs.push({ ...base, result: whole })
+      stoppedAt = { unit, result: whole }
+    } else runs.push({ ...base, result: mark })
   })
   return runs
 }
 
-// The directory a unit started in, with symlinks resolved; the worktree when it is gone.
-function realDir(dir, wt) {
-  try {
-    return fs.realpathSync(dir)
-  } catch {
-    return wt
-  }
-}
-
 // Why a Verify unit that failed on base can never pass, or null when the failure is the expected
-// one (the change is missing). Paths resolve against cwd, the directory the unit started in;
-// `creates(p)` says whether the packet brings p, with p relative to the worktree.
-async function unrunnableReason(command, wt, cwd, creates) {
-  const at = (t) => path.resolve(cwd, t)
-  const inTree = (t) => fs.existsSync(at(t))
-  const relative = (t) => normalize(path.relative(wt, at(t)))
-  const missing = (t) => !inTree(t) && !creates(relative(t))
-  const segments = simpleCommands(command)
-  for (const seg of segments) {
-    const s = syntaxCheck(seg)
-    if (s === null) continue
+// one (the change is missing). It reads the facts the probe took right before the unit ran;
+// paths resolve against the directory the unit started in, and `creates(p)` says whether the
+// packet brings p, with p relative to the worktree.
+function unrunnableReason({ needs, facts }, wt, creates) {
+  const cwd = facts.dir
+  const inTree = (t) => facts.exists.get(t) === true
+  const relative = (t) => normalize(path.relative(wt, path.resolve(cwd, t)))
+  const missing = (t) => facts.exists.get(t) === false && !creates(relative(t))
+  for (const [k, s] of needs.checks.entries()) {
     if (s.targets.some((t) => !inTree(t) && creates(relative(t)))) continue
-    const r = await runShell(seg.text, cwd)
-    if (r.status !== 0) return `${s.label} fails on base (${exitText(r)})`
+    const status = facts.syntax[k]
+    if (status !== undefined && status !== 0) return `${s.label} fails on base (exit ${status})`
   }
-  for (const seg of segments) {
-    const parts = commandParts(seg.words)
-    if (parts === 'stop') break
-    if (parts === null) continue
-    const { program, args } = parts
+  for (const { program, files } of needs.runs) {
     if (program.includes('/')) {
       if (missing(program)) return `${program} does not exist on base and the packet does not create it`
-    } else {
-      const found = spawnSync('bash', ['-c', 'command -v -- "$1"', '_', program], { cwd, stdio: 'ignore' })
-      if (found.status !== 0) return `program ${program} not found`
-    }
-    for (const t of fileArgs(program, args)) {
+    } else if (facts.found.get(program) === false) return `program ${program} not found`
+    for (const t of files) {
       if (missing(t)) return `${t} does not exist on base and the packet does not create it`
     }
   }
   return null
 }
 
-// premise FAIL and verify UNRUNNABLE: runs every open packet's premise lines and Verify blocks
-// in one temporary worktree of base, reset to base before each packet. A worktree is only made
+// A unit as one line for a finding: continuation lines joined, and only its first line kept.
+function shownUnit(unit) {
+  return unit.replace(/\s*\\\n\s*/g, ' ').split('\n')[0]
+}
+
+// premise FAIL, verify UNRUNNABLE and verify incomplete: runs every open packet's premise lines
+// and Verify blocks in one temporary worktree of base, reset to base before each packet. A
+// worktree is only made
 // when there is something to run. A path counts as created by the packet when the item or any
 // item it depends on lists it.
 async function checkExec(open, sections, base, bySlug) {
@@ -947,11 +1007,18 @@ async function checkExec(open, sections, base, bySlug) {
       for (const a of ancestorsOf(item.slug, bySlug)) entries.push(...(bySlug.get(a)?.files ?? []))
       const creates = (p) => entries.some((e) => covers(normalize(e), p))
       for (const block of verify) {
-        for (const { unit, cwd, result } of await runVerifyBlock(block, wt)) {
-          if (result === null || result.status === 0) continue
-          const reason = await unrunnableReason(unit, wt, realDir(cwd, wt), creates)
+        for (const run of await runVerifyBlock(block, wt)) {
+          const shown = shownUnit(run.unit)
+          if (run.result === null) {
+            const where = run.stoppedAt.unit === null ? 'before it' : `at ${shownUnit(run.stoppedAt.unit)}`
+            const detail = `${shown}: never ran; the block stopped ${where} (${exitText(run.stoppedAt.result)})`
+            found.push({ check: 'verify', item: item.slug, command: shown, detail,
+              text: `verify incomplete: ${item.slug}: ${detail}` })
+            continue
+          }
+          if (run.result.status === 0) continue
+          const reason = unrunnableReason(run, wt, creates)
           if (reason === null) continue
-          const shown = unit.replace(/\s*\\\n\s*/g, ' ').split('\n')[0]
           found.push({ check: 'verify', item: item.slug, command: shown, detail: `${shown}: ${reason}`,
             text: `verify UNRUNNABLE: ${item.slug}: ${shown}: ${reason}` })
         }

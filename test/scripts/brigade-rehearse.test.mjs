@@ -79,9 +79,12 @@ function writePlan(root, items, { deliveryBranch = 'main', extraFrontmatter = []
 
 // The fallback reads the main branch through brigade-config, which follows the project-dir
 // variables and the user's ~/.brigade. Both are cleared so only the temp repo's config counts.
+// The test runner's own context variable goes too: with it set, a `node --test` inside a rehearsed
+// Verify block reports to this run instead of exiting non-zero on a failing test.
 const BRIGADE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'brigade-rehearse-home-'))
 function cleanEnv() {
   const env = { ...process.env, BRIGADE_HOME }
+  delete env.NODE_TEST_CONTEXT
   delete env.BRIGADE_PROJECT_DIR
   delete env.CLAUDE_PROJECT_DIR
   delete env.CODEX_PROJECT_DIR
@@ -732,3 +735,104 @@ test('runner E5: pins count edited files only, one summary line per item', () =>
   assert.match(r.stdout, /0 findings, 1 warning\b/)
 })
 
+
+// Round three of the red team against the Verify block runner.
+
+const FAILING_TEST = "import test from 'node:test'\nimport assert from 'node:assert'\n" +
+  "test('needs new behavior', () => assert.fail('missing'))\n"
+
+test('runner2 E1: set -e in a block never hides the checks after an expected failure', () => {
+  const root = makeRepo()
+  commitOnMain(root, { 'test/fail.test.mjs': FAILING_TEST })
+  const plan = writePlan(root, [{ slug: 'one', files: [['test/fail.test.mjs', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  set -e',
+    '  node --test test/fail.test.mjs',
+    '  set -o errexit',
+    '  node --test test/fail.test.mjs',
+    '  node --test test/missing.test.mjs',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify UNRUNNABLE: one: node --test test/missing.test.mjs: ' +
+      'test/missing.test.mjs does not exist on base and the packet does not create it',
+  ])
+})
+
+test('runner2 E1 (adversarial): lines a block never reached are reported as incomplete', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  test -f src/a.js',
+    '  exit 3',
+    '  node --test test/missing.test.mjs',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify incomplete: one: node --test test/missing.test.mjs: never ran; the block stopped at exit 3 (exit 3)',
+  ])
+  const j = rehearse(root, ['--json', plan])
+  assert.equal(j.status, 1, j.stdout + j.stderr)
+  assert.deepEqual(jsonRows(j).filter((row) => row.check === 'verify'), [{
+    check: 'verify', level: 'finding', item: 'one', command: 'node --test test/missing.test.mjs',
+    detail: 'node --test test/missing.test.mjs: never ran; the block stopped at exit 3 (exit 3)',
+  }])
+})
+
+test('runner2 E2: a test built, run and removed inside the block is not missing', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  mkdir -p test && echo "process.exit(1)" > test/tmp.test.mjs',
+    '  node --test test/tmp.test.mjs',
+    '  bash -n test/tmp.sh || true',
+    '  rm -f test/tmp.test.mjs',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [])
+})
+
+test('runner2 E2 (adversarial): a file repaired or created after its failing line still reports', () => {
+  const root = makeRepo()
+  commitOnMain(root, { 'src/broken.js': 'function (\n' })
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/broken.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  node --check src/broken.js',
+    '  echo "export const x = 1" > src/broken.js',
+    '  node --test test/later.test.mjs',
+    '  mkdir -p test && touch test/later.test.mjs',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify UNRUNNABLE: one: node --check src/broken.js: node --check fails on base (exit 1)',
+    'verify UNRUNNABLE: one: node --test test/later.test.mjs: ' +
+      'test/later.test.mjs does not exist on base and the packet does not create it',
+  ])
+})
+
+test('runner2 E3: a quoted option is an option, never a missing file', () => {
+  const root = makeRepo()
+  commitOnMain(root, { 'test/fail.test.mjs': FAILING_TEST })
+  const plan = writePlan(root, [{ slug: 'one', files: [['test/fail.test.mjs', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  node --test "--test-name-pattern=needs new behavior" test/fail.test.mjs',
+    "  node --test '--test-name-pattern' 'needs new behavior' test/fail.test.mjs",
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [])
+})
