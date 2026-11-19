@@ -16,6 +16,10 @@
 //      returned separately as parked.
 //   E6 ensures: coverage lists inventory, requirement and leaf gaps and derives parent and
 //      requirement status.
+//   E1 hardening ensures: findCycles is linear in nodes plus edges, so a sparse acyclic graph of
+//      any size answers fast with nothing to report, while real cycles still come back as paths.
+//   E2 hardening ensures: a single-quoted scalar keeps '' as a quote, a double-quoted one keeps
+//      \" and \\, and a comment after the closing quote is still dropped.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -186,6 +190,49 @@ test('E3 findCycles finds a self dependency and each cycle once', () => {
   assert.deepEqual(findCycles(null), [])
 })
 
+// A sparse acyclic graph where every node depends on the next two: T-1 -> T-2, T-3; T-2 -> T-3,
+// T-4; and so on. A search that walks every path is exponential here.
+const ladder = (n) => {
+  const files = { 'ROADMAP.md': '---\ndoc: roadmap\n---\n' }
+  for (let i = 1; i <= n; i++) {
+    const deps = [i + 1, i + 2].filter((d) => d <= n).map((d) => `T-${d}`)
+    files[`nodes/T-${i}.md`] = node(`T-${i}`, `depends_on: [${deps.join(', ')}]`)
+  }
+  return parseRoadmapFiles(files)
+}
+
+test('E1 hardening: findCycles answers a 40-node sparse acyclic graph fast and finds nothing', () => {
+  const m = ladder(40)
+  assert.deepEqual(m.errors, [])
+  const probe = {}
+  const t0 = performance.now()
+  const cycles = findCycles(m, probe)
+  const ms = performance.now() - t0
+  assert.deepEqual(cycles, [])
+  assert.ok(ms < 250, `40 nodes took ${ms.toFixed(1)} ms`)
+  assert.ok(probe.visits <= 2 * 40, `40 nodes took ${probe.visits} node visits`)
+})
+
+test('E1 hardening: findCycles stays linear on a 200-node sparse acyclic graph', () => {
+  const m = ladder(200)
+  const probe = {}
+  const t0 = performance.now()
+  assert.deepEqual(findCycles(m, probe), [])
+  const ms = performance.now() - t0
+  assert.ok(ms < 1000, `200 nodes took ${ms.toFixed(1)} ms`)
+  assert.ok(probe.visits <= 2 * 200, `200 nodes took ${probe.visits} node visits`)
+})
+
+test('E1 hardening: a cycle closed at the end of a long ladder still comes back as a path', () => {
+  const files = { 'ROADMAP.md': '---\ndoc: roadmap\n---\n' }
+  for (let i = 1; i <= 60; i++) {
+    const deps = [i + 1, i + 2].filter((d) => d <= 60).map((d) => `T-${d}`)
+    if (i === 60) deps.push('T-59')
+    files[`nodes/T-${i}.md`] = node(`T-${i}`, `depends_on: [${deps.join(', ')}]`)
+  }
+  assert.deepEqual(findCycles(parseRoadmapFiles(files)), [{ kind: 'depends_on', path: ['T-59', 'T-60', 'T-59'] }])
+})
+
 test('E3 danglingRefs lists unknown parent, depends_on, satisfies and covers ids', () => {
   assert.deepEqual(danglingRefs(valid), [])
   assert.deepEqual(danglingRefs(load('cycle')), [
@@ -279,6 +326,33 @@ test('E6 parent status rules: all done, any blocked, any started, else backlog',
   assert.equal(tree(['todo', 'backlog', 'design', '']), 'backlog')
   assert.deepEqual(coverage(null).parentStatus, {})
   assert.ok(Array.isArray(coverage(load('cycle')).untracedLeaves), 'a parent cycle does not hang coverage')
+})
+
+test('E2 hardening: quoted scalars keep their escaped quotes and drop a trailing comment', () => {
+  const fm = [
+    "title: 'Don''t lose rows'",
+    'summary: "say \\"hi\\" to \\\\ them" # a comment',
+    "owner: 'it''s # not a comment' # but this is",
+    'repo: "back\\\\"',
+    "sources:\n  - 'a''b'\n  - \"c\\\"d\"",
+    "covers: ['x'', y', \"p\\\", q\"]",
+  ].join('\n')
+  const m = parseRoadmapFiles({ 'ROADMAP.md': '---\ndoc: roadmap\n---\n', 'nodes/T-1.md': node('T-1', fm) })
+  assert.deepEqual(m.errors, [])
+  const f = m.nodes['T-1'].frontmatter
+  assert.equal(f.title, "Don't lose rows")
+  assert.equal(f.summary, 'say "hi" to \\ them')
+  assert.equal(f.owner, "it's # not a comment")
+  assert.equal(f.repo, 'back\\')
+  assert.deepEqual(f.sources, ["a'b", 'c"d'])
+  assert.deepEqual(f.covers, ["x', y", 'p", q'])
+})
+
+test('E2 hardening: an escaped quote does not close a quoted scalar', () => {
+  for (const bad of ['title: "ends in an escape\\"', "title: 'ends in a doubled quote''"]) {
+    const m = parseRoadmapFiles({ 'ROADMAP.md': '---\ndoc: roadmap\n---\n', 'nodes/T-1.md': node('T-1', bad) })
+    assert.ok(m.errors.some((e) => /title has an unclosed quote/.test(e)), `${bad}\n${m.errors.join('\n')}`)
+  }
 })
 
 test('compareIds orders by level letter, then counter', () => {

@@ -73,11 +73,24 @@ function unquote(s) {
   return t
 }
 
+// Where the quoted value opening at t[0] closes, or -1 when it never does. Inside single quotes
+// `''` is a quote, not the end; inside double quotes a backslash escapes the next character.
+function closingQuote(t) {
+  const q = t[0]
+  for (let i = 1; i < t.length; i++) {
+    if (q === '"' && t[i] === '\\') { i++; continue }
+    if (t[i] !== q) continue
+    if (q === "'" && t[i + 1] === "'") { i++; continue }
+    return i
+  }
+  return -1
+}
+
 // Cuts a ` # comment` off a plain value; a quoted value keeps its `#`.
 function plain(s) {
   const t = s.trim()
   if (t[0] === '"' || t[0] === "'") {
-    const close = t.indexOf(t[0], 1)
+    const close = closingQuote(t)
     return close === -1 ? t : t.slice(0, close + 1)
   }
   return t.replace(/(^|\s)#.*$/, '').trim()
@@ -94,7 +107,9 @@ function flowList(s) {
     const ch = s[i]
     if (quote) {
       cur += ch
-      if (ch === quote) quote = ''
+      if (quote === '"' && ch === '\\' && i + 1 < s.length) cur += s[++i]
+      else if (ch === quote && quote === "'" && s[i + 1] === "'") cur += s[++i]
+      else if (ch === quote) quote = ''
       continue
     }
     if ((ch === '"' || ch === "'") && cur.trim() === '') { quote = ch; cur += ch; continue }
@@ -162,7 +177,7 @@ function splitFrontmatter(text, where, errors) {
       errors.push(`${where}: frontmatter line ${n}: ${key} is a mapping, which roadmap files do not use`)
     } else {
       const q = value[0]
-      if ((q === '"' || q === "'") && (value.length < 2 || value[value.length - 1] !== q)) {
+      if ((q === '"' || q === "'") && closingQuote(value) !== value.length - 1) {
         errors.push(`${where}: frontmatter line ${n}: ${key} has an unclosed quote`)
         value = value.slice(1)
       }
@@ -477,11 +492,65 @@ function closeCycle(cycle) {
   return [...turned, turned[0]]
 }
 
+// The strongly connected components of a graph given as ids and an id -> next ids map, using an
+// iterative Tarjan walk so a long chain cannot overflow the call stack. Returns a Map from id to
+// its component number. Each node is entered once and each edge looked at once.
+function components(ids, next, probe) {
+  const comp = new Map()
+  const low = new Map()
+  const order = new Map()
+  const held = []
+  const onHeld = new Set()
+  let counter = 0
+  let comps = 0
+  for (const root of ids) {
+    if (order.has(root)) continue
+    const stack = [{ id: root, k: 0 }]
+    order.set(root, counter); low.set(root, counter++); held.push(root); onHeld.add(root)
+    probe.visits++
+    while (stack.length) {
+      const top = stack[stack.length - 1]
+      const outs = next.get(top.id)
+      if (top.k < outs.length) {
+        const d = outs[top.k++]
+        if (!order.has(d)) {
+          order.set(d, counter); low.set(d, counter++); held.push(d); onHeld.add(d)
+          probe.visits++
+          stack.push({ id: d, k: 0 })
+        } else if (onHeld.has(d)) low.set(top.id, Math.min(low.get(top.id), order.get(d)))
+        continue
+      }
+      stack.pop()
+      if (stack.length) {
+        const up = stack[stack.length - 1].id
+        low.set(up, Math.min(low.get(up), low.get(top.id)))
+      }
+      if (low.get(top.id) === order.get(top.id)) {
+        let x
+        do {
+          x = held.pop()
+          onHeld.delete(x)
+          comp.set(x, comps)
+        } while (x !== top.id)
+        comps++
+      }
+    }
+  }
+  return comp
+}
+
 // Every parent cycle and every depends_on cycle as { kind: 'parent'|'depends_on', path }, where
 // path starts at the cycle's smallest id and ends where it started: ['T-1', 'T-2', 'T-1'].
 // Dependency cycles are all the elementary cycles, each once; the search stops after MAX_CYCLES.
-export function findCycles(model) {
+//
+// The dependency search is Johnson's algorithm: strongly connected components first, so a node
+// that sits on no cycle is never searched from, then a blocked-set search inside each component
+// that never walks the same dead end twice. An acyclic roadmap costs one pass over nodes and
+// edges however the dependencies fan out. Pass a `probe` object to read back `probe.visits`, the
+// number of times any node was entered.
+export function findCycles(model, probe = {}) {
   const out = []
+  probe.visits = 0
   try {
     const ids = idsOf(model)
     // Parent: each node has at most one parent, so walking up from every node finds every loop.
@@ -498,31 +567,59 @@ export function findCycles(model) {
       if (at.has(cur)) out.push({ kind: 'parent', path: closeCycle(pathIds.slice(at.get(cur))) })
       for (const x of pathIds) done.add(x)
     }
-    // depends_on: from each start, search only through later ids, so each cycle is found once,
-    // from its smallest id.
+    // depends_on.
     const index = new Map(ids.map((x, i) => [x, i]))
     const next = new Map(ids.map((x) => [x, [...new Set(nodeOf(model, x).depends_on)].filter((d) => index.has(d)).sort(compareIds)]))
+    const comp = components(ids, next, probe)
+    const size = new Map()
+    for (const c of comp.values()) size.set(c, (size.get(c) || 0) + 1)
     let found = 0
+    // From each start, search only through later ids in the start's own component, so each
+    // cycle is found once, from its smallest id. A node that cannot reach the start stays
+    // blocked until a cycle through it turns up, which is what keeps the search from re-walking
+    // the same subgraph once per path.
     for (let s = 0; s < ids.length && found < MAX_CYCLES; s++) {
       const start = ids[s]
-      const stack = [{ id: start, k: 0 }]
-      const onPath = new Set([start])
+      const home = comp.get(start)
+      if (size.get(home) === 1 && !next.get(start).includes(start)) continue
+      const outsOf = (id) => next.get(id).filter((d) => d === start || (comp.get(d) === home && index.get(d) > s))
+      const blocked = new Set([start])
+      const waiting = new Map()
+      const unblock = (id) => {
+        const todo = [id]
+        while (todo.length) {
+          const u = todo.pop()
+          if (!blocked.delete(u)) continue
+          const w = waiting.get(u)
+          if (w) { waiting.delete(u); todo.push(...w) }
+        }
+      }
+      const stack = [{ id: start, outs: outsOf(start), k: 0, closed: false }]
+      probe.visits++
       while (stack.length && found < MAX_CYCLES) {
         const top = stack[stack.length - 1]
-        const outs = next.get(top.id)
-        if (top.k >= outs.length) {
-          onPath.delete(top.id)
-          stack.pop()
+        if (top.k < top.outs.length) {
+          const d = top.outs[top.k++]
+          if (d === start) {
+            out.push({ kind: 'depends_on', path: [...stack.map((f) => f.id), start] })
+            found++
+            top.closed = true
+          } else if (!blocked.has(d)) {
+            blocked.add(d)
+            probe.visits++
+            stack.push({ id: d, outs: outsOf(d), k: 0, closed: false })
+          }
           continue
         }
-        const d = outs[top.k++]
-        if (d === start) {
-          out.push({ kind: 'depends_on', path: [...stack.map((f) => f.id), start] })
-          found++
-        } else if (index.get(d) > s && !onPath.has(d)) {
-          onPath.add(d)
-          stack.push({ id: d, k: 0 })
+        stack.pop()
+        if (top.closed) unblock(top.id)
+        else {
+          for (const d of top.outs) {
+            if (!waiting.has(d)) waiting.set(d, new Set())
+            waiting.get(d).add(top.id)
+          }
         }
+        if (top.closed && stack.length) stack[stack.length - 1].closed = true
       }
     }
   } catch { /* keep what we have */ }
