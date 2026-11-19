@@ -249,16 +249,22 @@ model: <model id that wrote this file>
 created: 2026-07-04T03:10:00Z
 question: <the one question, verbatim>
 confidence: high                   # high|medium|low
-sources:                          # authority: the code itself, nothing else
+sources:                          # authority: the code, or read-only command output
   - src/auth/session.ts:10-48
   - package.json:12
+  - "cmd: <the read-only command run>"   # a non-code system only
 urls: []                          # only if the question required external docs
 ---
 
 Body sections, in order: \`## Answer\` (2–5 sentences, first), \`## Contracts\` (pasted
 signatures with locations), \`## Anchors\` (pasted snippets where changes land),
 \`## Conventions\`, \`## Risks\`, \`## Not verified\` (what confidence hinges on).
-Budget: ≤ 150 lines. Everything pasted is verbatim from the working tree.`,
+Budget: ≤ 150 lines. Authority is the code itself, or, for a system that is not code (a
+warehouse catalog, an object storage bucket, a running deployment), the output of a read-only
+command: paste the literal command and its sanitized output (no secrets, no customer rows,
+schema and counts only) and cite it in \`sources\` as \`cmd: <command>\`. Everything pasted is
+verbatim from the working tree or that output; a write command, or any command that changes
+anything, is never evidence.`,
   report: `Producer: cook / cook-heavy. Consumers: Planner (triage), Inspector (review).
 
 ---

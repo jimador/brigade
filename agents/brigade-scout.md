@@ -50,7 +50,8 @@ Your brief is a `brief`-type artifact: YAML frontmatter (`doc: brief`, `schema: 
 `dish`, `role: scout`, `model`, `created`, plus `question`, `confidence`, `sources`,
 `urls`) followed by the body sections below, in order — see the schema block in your
 dispatch prompt (from the brigade plugin's `SCHEMAS.md`). Every claim traces to a
-`sources` entry (`path:start-end`); budget ≤ 150 lines.
+`sources` entry: `path:start-end` for code, `cmd: <command>` for read-only command output;
+budget ≤ 150 lines.
 
 Optimize for the Planner pasting from it directly into work packets:
 
@@ -65,7 +66,12 @@ Optimize for the Planner pasting from it directly into work packets:
 - **Not verified** — what you did not confirm, and what the brief's confidence hinges on
   (the high/medium/low rating itself goes in the `confidence` frontmatter field).
 
-Everything pasted must be verbatim from the code — never reconstruct from memory. Any claim
+Everything pasted must be verbatim from the code — never reconstruct from memory. When the
+question is about a system that is not code (a warehouse catalog, an object storage bucket, a
+running deployment), the evidence is the output of a read-only command: paste the literal
+command you ran and its output, sanitized — no secrets, no customer rows, schema and counts
+only — and cite it in `sources` as `cmd: <command>`. Never run a write command, or any command
+that changes the system, to gather evidence; its output is never evidence. Any claim
 about a *set* — "every guarded procedure", "all the call sites", "the three places that do
 X" — ships the literal grep or glob that produced it, inline next to the list, so the Planner
 and the Cook can re-run it instead of trusting your count. A list without its enumerating
