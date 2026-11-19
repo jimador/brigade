@@ -9,7 +9,7 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-roadmap:*) Bash(${CLAU
 
 A roadmap is the plan above the dish: one initiative (a migration, a platform move, a product
 area) broken into a tree of epics, features, stories and tasks, stored as files under
-`.brigade/roadmaps/<slug>/` and published to the board as top-level tickets. You are the
+`<roadmap_dir>/<slug>/` and published to the board as top-level tickets. You are the
 Planner. You run a conversation in rounds; every change to the tree is a batch the operator
 confirms once, written to disk before it is applied.
 
@@ -20,12 +20,13 @@ skill). Work packets belong to dish time and are built from fresh research then.
 Helper scripts live at `${CLAUDE_PLUGIN_ROOT}/scripts/` and are not on PATH. Below,
 `brigade-roadmap`, `brigade-roadmap-view`, `brigade-coord`, `brigade-validate` and
 `brigade-config` mean `"${CLAUDE_PLUGIN_ROOT}/scripts/<name>"`. `<dir>` means the roadmap
-folder, `.brigade/roadmaps/<slug>/`.
+folder, `<roadmap_dir>/<slug>/`.
 
 Load the brigade skill's `SCHEMAS.md` (next to the brigade SKILL.md in this plugin) for the
 `roadmap`, `roadmap_node`, `roadmap_batch`, `brief`, `ticket` and `design_swag` types. Read
 `.brigade/config.md` for the source transport and status mapping; if it doesn't exist, run
-/brigade:onboard first.
+/brigade:onboard first. From the same file's `## Repo` section, read `roadmap_dir` once
+(default `.brigade/roadmaps`) and use it for every roadmap path in this session.
 
 Copy this checklist into your first message and check items off as they complete:
 
@@ -42,7 +43,7 @@ Resuming a roadmap skips straight to § Resume; a `refresh` runs § Roll-up only
 ## Arguments
 
 - `[slug]` — the roadmap's folder name: lowercase kebab-case, named for the initiative
-  (`warehouse-migration`), never for the process. Absent: list `.brigade/roadmaps/*/` and ask
+  (`warehouse-migration`), never for the process. Absent: list `<roadmap_dir>/*/` and ask
   which one, or ask for a new slug.
 - `resume` — continue an existing roadmap (§ Resume). Also the default when `<dir>/ROADMAP.md`
   already exists and no mode word was given.
@@ -232,8 +233,14 @@ Each round, in order:
    failure here is reported, never papered over.
 8. **Publish ready leaves** — leaves that pass `check` and have no ticket go into a
    publish batch (it may be the same batch, as trailing `publish` operations), confirmed and
-   applied the same way. A leaf whose `depends_on` names a published node carries that
-   node's ticket id in `blocked_by`.
+   applied the same way. Publish in dependency order: prerequisites first. A leaf whose
+   `depends_on` names a node that has no ticket yet waits for that node's batch. A leaf whose
+   `depends_on` names a published node carries that node's ticket id in `blocked_by`.
+   **Linking pass** — after every publish batch run
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-roadmap" links <dir> --board <board_dir>` on a
+   markdown board. Each line it prints is a missing `blocked_by` edit; propose those edits in
+   the same confirmed batch and re-run the check after apply. A non-markdown board keeps the
+   blockers in the Context marker line instead, and the re-run reads the tickets back.
 
 Repeat rounds while the operator wants to continue. One round, one confirmation.
 
@@ -254,8 +261,9 @@ Repeat rounds while the operator wants to continue. One round, one confirmation.
   `grilling` ones by asking the operator, one at a time; record each answer as a decision line.
 - **No work packets** — a leaf is a ticket, not a packet. File lists, wave plans and verify
   commands are built at dish time from fresh research; never write them into a node.
-- **Stop when asked or when done** — the roadmap is complete when
-  `brigade-roadmap check --complete <dir>` passes: no open branches, every inventory row
+- **Stop when asked or when done** — the roadmap is complete only when
+  `brigade-roadmap check --complete <dir>` exits 0 (parked branches count as incomplete):
+  no open branches, every inventory row
   covered or excluded, every accepted requirement satisfied by a leaf, every ready leaf
   published.
 

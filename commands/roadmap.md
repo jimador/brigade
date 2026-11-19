@@ -9,8 +9,10 @@ Arguments: $ARGUMENTS
 
 Run a **roadmap session** (not a cook).
 
-1. Resolve the slug (argument, or list `.brigade/roadmaps/*/` and ask). The roadmap folder is
-   `.brigade/roadmaps/<slug>/`.
+1. Read `roadmap_dir` from the `## Repo` section of `.brigade/config.md` (default
+   `.brigade/roadmaps`) once, here at the start. Resolve the slug (argument, or list
+   `<roadmap_dir>/*/` and ask). The roadmap folder is `<roadmap_dir>/<slug>/`; use that
+   everywhere, never a hard-coded path.
 2. Load `skills/roadmap/SKILL.md` and follow it.
 3. Acquire `roadmap-<slug>` as `claude` with `brigade-coord` before the first write; release
    it before every confirmation stop and before you finish.
