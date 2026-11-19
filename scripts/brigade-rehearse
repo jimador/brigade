@@ -622,6 +622,8 @@ function simpleCommands(line) {
       continue
     }
     if (c === ';' || c === '|' || c === '&' || c === '(' || c === ')') {
+      // A subshell or a function definition: the commands inside are not at the top level.
+      if (c === '(' || c === ')') commands.grouped = true
       let j = i + 1
       if (c !== '(' && c !== ')') while (j < line.length && /[;|&]/.test(line[j])) j++
       endCommand(i, j)
@@ -644,6 +646,17 @@ const OPAQUE = new Set(['for', 'case', 'select', 'function', 'npx', 'bunx', 'pnp
 // The shells whose script operand is checked, and whose `-n` is a syntax check.
 const SHELLS = new Set(['bash', 'sh'])
 const NODE_INLINE = new Set(['-e', '-p', '--eval', '--print'])
+// Words that open, continue or close an if, a loop, a case, a brace group or a function. A unit
+// with one of them leading a command is compound, and rehearsal does not probe it.
+const COMPOUND = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', 'for', 'case',
+  'esac', 'select', 'function', '{', '}'])
+// Programs that read and never write, so a command after one of them in the same unit still sees
+// the files the probe saw.
+const READ_ONLY = new Set(['echo', 'printf', 'test', '[', '[[', 'true', 'false', ':', 'cat', 'grep', 'egrep',
+  'fgrep', 'rg', 'ls', 'head', 'tail', 'wc', 'diff', 'cmp', 'stat', 'pwd', 'which', 'type'])
+const GIT_READ_ONLY = new Set(['diff', 'status', 'log', 'show', 'rev-parse', 'ls-files', 'grep'])
+const OUTPUT_REDIRECTS = new Set(['>', '>>', '>|', '&>', '&>>', '<>'])
+const DEVICES = new Set(['/dev/null', '/dev/stdout', '/dev/stderr'])
 const NODE_VALUE_OPTIONS = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader',
   '-C', '--conditions', '--input-type', '--env-file', '--title', '--watch-path', '--test-name-pattern',
   '--test-skip-pattern', '--test-reporter', '--test-reporter-destination', '--test-concurrency',
@@ -688,25 +701,7 @@ function fileArgs(program, args) {
   const operands = args.filter((a) => a.redirect === null)
   const option = (a) => /^[-+]./.test(a.text)
   const out = []
-  if (name === 'node') {
-    if (operands.some((a) => !a.dynamic && NODE_INLINE.has(a.text))) return []
-    const testRun = operands.some((a) => !a.dynamic && a.text === '--test')
-    let skipNext = false
-    for (const a of operands) {
-      if (skipNext) {
-        skipNext = false
-        continue
-      }
-      if (option(a)) {
-        if (NODE_VALUE_OPTIONS.has(a.text)) skipNext = true
-        continue
-      }
-      if (literalOperand(a)) out.push(a.text)
-      // Past the script, the words are the script's own arguments.
-      if (!testRun) break
-    }
-    return out
-  }
+  if (name === 'node') return nodeCommand(operands)?.files ?? []
   if (SHELLS.has(name)) {
     // `-c` (alone or in a flag cluster such as `-ec`) runs a string, and `-s` reads stdin.
     if (operands.some((a) => !a.dynamic && /^-[A-Za-z]*[cs][A-Za-z]*$/.test(a.text))) return []
@@ -727,6 +722,47 @@ function fileArgs(program, args) {
   return out
 }
 
+// Reads node's arguments the way node does, left to right: options until the first other word or
+// `--`, an option that takes a value eating the next word whatever it looks like, and then the
+// script, whose own arguments follow it (under `--test`, the test files). Returns node's options
+// and the files it runs, or null when it cannot tell: inline code, an expansion where an option
+// could be, or a cluster of short flags.
+function nodeCommand(operands) {
+  const options = []
+  let i = 0
+  for (; i < operands.length; i++) {
+    const a = operands[i]
+    if (a.dynamic) return null
+    if (a.text === '--') {
+      i++
+      break
+    }
+    if (!/^-./.test(a.text)) break
+    if (NODE_INLINE.has(a.text) || /^--(eval|print)=/.test(a.text) || /^-[A-Za-z]{2,}$/.test(a.text)) return null
+    options.push(a.text)
+    if (NODE_VALUE_OPTIONS.has(a.text)) i++
+  }
+  const rest = operands.slice(i)
+  const files = []
+  if (!options.includes('--test')) {
+    if (rest.length > 0 && literalOperand(rest[0])) files.push(rest[0].text)
+    return { options, files }
+  }
+  let skipNext = false
+  for (const a of rest) {
+    if (skipNext) {
+      skipNext = false
+      continue
+    }
+    if (/^[-+]./.test(a.text)) {
+      if (NODE_VALUE_OPTIONS.has(a.text)) skipNext = true
+      continue
+    }
+    if (literalOperand(a)) files.push(a.text)
+  }
+  return { options, files }
+}
+
 // `node --check` / `bash -n` segments: what they check, and how to name them.
 function syntaxCheck(seg) {
   const parts = commandParts(seg.words)
@@ -735,8 +771,11 @@ function syntaxCheck(seg) {
   // A rerun in a fresh shell would not see the block's variables, so such a segment is left alone.
   if (seg.words.some((w) => w.dynamic)) return null
   const flags = parts.args.map((a) => a.text)
-  if (name === 'node' && (flags.includes('--check') || flags.includes('-c'))) {
-    return { label: 'node --check', targets: fileArgs(parts.program, parts.args) }
+  if (name === 'node') {
+    // Only node's own options count: `node script.mjs --check` passes --check to the script.
+    const n = nodeCommand(parts.args)
+    if (n === null || !(n.options.includes('--check') || n.options.includes('-c'))) return null
+    return { label: 'node --check', targets: n.files }
   }
   if (SHELLS.has(name) && flags.includes('-n')) return { label: `${name} -n`, targets: fileArgs(parts.program, parts.args) }
   return null
@@ -839,16 +878,27 @@ function blockUnits(commands) {
 // What diagnosing a unit has to know about the moment it ran: the syntax checks it makes, the
 // programs it runs and the files it executes, up to a `cd` (past it, relative paths no longer
 // start where the unit did). `paths` and `programs` are what the probe before the unit looks up.
+//
+// Rehearsal is advisory, so a unit it cannot read with confidence gets no needs at all and is
+// never diagnosed: one that is not a plain run of simple commands at the top level of the block
+// (see topLevel), and every command after one that might write files, since the probe ran before
+// that write.
 function unitNeeds(unit) {
   const checks = []
   const runs = []
-  for (const seg of simpleCommands(unit)) {
-    const parts = commandParts(seg.words)
-    if (parts === 'stop') break
-    if (parts === null) continue
-    const s = syntaxCheck(seg)
-    if (s !== null) checks.push({ ...s, text: seg.text })
-    runs.push({ program: parts.program, files: fileArgs(parts.program, parts.args) })
+  const segs = simpleCommands(unit)
+  if (topLevel(unit, segs)) {
+    for (const seg of segs) {
+      const parts = commandParts(seg.words)
+      if (parts === 'stop' || parts === null) break
+      // A file this command's own output redirection names exists by the time it runs.
+      const written = new Set(outputTargets(seg))
+      const own = (ts) => ts.filter((t) => !written.has(t))
+      const s = syntaxCheck(seg)
+      if (s !== null && parses(`( ${seg.text}\n)`)) checks.push({ ...s, targets: own(s.targets), text: seg.text })
+      runs.push({ program: parts.program, files: own(fileArgs(parts.program, parts.args)) })
+      if (!readOnly(seg, parts)) break
+    }
   }
   const paths = new Set()
   const programs = new Set()
@@ -859,6 +909,34 @@ function unitNeeds(unit) {
     for (const t of r.files) paths.add(t)
   }
   return { checks, runs, paths: [...paths], programs: [...programs] }
+}
+
+// True when every command in the unit stands at the top level of the block: no if, loop, case,
+// brace group, subshell or function around or inside it, no heredoc, and one line once its
+// backslash continuations are joined.
+function topLevel(unit, segs) {
+  if (segs.grouped || unit.replace(/\\\n/g, '').includes('\n')) return false
+  for (const seg of segs) {
+    if (seg.words.some((w) => w.redirect !== null && w.redirect.startsWith('<<') && w.redirect !== '<<<')) return false
+    const lead = seg.words.find((w) => w.redirect === null && !(w.text === '!' && !w.quoted))
+    if (lead !== undefined && !lead.quoted && !lead.dynamic && COMPOUND.has(lead.text)) return false
+  }
+  return true
+}
+
+// The files a command's output redirections name, devices aside.
+function outputTargets(seg) {
+  return seg.words.filter((w) => OUTPUT_REDIRECTS.has(w.redirect) && !DEVICES.has(w.text)).map((w) => w.text)
+}
+
+// True when a command cannot create or change a file: a known reader with no output redirection,
+// or a syntax check.
+function readOnly(seg, parts) {
+  if (outputTargets(seg).length > 0) return false
+  const name = path.posix.basename(parts.program)
+  if (READ_ONLY.has(name)) return true
+  if (name === 'git') return parts.args.length > 0 && GIT_READ_ONLY.has(parts.args[0].text)
+  return syntaxCheck(seg) !== null
 }
 
 const shellQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`

@@ -836,3 +836,75 @@ test('runner2 E3: a quoted option is an option, never a missing file', () => {
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.deepEqual(lineStarting(r, 'verify '), [])
 })
+
+test('runner3 E1: a line inside an if or a heredoc runs unprobed and is never diagnosed', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  if node --check src/a.js; then echo ok; fi',
+    "  bash -n <<'EOF'",
+    '  if',
+    '  EOF',
+    '  for t in missing.test.mjs; do node --test missing.test.mjs; done',
+    '  { node --test missing.test.mjs; }',
+    '  ( node --test missing.test.mjs )',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [])
+})
+
+test('runner3 E2: a file an earlier command in the same line could create is not missing', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    "  printf 'x' > generated.mjs && node --test generated.mjs",
+    '  mkdir -p out; node --check out/gen.js',
+    '  make gen | node --test gen.test.mjs',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [])
+})
+
+test('runner3 E2 (adversarial): after read-only commands in the same line a missing file still reports', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  test -f src/a.js && node --test missing.test.mjs > /dev/null',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify UNRUNNABLE: one: test -f src/a.js && node --test missing.test.mjs > /dev/null: ' +
+      'missing.test.mjs does not exist on base and the packet does not create it',
+  ])
+})
+
+test('runner3 E3: an option value is never an option, and a script argument is never a node option', () => {
+  const root = makeRepo()
+  commitOnMain(root, { 'src/fail.mjs': 'process.exit(1)\n' })
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/fail.mjs', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    "  node --test --test-name-pattern '--eval' missing.test.mjs",
+    '  node src/fail.mjs "--check"',
+    '  node src/fail.mjs --eval',
+    '  node -- missing-script.mjs',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    "verify UNRUNNABLE: one: node --test --test-name-pattern '--eval' missing.test.mjs: " +
+      'missing.test.mjs does not exist on base and the packet does not create it',
+    'verify UNRUNNABLE: one: node -- missing-script.mjs: ' +
+      'missing-script.mjs does not exist on base and the packet does not create it',
+  ])
+})
