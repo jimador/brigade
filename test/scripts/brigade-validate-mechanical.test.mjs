@@ -31,6 +31,9 @@
 //   E2  a bracketed value keeps its capture until its own closer, so an enum field
 //       (severity, status, trigger) whose value is a collection is reported invalid.
 //   I1  warnings never change the exit code, and clean files get no new message.
+//   E3  the self-describing model placeholder the schema examples use warns, on any role.
+//   E4  the body budget leaves out a final `Transcribed verbatim by the workflow` line, so a
+//       brief at exactly its budget stays valid after the workflow writes it out.
 //
 // Each test writes throwaway files and runs the real validator on them.
 // Run with `node --test test/scripts/*.test.mjs`.
@@ -41,6 +44,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { VERDICT } from '../../scripts/lib/schemas.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const VALIDATE = path.join(ROOT, 'scripts', 'brigade-validate')
@@ -579,4 +583,68 @@ test('I1: clean files get no new message', () => {
     assert.equal(r.code, 0, r.out)
     assert.doesNotMatch(r.out, /^(warn|FAIL) /m, r.out)
   }
+})
+
+// The placeholder the schema examples carry, spelled out here so a change to the examples is
+// noticed rather than silently followed.
+const EXAMPLE_MODEL = '<model id that wrote this file>'
+
+test('E3: the schema examples still use the placeholder this test pins', () => {
+  assert.ok(VERDICT.doc.includes(`\nmodel: ${EXAMPLE_MODEL}\n`), VERDICT.doc)
+})
+
+test('E3: the example placeholder copied unchanged warns, on a verdict and on a cook report', () => {
+  const v = run('widget-verdict.md', verdict({ model: EXAMPLE_MODEL }))
+  assert.equal(v.code, 0, v.out)
+  assert.ok(v.out.includes(PLACEHOLDER(EXAMPLE_MODEL)), v.out)
+  const c = run('widget-cook.md', report({ model: EXAMPLE_MODEL }))
+  assert.equal(c.code, 0, c.out)
+  assert.ok(c.out.includes(PLACEHOLDER(EXAMPLE_MODEL)), c.out)
+})
+
+test('E3 adversarial: a real model id with words in it does not warn', () => {
+  const r = run('widget-verdict.md', verdict({ model: 'claude-opus-5-5' }))
+  assert.doesNotMatch(r.out, /schema placeholder/)
+})
+
+const FOOTER = "Transcribed verbatim by the workflow from the agent's return; the agent's own write was refused."
+
+// A brief whose body has exactly `n` non-empty lines, then whatever `tail` adds.
+function brief(n, tail = '') {
+  const lines = ['## Answer', ...Array.from({ length: n - 1 }, (_, i) => `Line ${i + 1}.`)]
+  return `---
+doc: brief
+schema: 1
+dish: local-1
+n: 1
+topic: widget
+role: scout
+model: claude-sonnet-5
+created: 2026-07-04T03:10:00Z
+question: Does the widget work?
+confidence: high
+sources: []
+---
+${lines.join('\n')}
+${tail}`
+}
+
+test('E4: a brief at exactly 150 lines stays valid after the transcription footer is added', () => {
+  const plain = run('1-widget.md', brief(150))
+  assert.equal(plain.code, 0, plain.out)
+  const r = run('1-widget.md', brief(150, `${FOOTER}\n`))
+  assert.equal(r.code, 0, r.out)
+  assert.doesNotMatch(r.out, /exceeds brief budget/)
+})
+
+test('E4: a brief over budget still fails with the footer, counted without it', () => {
+  const r = run('1-widget.md', brief(151, `${FOOTER}\n\n`))
+  assert.notEqual(r.code, 0, r.out)
+  assert.ok(r.out.includes('body 151 non-empty lines exceeds brief budget of 150'), r.out)
+})
+
+test('E4 adversarial: the footer text anywhere but the last line still counts', () => {
+  const r = run('1-widget.md', brief(150, `${FOOTER}\nOne more line.\n`))
+  assert.notEqual(r.code, 0, r.out)
+  assert.ok(r.out.includes('body 152 non-empty lines exceeds brief budget of 150'), r.out)
 })

@@ -816,13 +816,18 @@ function plainValue(fm, key) {
   return raw.replace(/\s+#.*$/, '').replace(/^(["'])(.*)\1$/, '$2').trim()
 }
 
-// W3: the schema examples say `model: haiku` and `model: <model>`. Haiku is a real cook model,
-// so a cook report may say it; on any other role it is almost always the example copied over.
+// The model value the schema examples carry, read from the verdict example so this check
+// follows the examples when they change instead of keeping its own copy.
+const EXAMPLE_MODEL = (VERDICT.doc.match(/^model: (.+)$/m) || [])[1]?.trim() ?? null
+
+// W3: the schema examples say `model: haiku`, `model: <model>` or the self-describing
+// placeholder above. Haiku is a real cook model, so a cook report may say it; on any other
+// role it is almost always the example copied over. The other two are never a real model.
 function checkPlaceholderModel(fm, warnings) {
   const model = plainValue(fm, 'model')
   if (model === null) return
   const role = plainValue(fm, 'role')
-  if (model === '<model>' || (model === 'haiku' && role !== 'cook')) {
+  if (model === '<model>' || model === EXAMPLE_MODEL || (model === 'haiku' && role !== 'cook')) {
     warnings.push(`model "${model}" looks like the schema placeholder; write the model that produced this file`)
   }
 }
@@ -1210,7 +1215,11 @@ function validateFile(file, ticketPath = null) {
   if (['report', 'verdict', 'plan_check', 'brief', 'analyst'].includes(doc)) checkPlaceholderModel(fm, warnings)
 
   if (contract.budget !== null) {
-    const bodyLines = body.filter((l) => l.trim() !== '').length
+    // The workflow adds one attribution line under a file it wrote out for an agent; that line
+    // is not the agent's text, so a body written right at its budget stays valid.
+    const nonEmpty = body.filter((l) => l.trim() !== '')
+    const footer = nonEmpty.length > 0 && nonEmpty[nonEmpty.length - 1].trimStart().startsWith('Transcribed verbatim by the workflow')
+    const bodyLines = nonEmpty.length - (footer ? 1 : 0)
     if (bodyLines > contract.budget) {
       problems.push(`body ${bodyLines} non-empty lines exceeds ${doc} budget of ${contract.budget}`)
     }

@@ -487,6 +487,9 @@ function usableReportDoc(doc, markdown) {
 // attribution line as the last line.
 const transcribedReport = (doc) => `${doc.endsWith('\n') ? doc : `${doc}\n`}${TRANSCRIBED_LINE}\n`
 
+// The first line of whatever an agent call rejected with, so a log entry stays one line.
+const firstLine = (err) => String((err && err.message) || err).split('\n')[0]
+
 // Asks a steward whether the review report is on disk. It only looks.
 const reportProbePrompt = (reportPath) => `
 You are the Steward checking whether a review report file is on disk. Only look: never
@@ -1370,15 +1373,28 @@ write) to that file, frontmatter included, in reportDoc.`,
     // The harness can refuse the steward's Write and leave no file. When the steward handed
     // back the report text unchanged, another steward looks for the file and, when it is
     // missing, one more writes that text out as is. Without usable text nothing extra runs.
+    // Either agent can end without a result, which rejects; the review is already done by
+    // then, so that is logged and the review still returns its findings and report path.
     if (writeResult && usableReportDoc(writeResult.reportDoc, markdown)) {
-      const probe = await agent(reportProbePrompt(reportPath), {
-        label: 'probe:review', phase: 'Report', schema: SCHEMA_FILE_PROBE, agentType: POLICY.agents.steward, effort: STEWARD.effort, model: POLICY.stewardModel,
-      })
-      if (probe && probe.exists === false) {
-        const written = await agent(reportTranscribePrompt(reportPath, writeResult.reportDoc), {
-          label: 'transcribe:review', phase: 'Report', schema: SCHEMA_STEWARD_RETURN, agentType: POLICY.agents.steward, effort: STEWARD.effort, model: POLICY.stewardModel,
+      let probe = null
+      try {
+        probe = await agent(reportProbePrompt(reportPath), {
+          label: 'probe:review', phase: 'Report', schema: SCHEMA_FILE_PROBE, agentType: POLICY.agents.steward, effort: STEWARD.effort, model: POLICY.stewardModel,
         })
-        blog('inspector', `Report: review report was missing on disk; transcribed the steward's returned text to ${reportPath}: ${written ? written.detail : 'transcriber returned no result'}`)
+      } catch (err) {
+        blog('inspector', `Report: could not check ${reportPath} on disk, so it was not transcribed: ${firstLine(err)}`)
+      }
+      if (probe && probe.exists === false) {
+        let written = null
+        let error = null
+        try {
+          written = await agent(reportTranscribePrompt(reportPath, writeResult.reportDoc), {
+            label: 'transcribe:review', phase: 'Report', schema: SCHEMA_STEWARD_RETURN, agentType: POLICY.agents.steward, effort: STEWARD.effort, model: POLICY.stewardModel,
+          })
+        } catch (err) {
+          error = firstLine(err)
+        }
+        blog('inspector', `Report: review report was missing on disk; transcribing the steward's returned text to ${reportPath}: ${error || (written ? written.detail : 'transcriber returned no result')}`)
       }
     }
 

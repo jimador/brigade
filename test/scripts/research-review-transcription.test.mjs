@@ -7,6 +7,11 @@
 //   E2a the report-write steward is asked for its text in reportDoc
 //   E2  a report the steward returned but did not write is transcribed as given
 //   E3  no usable returned text means no probe and no transcriber, so nothing changes
+// Hardening, one test group per guarantee:
+//   E1  a probe or transcriber that ends without a result never aborts research or review: the
+//       run keeps its briefs or its report path and logs one line saying what happened
+//   E2  the brief transcriber creates the briefs folder first, and a transcribe that fails
+//       counts the brief as failed rather than delivered
 // Run with `node --test test/scripts/*.test.mjs`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -47,6 +52,7 @@ function fill(schema) {
 // that call's result; anything unmatched gets a schema-filled answer. Every call is recorded.
 async function run(src, args, answers) {
   const calls = []
+  const logs = []
   const agent = async (prompt, opts) => {
     calls.push({ label: opts.label, prompt, schema: opts.schema, agentType: opts.agentType })
     for (const [prefix, fn] of Object.entries(answers)) {
@@ -55,8 +61,8 @@ async function run(src, args, answers) {
     return fill(opts.schema)
   }
   const fn = new Function('args', 'phase', 'log', 'agent', 'parallel', 'pipeline', 'workflow', src)
-  const result = await fn(args, () => {}, () => {}, agent, async (t) => Promise.all(t.map((f) => f())), undefined, undefined)
-  return { result, calls, labels: calls.map((c) => c.label) }
+  const result = await fn(args, () => {}, (m) => logs.push(String(m)), agent, async (t) => Promise.all(t.map((f) => f())), undefined, undefined)
+  return { result, calls, logs, labels: calls.map((c) => c.label) }
 }
 
 const researchArgs = {
@@ -165,5 +171,87 @@ test('E3: review without usable report text dispatches no probe and no transcrib
     assert.ok(labels.includes('report-write'))
     assert.ok(!labels.some((l) => l === 'probe:review' || l.startsWith('transcribe:')), labels.join(','))
     assert.equal(result.reportPath, REPORT_PATH)
+  }
+})
+
+// An agent call that ends without StructuredOutput rejects, the way the runtime's agent() does.
+const reject = (label) => () => Promise.reject(new Error(`${label} ended without StructuredOutput\nsecond line`))
+// The log lines that mention a label, each of which must be a single line.
+const diagnostic = (logs, text) => {
+  const hits = logs.filter((l) => l.includes(text))
+  assert.equal(hits.length, 1, logs.join('\n'))
+  assert.ok(!hits[0].includes('\n'), `diagnostic is one line: ${hits[0]}`)
+  return hits[0]
+}
+
+test('E1 recovery: a brief probe that rejects keeps the scout\'s brief and logs one line', async () => {
+  const { result, labels, logs } = await run(RESEARCH, researchArgs, {
+    'scout:': scout({ briefDoc: BRIEF_DOC }),
+    'probe:brief:': reject('probe:brief:1'),
+  })
+  assert.deepEqual(labels, ['scout:t', 'probe:brief:1'])
+  assert.equal(result.failed, 0)
+  assert.equal(result.briefs.length, 1)
+  assert.equal(result.briefs[0].briefPath, BRIEF_PATH)
+  assert.match(diagnostic(logs, 'probe:brief:1 ended without StructuredOutput'), /#1 \(t\)/)
+})
+
+test('E1 recovery: a brief transcriber that rejects does not abort research and logs one line', async () => {
+  const { result, labels, logs } = await run(RESEARCH, researchArgs, {
+    'scout:': scout({ briefDoc: BRIEF_DOC }),
+    'probe:brief:': () => ({ exists: false, detail: 'No such file' }),
+    'transcribe:brief:': reject('transcribe:brief:1'),
+  })
+  assert.deepEqual(labels, ['scout:t', 'probe:brief:1', 'transcribe:brief:1'])
+  assert.equal(result.failed, 1)
+  assert.match(diagnostic(logs, 'transcribe:brief:1 ended without StructuredOutput'), /#1 \(t\)/)
+})
+
+test('E1 recovery: a report probe that rejects keeps the completed review and its report path', async () => {
+  const { result, logs } = await run(REVIEW, reviewArgs, {
+    'steward-resolve': resolve,
+    'report-write': (prompt) => ({ ok: false, detail: 'Write refused', reportDoc: markdownIn(prompt) }),
+    'probe:review': reject('probe:review'),
+  })
+  assert.equal(result.reportPath, REPORT_PATH)
+  assert.ok(Array.isArray(result.findings))
+  assert.ok(result.counts)
+  diagnostic(logs, 'probe:review ended without StructuredOutput')
+})
+
+test('E1 recovery: a report transcriber that rejects keeps the completed review and its report path', async () => {
+  const { result, labels, logs } = await run(REVIEW, reviewArgs, {
+    'steward-resolve': resolve,
+    'report-write': (prompt) => ({ ok: false, detail: 'Write refused', reportDoc: markdownIn(prompt) }),
+    'probe:review': () => ({ exists: false, detail: 'No such file' }),
+    'transcribe:review': reject('transcribe:review'),
+  })
+  assert.ok(labels.includes('transcribe:review'))
+  assert.equal(result.reportPath, REPORT_PATH)
+  assert.ok(Array.isArray(result.findings))
+  diagnostic(logs, 'transcribe:review ended without StructuredOutput')
+})
+
+test('E2 directory: the brief transcriber creates the briefs folder before writing', async () => {
+  const { calls } = await run(RESEARCH, researchArgs, {
+    'scout:': scout({ briefDoc: BRIEF_DOC }),
+    'probe:brief:': () => ({ exists: false, detail: 'No such file' }),
+    'transcribe:brief:': () => ({ ok: true, detail: 'written' }),
+  })
+  const t = calls.find((c) => c.label === 'transcribe:brief:1')
+  assert.ok(t.prompt.includes(`mkdir -p "$(dirname '${BRIEF_PATH}')" && cat > '${BRIEF_PATH}' <<'BRIGADE_BRIEF_EOF'\n`), t.prompt)
+})
+
+test('E2 directory: a transcribe that fails counts the brief as failed, not delivered', async () => {
+  for (const answer of [() => ({ ok: false, detail: 'No such file or directory' }), () => null]) {
+    const { result, logs } = await run(RESEARCH, researchArgs, {
+      'scout:': scout({ briefDoc: BRIEF_DOC }),
+      'probe:brief:': () => ({ exists: false, detail: 'No such file' }),
+      'transcribe:brief:': answer,
+    })
+    assert.deepEqual(result.briefs, [])
+    assert.equal(result.failed, 1)
+    assert.deepEqual(result.unreported, [{ n: 1, topic: 't', expectedBriefPath: BRIEF_PATH }])
+    assert.ok(logs.some((l) => l.includes('#1 (t)') && /transcri/.test(l) && /fail/.test(l)), logs.join('\n'))
   }
 })
