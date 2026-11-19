@@ -1,0 +1,381 @@
+#!/usr/bin/env node
+// brigade-roadmap-view — renders a roadmap directory as one self-contained HTML page with four
+// sections reached from a top nav: Outline (the node tree), Dependencies (an epic graph, then
+// one graph per epic), Boards (each epic's leaves in board lanes) and Coverage (traceability
+// gaps, questions, cycles, missing access, met requirements). Anything wrong with the roadmap is
+// listed at the top and the page still renders.
+//
+// The roadmap is read through scripts/lib/roadmap.mjs, graphs are drawn by scripts/lib/dag.mjs,
+// and the result is placed into the fixed template skills/roadmap/templates/roadmap-view.html.
+// No clock, no network, no scripts in the output: the same roadmap always gives the same bytes.
+//
+// Usage:
+//   brigade-roadmap-view <dir> [--out <path>]
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseRoadmap, compareIds, ancestors, coverage, findCycles, danglingRefs, openQuestionsFor } from './lib/roadmap.mjs'
+import { esc, renderDag } from './lib/dag.mjs'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const TEMPLATE = path.resolve(__dirname, '..', 'skills', 'roadmap', 'templates', 'roadmap-view.html')
+
+// Board lanes, left to right. A leaf with no ticket has not been published to the board yet, so
+// it sits in the last lane whatever its status says.
+const LANES = [
+  ['backlog', 'Backlog'], ['todo', 'Todo'], ['in_progress', 'In progress'], ['in_review', 'In review'],
+  ['done', 'Done'], ['blocked', 'Blocked'], ['unpublished', 'Unpublished'],
+]
+// Board statuses folded into a lane. Anything not listed (an empty or unknown status) is backlog.
+const LANE_OF = new Map([
+  ['backlog', 'backlog'], ['scoping', 'backlog'], ['design', 'backlog'],
+  ['todo', 'todo'],
+  ['in_progress', 'in_progress'], ['rework', 'in_progress'],
+  ['in_review', 'in_review'], ['merging', 'in_review'],
+  ['done', 'done'],
+  ['blocked', 'blocked'],
+])
+const STATUS_CLASS = new Map([
+  ['done', 'done'], ['met', 'done'],
+  ['in_progress', 'active'], ['rework', 'active'], ['in_review', 'active'], ['merging', 'active'],
+  ['todo', 'todo'], ['backlog', 'todo'], ['scoping', 'todo'], ['design', 'todo'],
+  ['blocked', 'blocked'], ['unmet', 'blocked'],
+])
+// The group of nodes that never reach a root: a parent that does not exist, or a parent loop.
+// No node id can contain a space, so this key never collides with one.
+const UNPLACED = ' unplaced'
+
+function usage() {
+  console.error('usage: brigade-roadmap-view <dir> [--out <path>]')
+  return 2
+}
+
+function parseArgs(argv) {
+  let out = null
+  const positional = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--out') {
+      out = argv[++i]
+      if (out === undefined || out === '' || out.startsWith('--')) return null
+    } else if (a.startsWith('--')) {
+      return null
+    } else {
+      positional.push(a)
+    }
+  }
+  if (positional.length !== 1) return null
+  return { out, dir: positional[0] }
+}
+
+const str = (v) => (typeof v === 'string' ? v : '')
+const statusKey = (s) => str(s).trim().toLowerCase().replace(/[\s-]+/g, '_')
+const statusClass = (s) => STATUS_CLASS.get(s) ?? 'other'
+const orDash = (text) => (text === '' ? '-' : text)
+const pill = (s) => `<span class="pill ${statusClass(s)}">${esc(orDash(s))}</span>`
+const ids = (list) => (list.length ? list.map((x) => `<span class="s">${esc(x)}</span>`).join(', ') : '-')
+const table = (cls, head, rows, span) => `<div class="scroll"><table class="${cls}"><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>`
+  + (rows.length ? rows.join('') : `<tr><td colspan="${span ?? head.length}" class="muted">none</td></tr>`)
+  + '</tbody></table></div>'
+const row = (cellsHtml) => `<tr>${cellsHtml.join('')}</tr>`
+const code = (text) => `<td class="code">${esc(orDash(text))}</td>`
+const td = (text) => `<td>${esc(orDash(text))}</td>`
+
+// Everything the sections share, worked out once from the parsed model.
+function analyse(model) {
+  const all = Object.keys(model.nodes).sort(compareIds)
+  const node = (id) => model.nodes[id]
+  const cov = coverage(model)
+  const derived = (id) => cov.parentStatus[id] ?? statusKey(node(id).status)
+  const roots = all.filter((id) => node(id).parent === '')
+  const kids = new Map(all.map((id) => [id, []]))
+  for (const id of all) if (kids.has(node(id).parent)) kids.get(node(id).parent).push(id)
+  // Each node's group is the root at the top of its parent chain, or UNPLACED when the chain
+  // ends at a missing parent or loops.
+  const groupOf = new Map()
+  for (const id of all) {
+    const chain = [id, ...ancestors(model, id)]
+    const top = chain[chain.length - 1]
+    groupOf.set(id, node(top).parent === '' ? top : UNPLACED)
+  }
+  const groups = [...roots]
+  if (all.some((id) => groupOf.get(id) === UNPLACED)) groups.push(UNPLACED)
+  const members = new Map(groups.map((g) => [g, all.filter((id) => groupOf.get(id) === g)]))
+  const leaves = all.filter((id) => node(id).drill === 'leaf')
+  return { model, all, node, cov, derived, roots, kids, groupOf, groups, members, leaves }
+}
+
+const groupLabel = (a, g) => (g === UNPLACED ? 'Unplaced' : `${g} ${a.node(g).title}`.trim())
+const groupAnchor = (g) => (g === UNPLACED ? 'unplaced' : g)
+
+// ---------------------------------------------------------------------------------------------
+// Problems: parse errors, references to things that do not exist, and cycles.
+
+function problemLines(a, cycles) {
+  const lines = [...a.model.errors]
+  for (const d of danglingRefs(a.model)) lines.push(`${d.node}: ${d.field} names ${d.ref}, which does not exist`)
+  for (const c of cycles) lines.push(`${c.kind} cycle: ${c.path.join(' -> ')}`)
+  return lines
+}
+
+function renderProblems(lines) {
+  if (lines.length === 0) return ''
+  return `<section class="card warn" id="problems"><h2>Problems (${lines.length})</h2><ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></section>`
+}
+
+// ---------------------------------------------------------------------------------------------
+// Outline: one <details> per node, children nested inside their parent.
+
+function renderNode(a, id, depth, shown) {
+  if (shown.has(id)) return `<p class="muted loop">${esc(id)} is already shown above (parent loop)</p>`
+  shown.add(id)
+  const n = a.node(id)
+  const facts = [
+    ['Level', esc(orDash(n.level))],
+    ['Drill', esc(orDash(n.drill))],
+    ['Requirements', ids(n.satisfies)],
+    ['Inventory', ids(n.covers)],
+    ['Ticket', esc(orDash(n.ticket))],
+  ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')
+  const children = a.kids.get(id).map((c) => renderNode(a, c, depth + 1, shown)).join('')
+  return `<details class="node"${depth < 2 ? ' open' : ''}><summary>`
+    + `<span class="code">${esc(id)}</span> <span class="title">${esc(orDash(n.title))}</span> ${pill(a.derived(id))}`
+    + `</summary><dl class="facts small">${facts}</dl>${children}</details>`
+}
+
+function renderOutline(a) {
+  if (a.all.length === 0) return '<p class="muted">No nodes yet.</p>'
+  const shown = new Set()
+  let html = a.roots.map((id) => renderNode(a, id, 0, shown)).join('')
+  const rest = a.members.get(UNPLACED) ?? []
+  if (rest.length) {
+    // Subtrees hanging off a missing parent first, then whatever a parent loop left over.
+    const starts = rest.filter((id) => !a.model.nodes[a.node(id).parent])
+    let body = starts.map((id) => renderNode(a, id, 0, shown)).join('')
+    for (const id of rest) if (!shown.has(id)) body += renderNode(a, id, 0, shown)
+    html += `<h3 id="outline-unplaced">Unplaced</h3><p class="muted">These nodes do not reach an epic: their parent is missing or loops.</p>${body}`
+  }
+  return html
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dependencies: the epic graph with cross-epic edges added up, then one graph per epic.
+
+function dagNotes(drawn) {
+  let out = ''
+  if (drawn.hidden > 0) out += `<p class="dag-note muted">${drawn.hidden} implied ${drawn.hidden === 1 ? 'dependency' : 'dependencies'} not drawn.</p>`
+  if (drawn.cycles > 0) out += `<p class="dag-note cycle-note">${drawn.cycles} ${drawn.cycles === 1 ? 'edge lies' : 'edges lie'} on a dependency cycle, drawn dashed.</p>`
+  return out
+}
+
+function renderDependencies(a) {
+  if (a.groups.length === 0) return '<p class="muted">No nodes yet.</p>'
+  // Every dependency between two known nodes, as [before, after].
+  const deps = []
+  for (const id of a.all) for (const d of a.node(id).depends_on) if (a.model.nodes[d]) deps.push([d, id])
+
+  const cross = new Map()
+  for (const [d, id] of deps) {
+    const from = a.groupOf.get(d)
+    const to = a.groupOf.get(id)
+    if (from === to) continue
+    const key = `${from}\n${to}`
+    if (!cross.has(key)) cross.set(key, { from, to, pairs: [] })
+    cross.get(key).pairs.push(`${id} on ${d}`)
+  }
+  const epicGraph = {
+    nodes: a.groups.map((g) => {
+      const leafCount = a.members.get(g).filter((id) => a.node(id).drill === 'leaf').length
+      const status = g === UNPLACED ? '' : a.derived(g)
+      return {
+        id: g,
+        label: g === UNPLACED ? 'Unplaced' : g,
+        cls: g === UNPLACED ? 'other' : statusClass(status),
+        meta: `${g === UNPLACED ? 'no epic' : orDash(status)} · ${leafCount} ${leafCount === 1 ? 'leaf' : 'leaves'}`,
+        data: { id: groupAnchor(g) },
+      }
+    }),
+    edges: [...cross.values()].map((c) => [c.from, c.to]),
+  }
+  const epicDrawn = renderDag(epicGraph, { ariaLabel: `Dependencies between ${a.groups.length} epics` })
+  const crossRows = [...cross.values()].map((c) => row([
+    `<td>${esc(groupLabel(a, c.from))}</td>`, `<td>${esc(groupLabel(a, c.to))}</td>`,
+    `<td>${c.pairs.length}</td>`, `<td class="mono">${ids(c.pairs)}</td>`,
+  ]))
+  let html = '<h3>Epics</h3>'
+    + `<div class="card dag-scroll">${epicDrawn.svg}</div>${dagNotes(epicDrawn)}`
+    + table('cross', ['From epic', 'To epic', 'Dependencies', 'Which'], crossRows)
+
+  for (const g of a.groups) {
+    const inGroup = new Set(a.members.get(g))
+    const local = deps.filter(([d, id]) => inGroup.has(d) && inGroup.has(id))
+    const ends = new Set(local.flat())
+    const drawnIds = a.members.get(g).filter((id) => a.node(id).drill === 'leaf' || ends.has(id))
+    html += `<h3 id="deps-${esc(groupAnchor(g))}">${esc(groupLabel(a, g))}</h3>`
+    if (drawnIds.length === 0) {
+      html += '<p class="muted">No leaves or dependencies yet.</p>'
+      continue
+    }
+    const drawn = renderDag({
+      nodes: drawnIds.map((id) => {
+        const st = a.derived(id)
+        return { id, label: `${id} ${a.node(id).title}`.trim(), cls: statusClass(st), meta: `${orDash(a.node(id).level)} · ${orDash(st)}` }
+      }),
+      edges: local,
+    }, { ariaLabel: `Dependencies inside ${g === UNPLACED ? 'the unplaced nodes' : g}` })
+    html += `<div class="card dag-scroll">${drawn.svg}</div>${dagNotes(drawn)}`
+    const outside = deps.filter(([d, id]) => inGroup.has(id) && !inGroup.has(d))
+    if (outside.length) {
+      html += `<p class="dag-note muted">Also depends on other epics: ${outside.map(([d, id]) => `${esc(id)} on ${esc(d)} (${esc(groupLabel(a, a.groupOf.get(d)))})`).join('; ')}.</p>`
+    }
+  }
+  return html
+}
+
+// ---------------------------------------------------------------------------------------------
+// Boards: each epic's leaves in board lanes.
+
+function renderBoards(a) {
+  const head = `<div class="lane-head">${LANES.map(([, name]) => `<div>${esc(name)}</div>`).join('')}</div>`
+  let html = ''
+  for (const g of a.groups) {
+    const leaves = a.members.get(g).filter((id) => a.node(id).drill === 'leaf')
+    html += `<h3 id="board-${esc(groupAnchor(g))}">${esc(groupLabel(a, g))}</h3>`
+    if (leaves.length === 0) {
+      html += '<p class="muted">No leaves yet.</p>'
+      continue
+    }
+    const lanes = new Map(LANES.map(([key]) => [key, []]))
+    for (const id of leaves) {
+      const n = a.node(id)
+      const st = statusKey(n.status)
+      const lane = n.ticket.trim() === '' ? 'unpublished' : LANE_OF.get(st) ?? 'backlog'
+      lanes.get(lane).push(`<div class="ticket ${statusClass(st)}"><div class="code">${esc(id)}</div>`
+        + `<div>${esc(orDash(n.title))}</div>`
+        + `<div class="muted small">${esc(orDash(n.ticket))} · ${esc(orDash(st))}</div></div>`)
+    }
+    html += `<div class="board-scroll"><div class="board">${head}<div class="lanes">`
+      + LANES.map(([key, name]) => `<div class="lane" aria-label="${esc(name)}">${lanes.get(key).join('')}</div>`).join('')
+      + '</div></div></div>'
+  }
+  return html || '<p class="muted">No nodes yet.</p>'
+}
+
+// ---------------------------------------------------------------------------------------------
+// Coverage: traceability gaps and the rest of what keeps the roadmap from being done.
+
+function renderCoverage(a, cycles) {
+  const m = a.model
+  const inv = new Map()
+  for (const r of m.inventory) if (r.id && !inv.has(r.id)) inv.set(r.id, r)
+  const req = new Map()
+  for (const r of m.requirements) if (r.id && !req.has(r.id)) req.set(r.id, r)
+
+  const uncovered = a.cov.uncoveredInventory.map((id) => {
+    const r = inv.get(id) ?? {}
+    return row([code(id), code(str(r.system)), td(str(r.thing)), td(str(r.evidence))])
+  })
+  const noLeaf = a.cov.unsatisfiedRequirements.map((id) => {
+    const r = req.get(id) ?? {}
+    return row([code(id), td(str(r.kind)), td(str(r.statement)), td(str(r.status))])
+  })
+  const noReq = a.leaves.filter((id) => a.node(id).satisfies.length === 0).map((id) => {
+    const n = a.node(id)
+    return row([code(id), td(n.title), `<td class="mono">${ids(n.covers)}</td>`,
+      n.covers.length ? '<td>no</td>' : '<td class="bad">yes</td>'])
+  })
+  const questions = m.questions.map((q) => {
+    const blocks = a.all.filter((id) => openQuestionsFor(m, id).some((x) => x.line === q.line))
+    return row([code(q.name), td([q.type, q.mode].filter(Boolean).join(' · ')), td(q.text),
+      td(q.blocked_by), `<td class="mono">${ids(blocks)}</td>`])
+  })
+  const cycleRows = cycles.map((c) => row([td(c.kind), `<td class="mono">${esc(c.path.join(' -> '))}</td>`]))
+  const access = m.systems.filter((s) => statusKey(s.access) !== 'ok').map((s) =>
+    row([code(str(s.id)), td(str(s.kind)), td(str(s.locator)), td(str(s.access))]))
+  const met = m.requirements.filter((r) => r.id).map((r) => {
+    const by = a.leaves.filter((id) => a.node(id).satisfies.includes(r.id))
+    const verdict = a.cov.requirementStatus[r.id] ?? 'unmet'
+    return row([code(r.id), td(str(r.kind)), td(str(r.statement)), td(str(r.status)),
+      `<td class="mono">${ids(by)}</td>`, `<td>${pill(verdict)}</td>`])
+  })
+
+  return '<h3 id="cov-inventory">Inventory nobody covers</h3>'
+    + table('cov', ['Id', 'System', 'Thing', 'Evidence'], uncovered)
+    + '<h3 id="cov-requirements">Accepted requirements with no leaf</h3>'
+    + table('cov', ['Id', 'Kind', 'Statement', 'Status'], noLeaf)
+    + '<h3 id="cov-leaves">Leaves with no requirement</h3>'
+    + table('cov', ['Leaf', 'Title', 'Covers inventory', 'Untraced'], noReq)
+    + '<h3 id="cov-questions">Open questions</h3>'
+    + table('cov', ['Question', 'Type', 'Text', 'Blocked by', 'Blocks'], questions)
+    + '<h3 id="cov-cycles">Cycles</h3>'
+    + table('cov', ['Kind', 'Path'], cycleRows)
+    + '<h3 id="cov-access">Systems with missing access</h3>'
+    + table('cov', ['Id', 'Kind', 'Locator', 'Access'], access)
+    + '<h3 id="cov-met">Requirements met</h3>'
+    + table('cov', ['Id', 'Kind', 'Statement', 'Status', 'Leaves', 'Met'], met)
+}
+
+function renderFacts(a, problems) {
+  const r = a.model.roadmap
+  const reqIds = Object.keys(a.cov.requirementStatus)
+  const metCount = reqIds.filter((id) => a.cov.requirementStatus[id] === 'met').length
+  return [
+    ['Mode', orDash(r.mode)], ['Focus', orDash(r.focus)], ['Max depth', orDash(r.max_depth)],
+    ['Epics', String(a.roots.length)], ['Nodes', String(a.all.length)], ['Leaves', String(a.leaves.length)],
+    ['Requirements met', `${metCount} of ${reqIds.length}`], ['Batches', String(a.model.batches.length)],
+    ['Problems', String(problems)],
+  ].map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')
+}
+
+function render(model, template) {
+  const a = analyse(model)
+  const cycles = findCycles(model)
+  const problems = problemLines(a, cycles)
+  const title = str(model.roadmap.frontmatter.title).trim()
+  const values = {
+    TITLE: esc(title ? `Roadmap: ${title}` : 'Roadmap'),
+    FACTS: renderFacts(a, problems.length),
+    PROBLEMS: renderProblems(problems),
+    OUTLINE: renderOutline(a),
+    DEPENDENCIES: renderDependencies(a),
+    BOARDS: renderBoards(a),
+    COVERAGE: renderCoverage(a, cycles),
+  }
+  // One pass over the template: substituted text is never scanned for further placeholders.
+  return template.replace(/\{\{([A-Z_]+)\}\}/g, (all, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : all)
+}
+
+function main(argv) {
+  const args = parseArgs(argv)
+  if (!args) return usage()
+  const dir = path.resolve(args.dir)
+  let isDir = false
+  try {
+    isDir = fs.statSync(dir).isDirectory()
+  } catch { /* reported below */ }
+  if (!isDir) {
+    console.error(`not a roadmap directory: ${dir}`)
+    return 2
+  }
+
+  let template
+  try {
+    template = fs.readFileSync(TEMPLATE, 'utf8')
+  } catch (err) {
+    console.error(`could not read template ${TEMPLATE}: ${err.message}`)
+    return 2
+  }
+
+  const outPath = path.resolve(args.out ?? path.join(dir, 'roadmap.html'))
+  try {
+    fs.writeFileSync(outPath, render(parseRoadmap(dir), template))
+  } catch (err) {
+    console.error(`could not write ${outPath}: ${err.message}`)
+    return 2
+  }
+  console.log(outPath)
+  return 0
+}
+
+process.exitCode = main(process.argv.slice(2))

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --fg: #1d2330; --muted: #5b6372; --line: #d5d9e0;
+  --done: #2e7d32; --active: #1565c0; --todo: #5f6673; --blocked: #b3261e; --other: #6a4fb3;
+  --edge: #8a93a3; --cycle: #b3261e; --on-status: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c; --card: #1d222a; --fg: #e6e9ef; --muted: #9aa3b2; --line: #343b47;
+    --done: #3f9d44; --active: #3b82d6; --todo: #6b7383; --blocked: #d64c43; --other: #8b6fd6;
+    --edge: #6f7889; --cycle: #ff6b61; --on-status: #ffffff;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.4rem; margin: 0 0 12px; overflow-wrap: anywhere; }
+h2 { font-size: 1.15rem; margin: 32px 0 10px; scroll-margin-top: 56px; }
+h3 { font-size: 1rem; margin: 22px 0 8px; scroll-margin-top: 56px; overflow-wrap: anywhere; }
+nav.top { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
+nav.top a { color: var(--active); font-weight: 600; text-decoration: none; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 0; }
+.facts div { min-width: 0; }
+.facts dt { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+.facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.facts.small { gap: 4px 18px; margin: 4px 0 6px 18px; font-size: .85rem; }
+.facts.small dd { font-weight: 400; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.warn { border-color: var(--blocked); margin-top: 12px; }
+.warn h2 { margin: 0; color: var(--blocked); }
+.warn ul { margin: 6px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
+.pill { display: inline-block; padding: 1px 8px; margin: 2px 4px 2px 0; border-radius: 999px; font-size: .8rem; color: var(--on-status); background: var(--other); white-space: nowrap; }
+.pill.done { background: var(--done); }
+.pill.active { background: var(--active); }
+.pill.todo { background: var(--todo); }
+.pill.blocked { background: var(--blocked); }
+details.node { margin: 2px 0 2px 14px; padding-left: 8px; border-left: 1px solid var(--line); }
+details.node > summary { cursor: pointer; overflow-wrap: anywhere; }
+.loop { margin: 2px 0 2px 22px; font-size: .85rem; }
+.code, td.code, td.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em; overflow-wrap: anywhere; }
+.s { white-space: nowrap; }
+.muted { color: var(--muted); }
+.small { font-size: .8rem; }
+.dag { display: block; width: 100%; height: auto; }
+.dag-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.dag .arrow { fill: var(--edge); }
+.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
+.dag .edge.cycle { stroke: var(--cycle); stroke-width: 2.5; stroke-dasharray: 6 4; }
+.dag .node rect { stroke: none; fill: var(--other); }
+.dag .node.done rect { fill: var(--done); }
+.dag .node.active rect { fill: var(--active); }
+.dag .node.todo rect { fill: var(--todo); }
+.dag .node.blocked rect { fill: var(--blocked); }
+.dag text { fill: var(--on-status); font-family: inherit; }
+.dag .slug { font-size: 14px; font-weight: 600; }
+.dag .meta { font-size: 12px; opacity: .92; }
+.dag .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.dag-note { margin: 6px 0; font-size: .85rem; }
+.cycle-note { color: var(--cycle); font-weight: 600; }
+.board-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.board { min-width: 980px; }
+.lane-head, .lanes { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.lane-head div { color: var(--muted); font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 0 4px 4px; }
+.lane { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 6px; min-height: 60px; }
+.ticket { border-left: 4px solid var(--other); background: var(--bg); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: .85rem; overflow-wrap: anywhere; }
+.ticket.done { border-left-color: var(--done); }
+.ticket.active { border-left-color: var(--active); }
+.ticket.todo { border-left-color: var(--todo); }
+.ticket.blocked { border-left-color: var(--blocked); }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+.cov, .cross { min-width: 560px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+td.bad { color: var(--blocked); font-weight: 700; }
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Sections">
+  <a href="#outline">Outline</a>
+  <a href="#dependencies">Dependencies</a>
+  <a href="#boards">Boards</a>
+  <a href="#coverage">Coverage</a>
+</nav>
+<main>
+  <h1>{{TITLE}}</h1>
+  <dl class="card facts">{{FACTS}}</dl>
+  {{PROBLEMS}}
+
+  <section id="outline">
+    <h2>Outline</h2>
+    {{OUTLINE}}
+  </section>
+
+  <section id="dependencies">
+    <h2>Dependencies</h2>
+    {{DEPENDENCIES}}
+  </section>
+
+  <section id="boards">
+    <h2>Boards</h2>
+    {{BOARDS}}
+  </section>
+
+  <section id="coverage">
+    <h2>Coverage</h2>
+    {{COVERAGE}}
+  </section>
+</main>
+</body>
+</html>
