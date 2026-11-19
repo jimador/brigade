@@ -49,6 +49,16 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.53.0
+
+- touches: none
+- what: `/brigade:roadmap` turns an intent into a board of epics and drills it down breadth-first or
+  depth-first into cookable tickets, with roadmap, node and batch artifacts the validator checks;
+  `brigade-roadmap` checks the graph (cycles, readiness, inventory and requirement coverage) and gives the
+  next batch; `brigade-roadmap-view` renders one offline HTML page (outline, dependencies, per-epic boards,
+  coverage); markdown boards carry roadmap, parent, blocked-by and satisfies fields; the plan view's
+  graph layout is shared in `scripts/lib/dag.mjs`; config gains `roadmap_dir`.
+
 ### 0.52.0
 
 - touches: none
