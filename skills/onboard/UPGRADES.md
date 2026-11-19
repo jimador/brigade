@@ -49,6 +49,20 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.52.0
+
+- touches: none
+- what: `brigade-rehearse` warns on test pins outside an item's files and runs packets' `premise:` lines
+  and Verify commands on the base branch; the plan check lists unprobed packets and blocks on them; the
+  inspector's turn budget matches cook-heavy. The execute workflow validates cook reports and verdicts
+  with `brigade-validate`, the schema examples conform, and teardown refuses a dirty worktree. Research
+  and review write a returned brief or report verbatim when the agent's own write was refused, and
+  EXECUTE.md states the planner's rule for the same. The guard blocks git pathspecs it cannot inspect and
+  no longer refuses commands with no governed verb. The validator reads colon-adjacent flow values and
+  flags collection-valued enum fields. `brigade-pr commits` rejects WIP, fixup and squash subjects. The
+  packet line bar is a splitting heuristic; the file cap is the bar. Eval runs keep their outputs and a
+  trace summary. `test/gate.sh` runs the full verification gate.
+
 ### 0.51.0
 
 - touches: none
