@@ -461,7 +461,7 @@ function worktreeCount(root) {
   return git(root, ['worktree', 'list']).trim().split('\n').length
 }
 
-test('pin E1: a test file the item does not list warns once per file; an owned one does not; exit unchanged', () => {
+test('pin E1: test files the item does not list warn once per item; an owned one does not; exit unchanged', () => {
   const root = makeRepo(['scripts/foo', 'src/a.js', 'src/data.js'])
   commitOnMain(root, {
     'test/scripts/foo.test.mjs': "import path from 'node:path'\nconst FOO = 'scripts/foo'\nconst AGAIN = 'foo'\n",
@@ -472,19 +472,18 @@ test('pin E1: a test file the item does not list warns once per file; an owned o
   const plan = writePlan(root, [{ slug: 'one', files: [['scripts/foo', 'edit'], ['src/a.js', 'edit']] }])
   const r = rehearse(root, [plan])
   assert.equal(r.status, 0, r.stdout + r.stderr)
-  // Warnings come in git grep's order: by test file path, then line.
+  // Test files come in git grep's order: by path.
   assert.deepEqual(lineStarting(r, 'pin: '), [
-    "pin: one lists src/a.js; test/regression.sh:3 pins it but is not in the item's files",
-    "pin: one lists scripts/foo; test/scripts/foo.test.mjs:2 pins it but is not in the item's files",
+    'pin: one: 2 test files reference its edited files: test/regression.sh, test/scripts/foo.test.mjs',
   ])
-  assert.match(r.stdout, /0 findings, 2 warnings/)
+  assert.match(r.stdout, /0 findings, 1 warning\b/)
   const j = rehearse(root, ['--json', plan])
   assert.equal(j.status, 0, j.stdout + j.stderr)
-  assert.deepEqual(jsonRows(j)[1], {
+  assert.deepEqual(jsonRows(j), [{
     check: 'pin', level: 'warning', item: 'one',
-    detail: "test/scripts/foo.test.mjs:2 pins scripts/foo but is not in the item's files",
-    path: 'scripts/foo', test: 'test/scripts/foo.test.mjs', line: 2,
-  })
+    detail: '2 test files reference its edited files: test/regression.sh, test/scripts/foo.test.mjs',
+    tests: ['test/regression.sh', 'test/scripts/foo.test.mjs'], paths: ['src/a.js', 'scripts/foo'],
+  }])
 
   // Listing the test file, or a directory that holds it, owns it: no warning for it.
   const owned = writePlan(root, [
@@ -618,3 +617,118 @@ test('no-exec E4: --no-exec skips premises and Verify commands and says so', () 
   assert.equal(j.stdout.trim(), '')
   assert.match(j.stderr, /^premises: skipped$/m)
 })
+
+// The red-team reproductions against the premise/Verify runner and the pin check.
+
+test('runner E1: each packet starts from a clean base; one packet\'s Verify leftovers never reach the next', () => {
+  const root = makeRepo()
+  commitOnMain(root, { '.gitignore': 'dist/\n' })
+  const before = worktreeCount(root)
+  const plan = writePlan(root, [
+    { slug: 'builder', files: [['src/a.js', 'edit']], body: [
+      '- **Verify:**',
+      '  ```bash',
+      '  mkdir -p dist && echo built > dist/a.js',
+      '  echo changed > src/a.js',
+      '  echo stray > stray.txt',
+      '  ```',
+    ] },
+    { slug: 'reader', files: [['src/b.js', 'edit']], body: [
+      '- **premise:** `test -f dist/a.js`',
+      '- **premise:** `test ! -e stray.txt`',
+      '- **premise:** `test "$(cat src/a.js)" = x`',
+    ] },
+  ])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'premise FAIL: '), ['premise FAIL: reader: test -f dist/a.js (exit 1)'])
+  assert.equal(worktreeCount(root), before)
+})
+
+test('runner E2: a Verify block runs as one script, so cd and variables carry; failures name their line', () => {
+  const root = makeRepo()
+  commitOnMain(root, { 'lib/a.js': 'export const a = 1\n', 'lib/broken.js': 'function (\n' })
+  const plan = writePlan(root, [{ slug: 'one', files: [['lib/a.js', 'edit'], ['lib/new.test.mjs', 'create']],
+    body: [
+      '### Steps',
+      '',
+      '1. **Verify (must pass):**',
+      '',
+      '```bash',
+      'cd lib',
+      'node --check a.js',
+      'TARGET=a.js',
+      'node --check "$TARGET"',
+      'false',
+      'node --check broken.js',
+      'node --test new.test.mjs',
+      'node --test missing.test.mjs',
+      '```',
+    ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  // The lines after a failing one still run, from lib/, and each failure is its own line's.
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify UNRUNNABLE: one: node --check broken.js: node --check fails on base (exit 1)',
+    'verify UNRUNNABLE: one: node --test missing.test.mjs: ' +
+      'missing.test.mjs does not exist on base and the packet does not create it',
+  ])
+})
+
+test('runner E3: only executed operands are files; quoted ones are checked; patterns, globs and expansions are not', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    '- **Verify:**',
+    '  ```bash',
+    '  grep -q Widget.create src/a.js',
+    '  cat src/not-here.txt',
+    '  node --test "test/missing.test.mjs"',
+    '  node --test test/*.nothing.mjs',
+    '  T=test/x.mjs; node --test "$T"',
+    "  bash 'scripts/missing.sh'",
+    '  node -e "process.exit(1)" src/nope.js',
+    '  ```',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'verify '), [
+    'verify UNRUNNABLE: one: node --test "test/missing.test.mjs": ' +
+      'test/missing.test.mjs does not exist on base and the packet does not create it',
+    "verify UNRUNNABLE: one: bash 'scripts/missing.sh': " +
+      'scripts/missing.sh does not exist on base and the packet does not create it',
+  ])
+})
+
+test('runner E4: a premise line may carry a trailing # comment after the closing backtick', () => {
+  const root = makeRepo()
+  const plan = writePlan(root, [{ slug: 'one', files: [['src/a.js', 'edit']], body: [
+    "- **premise:** `grep -q 'export interface Widget' src/a.js`   # optional, one per fact",
+    '- **premise:** `test -f src/a.js`  # a comment with `backticks` in it',
+  ] }])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'premise FAIL: '),
+    ["premise FAIL: one: grep -q 'export interface Widget' src/a.js (exit 1)"])
+})
+
+test('runner E5: pins count edited files only, one summary line per item', () => {
+  const edits = ['src/e1.js', 'src/e2.js', 'src/e3.js', 'src/e4.js', 'src/e5.js']
+  const root = makeRepo(['src/a.js', ...edits])
+  const tests = {}
+  for (const [i, e] of edits.entries()) tests[`test/scripts/t${i + 1}.test.mjs`] = `// uses ${path.basename(e)}\n`
+  tests['test/scripts/t1.test.mjs'] += '// and e2.js too\n'
+  tests['test/scripts/fresh.test.mjs'] = '// mentions fresh.js and other-fresh.js\n'
+  commitOnMain(root, tests)
+  const plan = writePlan(root, [
+    { slug: 'adder', files: [['src/fresh.js', 'create'], ['src/other-fresh.js', 'create']] },
+    { slug: 'editor', files: edits.map((e) => [e, 'edit']) },
+  ])
+  const r = rehearse(root, [plan])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(lineStarting(r, 'pin: '), [
+    'pin: editor: 5 test files reference its edited files: ' +
+      'test/scripts/t1.test.mjs, test/scripts/t2.test.mjs, test/scripts/t3.test.mjs (+2 more)',
+  ])
+  assert.match(r.stdout, /0 findings, 1 warning\b/)
+})
+
