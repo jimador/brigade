@@ -267,7 +267,7 @@ Exit codes: 0 no findings (warnings allowed), 1 findings, 2 usage or I/O error.
 
 ## brigade-plan-view
 
-Renders a `PLAN.md` as one self-contained HTML page: dish facts, status counts, a dependency graph, the items table and parked questions. The same plan always gives the same bytes. It prints the path it wrote.
+Renders a `PLAN.md` as one self-contained HTML page: dish facts, status counts, a dependency graph, the items table and parked questions. The same plan always gives the same bytes, and the page head names the plugin version that drew it. It prints the path it wrote.
 
 ```text
 brigade-plan-view [--out <path>] <PLAN.md>
@@ -317,12 +317,14 @@ brigade-onboard status [--json]
 brigade-onboard apply [--json]
 brigade-onboard detect [--json]
 brigade-onboard work-record [--json]
+brigade-onboard stale-pages [--json]
 ```
 
 - `status`: the state of each setup step and the open-work upgrade gap.
 - `apply`: converges the automatic steps and writes `.brigade/onboard.json`. It never touches the interactive board-config step.
 - `detect`: reads repo signals, read-only, so onboarding only asks what it can't infer.
 - `work-record`: marks open work as upgraded to the installed version in `.brigade/upgrade.json`.
+- `stale-pages`: lists the generated pages whose `<meta name="generator">` stamp is missing or names another version than the installed one: `roadmap.html` in each roadmap folder under `roadmap_dir`, and `plan.html` in each dish that has a `PLAN.md`. Each comes with the command that re-renders it (`brigade-roadmap-view <dir>` or `brigade-plan-view <dish>/PLAN.md`), run from the repo root. Pages written elsewhere with `--out` are not looked for. It always exits 0; nothing stale prints `no stale pages`, or an empty `stale_pages` list with `--json`.
 
 This script reads the repo from `CLAUDE_PROJECT_DIR`, else the current folder.
 
@@ -358,7 +360,7 @@ Exit codes: 0 fine. 1 problems found by `check`, a frontier `next` can't answer,
 
 ## brigade-roadmap-view
 
-Renders a roadmap folder as one self-contained HTML page with four sections: Outline, Dependencies, Boards and Coverage. Problems with the roadmap are listed at the top and the page still renders. The same roadmap always gives the same bytes. It prints the path it wrote.
+Renders a roadmap folder as one self-contained HTML page with four sections: Outline, Dependencies, Boards and Coverage. Problems with the roadmap are listed at the top and the page still renders. The same roadmap always gives the same bytes, and the page head names the plugin version that drew it. It prints the path it wrote.
 
 ```text
 brigade-roadmap-view <dir> [--out <path>]

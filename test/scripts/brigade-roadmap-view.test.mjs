@@ -14,6 +14,8 @@
 //   E4 ensures: roadmap text is escaped; the page holds no <script element and no network URL.
 //   E5 ensures: the heading and <title> carry the roadmap's name (a frontmatter `title`, else the
 //      first `# ` heading, else the Intent's first sentence), escaped, with "Roadmap" as a label.
+//   E6 ensures: the page head carries <meta name="generator" content="brigade-roadmap-view <v>">,
+//      <v> being the plugin version in .claude-plugin/plugin.json beside the script.
 //   I1 invariant: the page depends only on the roadmap's content: two runs, or the same roadmap in
 //      two places, give the same bytes.
 
@@ -92,6 +94,13 @@ test('I1: two runs, and the same roadmap in two places, give identical bytes', (
   assert.equal(render(b), first)
   const c = copyFixture('cycle')
   assert.equal(render(c), render(c))
+})
+
+test('E6: the page head names the generator and the plugin version', () => {
+  const version = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).version
+  const html = render(copyFixture('valid'))
+  const head = html.slice(0, html.indexOf('</head>'))
+  assert.ok(head.includes(`<meta name="generator" content="brigade-roadmap-view ${version}">`))
 })
 
 test('E2: the top nav switches between the four views without navigating', () => {

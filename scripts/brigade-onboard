@@ -5,16 +5,19 @@
 // repo, and a board config file the onboarding skill walks a human through. `status`
 // reports state; `apply` converges the automatic steps and records the result;
 // `detect` reads repo signals (read-only) so the onboarding skill only has to ask
-// the operator what it can't infer. It also tracks how far open work (tickets and
-// dishes) has been upgraded: `status` compares .brigade/upgrade.json with the ledger in
-// skills/onboard/UPGRADES.md, and `work-record` marks open work as upgraded once the
-// onboarding skill's upgrade pass has run.
+// the operator what it can't infer. It also tracks how far open work (tickets, dishes
+// and roadmaps) has been upgraded: `status` compares .brigade/upgrade.json with the
+// ledger in skills/onboard/UPGRADES.md, and `work-record` marks open work as upgraded
+// once the onboarding skill's upgrade pass has run. `stale-pages` lists the generated
+// HTML pages (roadmap.html, plan.html) an older plugin version drew, each with the
+// command that redraws it.
 //
 // Usage:
 //   brigade-onboard status      [--json]
 //   brigade-onboard apply       [--json]
 //   brigade-onboard detect      [--json]
 //   brigade-onboard work-record [--json]
+//   brigade-onboard stale-pages [--json]
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -107,18 +110,61 @@ function readUpgradeLedger(pluginRootDir) {
   return entries
 }
 
-// Whether the repo has any work an upgrade pass could touch: a board config or a dish.
+const DEFAULT_ROADMAP_DIR = path.join('.brigade', 'roadmaps')
+
+// Where roadmap folders live: the `- roadmap_dir: <path>` line in the `## Repo` section of
+// .brigade/config.md, relative to the repo root, else .brigade/roadmaps. A trailing
+// `# comment` on that line is ignored, the way the config template writes one.
+function roadmapDir(root) {
+  let text
+  try {
+    text = fs.readFileSync(path.join(root, '.brigade', 'config.md'), 'utf8')
+  } catch {
+    return path.join(root, DEFAULT_ROADMAP_DIR)
+  }
+  let inRepo = false
+  for (const line of text.split('\n')) {
+    if (/^## /.test(line)) {
+      inRepo = /^## Repo\s*$/.test(line)
+      continue
+    }
+    if (!inRepo) continue
+    const m = /^- roadmap_dir:(.*)$/.exec(line)
+    if (!m) continue
+    const value = m[1].replace(/(^|\s)#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2')
+    if (value !== '') return path.resolve(root, value)
+  }
+  return path.join(root, DEFAULT_ROADMAP_DIR)
+}
+
+// Every roadmap folder: a subfolder of the roadmap dir with a ROADMAP.md in it, sorted by name.
+function roadmapFolders(root) {
+  const base = roadmapDir(root)
+  let names
+  try {
+    names = fs.readdirSync(base)
+  } catch {
+    return []
+  }
+  return names.sort()
+    .map((name) => path.join(base, name))
+    .filter((dir) => fs.existsSync(path.join(dir, 'ROADMAP.md')))
+}
+
+// Whether the repo has any work an upgrade pass could touch: a board config, a dish or a
+// roadmap.
 function hasWork(root) {
   if (fs.existsSync(path.join(root, '.brigade', 'config.md'))) return true
   try {
-    return fs.readdirSync(path.join(root, '.brigade', 'dishes')).length > 0
+    if (fs.readdirSync(path.join(root, '.brigade', 'dishes')).length > 0) return true
   } catch {
-    return false
+    // no dishes folder
   }
+  return roadmapFolders(root).length > 0
 }
 
 // The ledger versions above the recorded work version, up to the installed one, whose
-// entry touches tickets or dishes. Oldest first, the order the upgrade pass applies them.
+// entry touches tickets, dishes or roadmaps. Oldest first, the order the upgrade pass applies them.
 function pendingWorkUpgrades(root, pluginRootDir, installed) {
   if (!hasWork(root)) return []
   const from = readWorkVersion(root)
@@ -128,6 +174,82 @@ function pendingWorkUpgrades(root, pluginRootDir, installed) {
     .filter((e) => compareVersions(e.version, installed) <= 0)
     .sort((a, b) => compareVersions(a.version, b.version))
     .map((e) => e.version)
+}
+
+// The generator stamp a view script writes into its page head, e.g.
+// "brigade-roadmap-view 0.53.3", or null when the page has none.
+function generatorStamp(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+  const m = /<meta name="generator" content="([^"]*)">/.exec(text)
+  return m ? m[1] : null
+}
+
+// Quotes a path for a POSIX shell, but only when it needs it.
+function shellQuote(s) {
+  return /^[A-Za-z0-9_./=:@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+// Every generated page under its default name whose stamp is missing or names another
+// version than the installed one: roadmap.html in each roadmap folder, and plan.html in
+// each dish that still has its PLAN.md. Pages written somewhere else with --out are not
+// looked for. Each comes with the command that redraws it, run from the repo root.
+function stalePages(root, plugRoot, installed) {
+  const rel = (p) => path.relative(root, p) || '.'
+  const script = (name) => shellQuote(path.join(plugRoot, 'scripts', name))
+  const candidates = []
+  for (const dir of roadmapFolders(root)) {
+    candidates.push({
+      kind: 'roadmap',
+      page: path.join(dir, 'roadmap.html'),
+      generator: 'brigade-roadmap-view',
+      command: `${script('brigade-roadmap-view')} ${shellQuote(rel(dir))}`,
+    })
+  }
+  const dishes = path.join(root, '.brigade', 'dishes')
+  let names = []
+  try {
+    names = fs.readdirSync(dishes).sort()
+  } catch {
+    names = []
+  }
+  for (const name of names) {
+    const plan = path.join(dishes, name, 'PLAN.md')
+    if (!fs.existsSync(plan)) continue
+    candidates.push({
+      kind: 'plan',
+      page: path.join(dishes, name, 'plan.html'),
+      generator: 'brigade-plan-view',
+      command: `${script('brigade-plan-view')} ${shellQuote(rel(plan))}`,
+    })
+  }
+  return candidates
+    .filter((c) => fs.existsSync(c.page))
+    .map((c) => ({ ...c, stamp: generatorStamp(c.page) }))
+    .filter((c) => c.stamp !== `${c.generator} ${installed}`)
+    .map((c) => ({ kind: c.kind, page: rel(c.page), stamp: c.stamp, command: c.command }))
+}
+
+// Lists stale generated pages. Always exits 0: an empty list just means nothing to redraw.
+function runStalePages(json) {
+  const root = repoRoot()
+  const plugRoot = pluginRoot()
+  const installed = installedVersion(plugRoot)
+  const pages = stalePages(root, plugRoot, installed)
+  if (json) {
+    console.log(JSON.stringify({ plugin_version: installed, stale_pages: pages }))
+  } else {
+    for (const p of pages) {
+      console.log(`${p.page}  (${p.stamp ?? 'no generator stamp'})`)
+      console.log(`  ${p.command}`)
+    }
+    if (pages.length === 0) console.log('no stale pages')
+  }
+  return 0
 }
 
 function hasGitDir(root) {
@@ -503,8 +625,10 @@ function main() {
       return runDetect(json)
     case 'work-record':
       return runWorkRecord(json)
+    case 'stale-pages':
+      return runStalePages(json)
     default:
-      console.error('usage: brigade-onboard <status|apply|detect|work-record> [--json]')
+      console.error('usage: brigade-onboard <status|apply|detect|work-record|stale-pages> [--json]')
       return 2
   }
 }

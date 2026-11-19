@@ -8,6 +8,8 @@
 // The roadmap is read through scripts/lib/roadmap.mjs, graphs are drawn by scripts/lib/dag.mjs,
 // and the result is placed into the fixed template skills/roadmap/templates/roadmap-view.html.
 // No clock, no network, no scripts in the output: the same roadmap always gives the same bytes.
+// The page head names this script and the plugin version that drew it, so
+// `brigade-onboard stale-pages` can spot a page an older version drew.
 //
 // Usage:
 //   brigade-roadmap-view <dir> [--out <path>]
@@ -19,6 +21,16 @@ import { esc, renderDag } from './lib/dag.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATE = path.resolve(__dirname, '..', 'skills', 'roadmap', 'templates', 'roadmap-view.html')
+
+// The plugin version this script ships with, or "unknown" when the manifest can't be read.
+function pluginVersion() {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8'))
+    return typeof manifest.version === 'string' && manifest.version !== '' ? manifest.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 // Board lanes, left to right. A leaf with no ticket has not been published to the board yet, so
 // it sits in the last lane whatever its status says.
@@ -364,6 +376,7 @@ function render(model, template, text = '') {
   const problems = problemLines(a, cycles)
   const title = roadmapTitle(model, text)
   const values = {
+    GENERATOR: esc(`brigade-roadmap-view ${pluginVersion()}`),
     TITLE: esc(title ? `Roadmap: ${title}` : 'Roadmap'),
     HEADING: title ? `<span class="label">Roadmap</span> ${esc(title)}` : 'Roadmap',
     FACTS: renderFacts(a, problems.length),

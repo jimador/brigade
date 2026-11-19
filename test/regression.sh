@@ -1052,7 +1052,7 @@ if not entries:
     raise SystemExit("no ledger entries found")
 for v, touches in entries:
     parts = [t.strip() for t in touches.split(",")]
-    if parts != ["none"] and not set(parts) <= {"tickets", "dishes"}:
+    if parts != ["none"] and not set(parts) <= {"tickets", "dishes", "roadmaps"}:
         raise SystemExit(f"{v}: bad touches line {touches!r}")
 if entries[0][0] != version:
     raise SystemExit(f"newest ledger entry {entries[0][0]} is not plugin version {version}")

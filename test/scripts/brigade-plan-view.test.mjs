@@ -14,6 +14,8 @@
 //   E4 ensures: column = longest dependency depth from a root; a dependent sits strictly right of
 //      each of its dependencies; each dependency edge is drawn once.
 //   E5 ensures: every parked row appears in the parked table with its id, question and reopens at.
+//   E6 ensures: the page head carries <meta name="generator" content="brigade-plan-view <v>">, <v>
+//      being the plugin version in .claude-plugin/plugin.json beside the script.
 //   I1 invariant: the page depends only on the plan content, never on the clock or the path.
 //   L1 law: the same plan written in inline item style and in block item style gives identical
 //      bytes.
@@ -202,6 +204,13 @@ test('E5: parked rows render with id, question and reopens at', () => {
 test('E5: a plan with no parked rows shows an empty state', () => {
   const html = render(INLINE_PLAN.replace(/## Parked[^]*$/, ''))
   assert.match(html, /<td colspan="4" class="muted">none<\/td>/)
+})
+
+test('E6: the page head names the generator and the plugin version', () => {
+  const version = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).version
+  const html = render(INLINE_PLAN)
+  const head = html.slice(0, html.indexOf('</head>'))
+  assert.ok(head.includes(`<meta name="generator" content="brigade-plan-view ${version}">`))
 })
 
 test('L1: inline and block item styles give identical bytes', () => {

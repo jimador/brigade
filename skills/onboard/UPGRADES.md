@@ -6,9 +6,11 @@ or `/brigade:upgrade`.
 
 A plugin update changes the rules, not the artifacts already on disk. Config drift heals
 itself at SessionStart; this pass brings **open work** up to the installed rules: board
-tickets that are not done, and dishes under `.brigade/dishes/` that have not handed off. It
-edits artifacts only. It never claims a ticket, changes a ticket's status or assignee,
-dispatches, cooks, lands, or hands off.
+tickets that are not done, dishes under `.brigade/dishes/` that have not handed off, and
+roadmaps under `roadmap_dir` (`## Repo` in `.brigade/config.md`, default `.brigade/roadmaps`)
+with their generated pages. It edits artifacts only and never re-plans a roadmap. It never
+claims a ticket, changes a ticket's status or assignee, dispatches, cooks, lands, or hands
+off.
 
 ## The pass
 
@@ -20,24 +22,33 @@ dispatches, cooks, lands, or hands off.
    List `.brigade/dishes/*/PLAN.md` and keep every dish with an item that is not `done`, or
    with no `reports/acceptance-verdict.md` yet. Run
    `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate" .brigade/dishes/<dish>/PLAN.md` on each
-   open dish.
+   open dish. List every roadmap, `<roadmap_dir>/<slug>/` with a `ROADMAP.md`, and run
+   `brigade-validate <dir>` and `brigade-roadmap check <dir>` (same scripts folder) on each.
+   Run `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-onboard" stale-pages --json` for the generated
+   pages an older version drew (each roadmap's `roadmap.html`, each dish's `plan.html`), each
+   with its re-render command. Pages written elsewhere with `--out` are not found; re-render
+   those by hand with the same script.
 3. **Plan.** For each pending entry, run its `find` against the inventory; every match is one
-   row: artifact, entry version, the change. Add one row per `brigade-validate` error. An
+   row: artifact, entry version, the change. Add one row per `brigade-validate` error and per
+   roadmap `check` error; a roadmap is edited only to clear those, never re-planned. An
    entry whose `find` matches nothing adds no row. Respect the item's state:
    - `todo` or `rework` items: the packet MAY be rewritten to the entry's change.
    - `dispatched` or `in_review` items: a cook or inspector is reading the packet. Change
      frontmatter only, and list the packet change as a row for after the item settles.
-   - `done` items, done tickets and handed-off dishes: never touched.
+   - `done` items, done tickets and handed-off dishes: never touched, `plan.html` included.
 4. **Confirm once.** Show the table and get one yes from the operator. With no rows, say
    so, skip to step 6, and ask nothing.
-5. **Apply.** Edit dish files directly. Edit tickets only through the source adapter's
-   update op, and append one Activity comment per changed ticket naming the version
-   (`[planner] Upgraded to brigade <version>: <change>`).
-6. **Verify and record.** Re-run `brigade-validate` on every touched dish and re-read every
-   touched ticket. Then run `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-onboard" work-record`,
-   which writes `.brigade/upgrade.json` with the installed version, so `work_drift` clears.
-   Report a table: artifact, change, done / deferred / failed. Never record after a failed
-   row; fix it or report it and stop.
+5. **Apply.** Edit dish and roadmap files directly. Edit tickets only through the source
+   adapter's update op, and append one Activity comment per changed ticket naming the version
+   (`[planner] Upgraded to brigade <version>: <change>`). Re-render a page only with the
+   command `stale-pages` lists for it; never hand-edit generated HTML.
+6. **Verify and record.** Re-run `brigade-validate` on every touched dish, `brigade-validate`
+   and `brigade-roadmap check` on every touched roadmap, and `stale-pages` (it lists none of
+   the pages you re-rendered), and re-read every touched ticket. Then run
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-onboard" work-record`, which writes
+   `.brigade/upgrade.json` with the installed version, so `work_drift` clears. Report a
+   table: artifact, change, done / deferred / failed. Never record after a failed row; fix it
+   or report it and stop.
 
 Every `find` is a content check, never a version check, so a second pass over the same work
 finds nothing and changes nothing.
@@ -45,9 +56,22 @@ finds nothing and changes nothing.
 ## Ledger
 
 Newest first. One entry per plugin version that changes what open work should contain or
-how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; the status
-script reads it, so keep the line exact. An entry with `touches: none` changes procedure
-only: open work picks it up at its next phase and the pass records it without edits.
+how it is run. `touches` is `none`, or any comma-separated mix of `tickets`, `dishes` and
+`roadmaps` (`dishes` covers their `plan.html`); the status script reads it, so keep the line
+exact. An entry with `touches: none` changes procedure only: open work picks it up at its
+next phase and the pass records it without edits.
+
+### 0.53.3
+
+- touches: dishes, roadmaps
+- what: `brigade-roadmap-view` and `brigade-plan-view` stamp each page with a generator meta tag
+  naming the plugin version, `brigade-onboard stale-pages` lists the pages an older version drew,
+  and the upgrade pass covers roadmaps: it validates and checks each one and re-renders its pages.
+- find: pages listed by `brigade-onboard stale-pages` (a `roadmap.html` or dish `plan.html` with no
+  stamp or another version's stamp, such as the 0.53.1 anchor-link nav that sandboxed viewers
+  can't follow); plus roadmaps with `brigade-validate` or `brigade-roadmap check` errors.
+- change: re-render each listed page with its listed command; fix a roadmap's validation and check
+  errors only, never re-plan it.
 
 ### 0.53.2
 

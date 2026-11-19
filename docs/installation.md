@@ -65,24 +65,24 @@ On the first session after an update, the SessionStart hook compares the install
 
 An update changes the rules, not the files already on disk. A ticket groomed or a plan written under an older version may be missing something the new version expects. `/brigade:upgrade`, or saying `upgrade my open work`, brings open work up to the installed version's rules.
 
-Open work means board tickets that are not `done`, and dishes under `.brigade/dishes/` that still have an unfinished item or no acceptance verdict yet. Finished work is never touched.
+Open work means board tickets that are not `done`, dishes under `.brigade/dishes/` that still have an unfinished item or no acceptance verdict yet, and roadmaps under `roadmap_dir`. Their HTML pages are refreshed too: each `roadmap.html` and dish `plan.html` names the plugin version that drew it, and a page an older version drew is re-rendered through its script, never edited by hand. A roadmap is edited only to fix validation or check errors, never re-planned. Finished work is never touched.
 
 ### The upgrade ledger
 
 Each plugin version that changes what open work should contain gets an entry in the ledger, [`skills/onboard/UPGRADES.md`](../skills/onboard/UPGRADES.md), newest first. An entry has:
 
-- **touches:** what it changes. `none` means the version changed procedure only, so open work picks it up at its next phase and nothing is edited. Otherwise it names `tickets`, `dishes`, or both.
+- **touches:** what it changes. `none` means the version changed procedure only, so open work picks it up at its next phase and nothing is edited. Otherwise it names any mix of `tickets`, `dishes` and `roadmaps`.
 - **find:** a content check that spots the artifacts needing the change, for example a plan missing a section. It looks at what the file says, never at a version number, so running the pass twice changes nothing the second time.
 - **change:** the edit to make on each match.
 
 ### What the pass does
 
 1. **Reads the gap.** It takes the version your open work was last upgraded to (from `.brigade/upgrade.json`) and lists every ledger entry above it that touches work. A repo that was never upgraded, or is several versions behind, walks every one of those entries, oldest first.
-2. **Inventories open work.** It lists your open tickets through the board's adapter and your unfinished dishes, and validates each open plan.
+2. **Inventories open work.** It lists your open tickets through the board's adapter, your unfinished dishes and your roadmaps, validates each open plan, validates and checks each roadmap, and lists the stale pages with `brigade-onboard stale-pages`. Pages written somewhere else with `--out` are not found; re-render those yourself.
 3. **Plans.** Each entry's `find` runs against that inventory, and every match becomes one row: the artifact, the version, the change. Items a cook or inspector is working right now get only frontmatter edits, with the rest deferred until they settle.
 4. **Confirms once.** You see the whole table and say yes once. With nothing to change, it says so and asks nothing.
-5. **Applies.** Dish files are edited directly. Tickets are edited only through the board's adapter, each with one activity comment naming the version.
-6. **Verifies and records.** It re-validates every touched dish, re-reads every touched ticket, and records the installed version so the reminder stops. A failed row stops the record until it is fixed.
+5. **Applies.** Dish and roadmap files are edited directly, and each stale page is re-rendered with the command listed for it. Tickets are edited only through the board's adapter, each with one activity comment naming the version.
+6. **Verifies and records.** It re-validates every touched dish and roadmap, re-checks every touched roadmap, re-reads every touched ticket, and records the installed version so the reminder stops. A failed row stops the record until it is fixed.
 
 The pass edits artifacts only. It never claims a ticket, changes a status or assignee, dispatches a cook, lands, or hands off.
 

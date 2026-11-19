@@ -1,6 +1,6 @@
 ---
-description: Upgrade open tickets and dishes to the installed brigade version's rules
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-onboard:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate:*)
+description: Upgrade open tickets, dishes and roadmaps, and re-render their HTML pages, to the installed brigade version's rules
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-onboard:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-roadmap:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-roadmap-view:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/brigade-plan-view:*)
 ---
 
 ## Context

@@ -3,7 +3,8 @@
 // status counts, an inline SVG dependency graph, the items table and the parked questions.
 // The plan is read through scripts/lib/plan.mjs (C2) and placed into the fixed template
 // skills/brigade/templates/plan-view.html. No clock, no network, no scripts in the output:
-// the same plan always gives the same bytes.
+// the same plan always gives the same bytes. The page head names this script and the plugin
+// version that drew it, so `brigade-onboard stale-pages` can spot a page an older version drew.
 //
 // Usage:
 //   brigade-plan-view [--out <path>] <PLAN.md>
@@ -15,6 +16,16 @@ import { esc, renderDag as drawDag } from './lib/dag.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATE = path.resolve(__dirname, '..', 'skills', 'brigade', 'templates', 'plan-view.html')
+
+// The plugin version this script ships with, or "unknown" when the manifest can't be read.
+function pluginVersion() {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8'))
+    return typeof manifest.version === 'string' && manifest.version !== '' ? manifest.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 const STATUS_CLASS = new Map([
   ['done', 'done'], ['landed', 'done'],
@@ -127,6 +138,7 @@ function render(plan, template) {
   const dish = orDash(f.dish ?? '')
   const dag = renderDag(plan.items)
   const values = {
+    GENERATOR: esc(`brigade-plan-view ${pluginVersion()}`),
     TITLE: esc(`Plan: ${dish}`),
     DISH: esc(dish),
     TICKET: esc(orDash(f.ticket ?? '')),
