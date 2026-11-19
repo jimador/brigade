@@ -30,6 +30,7 @@
 // else a resolvable `claude` binary -> cli (headless `claude -p`), else skip cleanly.
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 
 function repoRoot() {
@@ -650,9 +651,13 @@ function listFiles(dir, prefix = '') {
 }
 
 // A case name as one safe path segment, so a name with a slash can't climb out of the run dir.
+// The flattened name can collide (`a/b` and `a-b` both become `a-b`), so a short hash of the
+// original name is appended; two distinct cases never share a folder.
 function caseDirName(name) {
-  const safe = name.replace(/[^\w.-]+/g, '-')
-  return safe === '.' || safe === '..' || safe === '' ? '_' : safe
+  const flat = name.replace(/[^\w.-]+/g, '-')
+  const safe = flat === '.' || flat === '..' || flat === '' ? '_' : flat
+  const hash = createHash('sha1').update(name).digest('hex').slice(0, 8)
+  return `${safe}-${hash}`
 }
 
 // Writes one run's record under recordRoot/<case>/<run>/ and returns that dir. A run that

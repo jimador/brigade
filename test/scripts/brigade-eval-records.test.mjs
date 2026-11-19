@@ -70,7 +70,7 @@ test('a run keeps its reply, the files it wrote and a trace.json beside the resu
   assert.equal(r.status, 0, r.stderr + r.stdout)
   const out = JSON.parse(r.stdout)
   const record = out.cases[0].record
-  assert.match(record, /^\.brigade\/evals\/eval-[0-9TZ]+\/writes-a-plan\/1$/)
+  assert.match(record, /^\.brigade\/evals\/eval-[0-9TZ]+\/writes-a-plan-[0-9a-f]{8}\/1$/)
 
   // The record folder sits beside the results file of the same name.
   const stamp = record.split('/')[2]
@@ -143,6 +143,40 @@ test('a case name with a slash stays inside its own record folder', () => {
   const stampDir = path.join(root, '.brigade', 'evals', record.split('/')[2])
   assert.equal(path.dirname(path.dirname(path.resolve(root, record))), stampDir)
 })
+
+// E1: `a/b` and `a-b` both flatten to `a-b` on disk; the hash keeps their record folders apart.
+// E2: each result entry points at its own case's folder, with its own reply, files and trace.
+test('E1/E2: cases a/b and a-b get distinct record folders, each with its own reply, files and trace', () => {
+  const root = fixture([
+    { ...writerCase, name: 'a/b' },
+    { ...writerCase, name: 'a-b' },
+  ])
+  writeFile(root, 'mock/a/b.txt', 'first plan\n')
+  writeFile(root, 'mock/a/b.files/first.txt', 'from a/b\n')
+  writeFile(root, 'mock/a-b.txt', 'second plan\n')
+  writeFile(root, 'mock/a-b.files/second.txt', 'from a-b\n')
+
+  const r = run(root, ['--json'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const [slashed, dashed] = JSON.parse(r.stdout).cases
+  assert.notEqual(slashed.record, dashed.record)
+
+  const slashDir = path.join(root, slashed.record)
+  const dashDir = path.join(root, dashed.record)
+  assert.equal(fs.readFileSync(path.join(slashDir, 'response.txt'), 'utf8'), 'first plan\n')
+  assert.equal(fs.readFileSync(path.join(dashDir, 'response.txt'), 'utf8'), 'second plan\n')
+  assert.deepEqual(listFiles(path.join(slashDir, 'files')), ['first.txt'])
+  assert.deepEqual(listFiles(path.join(dashDir, 'files')), ['second.txt'])
+  assert.equal(JSON.parse(fs.readFileSync(path.join(slashDir, 'trace.json'), 'utf8')).case, 'a/b')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dashDir, 'trace.json'), 'utf8')).case, 'a-b')
+})
+
+function listFiles(dir, prefix = '') {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const rel = prefix ? `${prefix}/${e.name}` : e.name
+    return e.isDirectory() ? listFiles(path.join(dir, e.name), rel) : [rel]
+  })
+}
 
 test('without a key, a mock or a claude CLI the run still skips cleanly and records nothing', () => {
   const root = fixture([writerCase])
