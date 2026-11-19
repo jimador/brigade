@@ -235,10 +235,13 @@ Each round, in order:
    publish batch (it may be the same batch, as trailing `publish` operations), confirmed and
    applied the same way. Publish in dependency order: prerequisites first. A leaf whose
    `depends_on` names a node that has no ticket yet waits for that node's batch. A leaf whose
-   `depends_on` names a published node carries that node's ticket id in `blocked_by`.
+   `depends_on` names a published node carries that node's ticket id in `blocked_by`. A split
+   prerequisite counts as published once every leaf under it is, whatever its own ticket says,
+   and the dependent carries all of those leaves' ticket ids in `blocked_by` instead.
    **Linking pass** — after every publish batch run
    `"${CLAUDE_PLUGIN_ROOT}/scripts/brigade-roadmap" links <dir> --board <board_dir>` on a
-   markdown board. Each line it prints is a missing `blocked_by` edit; propose those edits in
+   markdown board. Each `missing_blocked_by` line is a missing `blocked_by` edit (a `pending`
+   line is a split prerequisite with leaves still unpublished); propose those edits in
    the same confirmed batch and re-run the check after apply. A non-markdown board keeps the
    blockers in the Context marker line instead, and the re-run reads the tickets back.
 

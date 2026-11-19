@@ -21,7 +21,10 @@
 //   E4 ensures: `status <dir>` prints derived status per epic and per requirement.
 //   E5 ensures: `links [--json] <dir> [--board <board_dir>]` lists, for every published node,
 //      each published `depends_on` prerequisite missing from the ticket's `blocked_by` on the
-//      board (or from the node's own `blocked_by` with no board), and exits 1 when any is.
+//      board (or from the node's own `blocked_by` with no board), and exits 1 when any is. A
+//      prerequisite with children stands for the tickets of its leaves, at any depth; a leaf
+//      under it with no ticket yet makes the edge pending, which is reported but never a gap.
+//      Board `blocked_by` lists read past blank and `#` comment lines.
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -394,6 +397,38 @@ test('E3 sync maps board words back through the status mapping in .brigade/confi
   assert.equal(run('sync', dir, '--board', board, '--config').code, 2)
 })
 
+test('E3 a partial mapping keeps the statuses it leaves out, and a status beats an alias of its word', () => {
+  const dir = copy('valid')
+  setFrontmatter(dir, 'nodes/T-3.md', 'ticket', 'ACME-9')
+  // Only rework is mapped, onto the in_progress word; in_progress itself keeps its own word.
+  const config = path.join(tempDir(), 'config.md')
+  write(path.dirname(config), 'config.md', '### Status mapping\n\n- rework: in_progress\n')
+  const board = tempDir('brigade-roadmap-board-')
+  write(board, 'ACME-1.md', '---\nid: ACME-1\nstatus: in_progress\n---\n')
+  write(board, 'ACME-7.md', '---\nid: ACME-7\nstatus: in_progress\n---\n')
+  write(board, 'ACME-9.md', '---\nid: ACME-9\nstatus: rework\n---\n')
+  const r = run('sync', dir, '--board', board, '--config', config)
+  assert.equal(r.code, 1, r.out + r.err)
+  assert.deepEqual(r.lines, [
+    'T-1: done -> in_progress (ticket ACME-7)',
+    'skipped: T-3: ticket ACME-9 has unknown status "rework" in ' + path.join(board, 'ACME-9.md'),
+    'sync: 1 changed, 1 unchanged, 1 skipped',
+  ])
+  assert.match(read(dir, 'nodes/E-1.md'), /^status: in_progress$/m, 'an in_progress node is never rewritten to rework')
+
+  // A status named after a word beats any alias of it, whichever line comes first.
+  write(path.dirname(config), 'config.md', '### Status mapping\n\n- in_review: done\n')
+  write(board, 'ACME-7.md', '---\nid: ACME-7\nstatus: done\n---\n')
+  write(board, 'ACME-9.md', '---\nid: ACME-9\nstatus: todo\n---\n')
+  const d = run('sync', dir, '--board', board, '--config', config)
+  assert.equal(d.code, 0, d.out + d.err)
+  assert.deepEqual(d.lines, [
+    'T-1: in_progress -> done (ticket ACME-7)',
+    'T-3: blocked -> todo (ticket ACME-9)',
+    'sync: 2 changed, 1 unchanged, 0 skipped',
+  ])
+})
+
 test('E4 status prints derived status per epic and per requirement', () => {
   const r = run('status', path.join(FIXTURES, 'valid'))
   assert.equal(r.code, 0, r.err)
@@ -436,6 +471,7 @@ test('E5 links lists published prerequisites missing from blocked_by, from the n
     checked: 4,
     missing: [{ node: 'T-3', ticket: 'ACME-9', depends_on: 'T-1', depends_on_ticket: 'ACME-7' }],
     unchecked: [],
+    pending: [],
   })
   setFrontmatter(dir, 'nodes/T-3.md', 'blocked_by', '[ACME-7]')
   assert.deepEqual(run('links', dir).lines, ['links OK: 4 published nodes checked'])
@@ -481,4 +517,73 @@ test('E5 links reads blocked_by from the markdown board, and check --complete --
   before['ACME-9.md'] = read(board, 'ACME-9.md')
   assert.deepEqual(Object.fromEntries(fs.readdirSync(board).map((n) => [n, read(board, n)])), before, 'board untouched')
   assert.equal(run('links', path.join(board, 'missing')).code, 2)
+})
+
+// Splits F-2 into a leaf T-4 and a story S-2 with one leaf T-5, publishes T-4 and T-5, and makes
+// T-3 (the published leaf under F-3) depend on F-2 as well as T-1.
+function splitPrerequisite() {
+  const dir = published()
+  setFrontmatter(dir, 'nodes/F-2.md', 'drill', 'split')
+  const node = (id, level, parent, drill, ticket) => write(dir, `nodes/${id}.md`,
+    `---\ndoc: roadmap_node\nid: ${id}\nlevel: ${level}\nparent: ${parent}\ntitle: Part of the archive\ndrill: ${drill}\n${ticket ? `ticket: ${ticket}\n` : ''}---\n\n## Goal\n\nArchive.\n`)
+  node('T-4', 'task', 'F-2', 'leaf', 'ACME-20')
+  node('S-2', 'story', 'F-2', 'split', '')
+  node('T-5', 'task', 'S-2', 'leaf', 'ACME-21')
+  setFrontmatter(dir, 'nodes/T-3.md', 'depends_on', '[T-1, F-2]')
+  setFrontmatter(dir, 'nodes/T-2.md', 'blocked_by', '[ACME-7]')
+  return dir
+}
+
+test('E5 links turns a dependency on a split node into its published leaves, at any depth', () => {
+  const dir = splitPrerequisite()
+  setFrontmatter(dir, 'nodes/T-3.md', 'blocked_by', '[ACME-7]')
+  const r = run('links', dir)
+  assert.equal(r.code, 1, r.out + r.err)
+  assert.deepEqual(r.lines, [
+    'missing_blocked_by: T-3: ticket ACME-9 is not blocked_by ACME-20 (T-4, under F-2)',
+    'missing_blocked_by: T-3: ticket ACME-9 is not blocked_by ACME-21 (T-5, under F-2)',
+  ])
+  const j = JSON.parse(run('links', '--json', dir).out)
+  assert.deepEqual(j.missing.map((m) => [m.node, m.depends_on, m.depends_on_ticket, m.via]), [
+    ['T-3', 'F-2', 'ACME-20', 'T-4'], ['T-3', 'F-2', 'ACME-21', 'T-5'],
+  ])
+  assert.deepEqual(j.pending, [])
+  // Naming a leaf of the split node as well asks for its link once.
+  setFrontmatter(dir, 'nodes/T-3.md', 'depends_on', '[T-1, F-2, T-5]')
+  assert.equal(run('links', dir).lines.length, 2)
+  setFrontmatter(dir, 'nodes/T-3.md', 'blocked_by', '[ACME-7, ACME-20, ACME-21]')
+  assert.deepEqual(run('links', dir).lines, ['links OK: 6 published nodes checked'])
+
+  // A leaf under the split prerequisite with no ticket yet: pending, never a missing edit.
+  setFrontmatter(dir, 'nodes/T-5.md', 'ticket', '')
+  setFrontmatter(dir, 'nodes/T-3.md', 'blocked_by', '[ACME-7]')
+  const p = run('links', dir)
+  assert.equal(p.code, 1, 'the published leaf T-4 is still a gap')
+  assert.deepEqual(p.lines, [
+    'pending: T-3: F-2 waits on unpublished T-5',
+    'missing_blocked_by: T-3: ticket ACME-9 is not blocked_by ACME-20 (T-4, under F-2)',
+  ])
+  setFrontmatter(dir, 'nodes/T-3.md', 'blocked_by', '[ACME-7, ACME-20]')
+  const ok = run('links', dir)
+  assert.equal(ok.code, 0, ok.out)
+  assert.deepEqual(ok.lines, ['pending: T-3: F-2 waits on unpublished T-5', 'links OK: 5 published nodes checked'])
+  const pj = JSON.parse(run('links', '--json', dir).out)
+  assert.equal(pj.ok, true)
+  assert.deepEqual(pj.pending, [{ node: 'T-3', ticket: 'ACME-9', depends_on: 'F-2', unpublished: ['T-5'] }])
+})
+
+test('E5 the board blocked_by list reads past blank and comment lines', () => {
+  const dir = published()
+  setFrontmatter(dir, 'nodes/T-1.md', 'ticket', 'ACME-101')
+  const board = tempDir('brigade-roadmap-board-')
+  write(board, 'ACME-1.md', '---\nid: ACME-1\nstatus: in_progress\n---\n')
+  write(board, 'ACME-101.md', '---\nid: ACME-101\nstatus: done\n---\n')
+  write(board, 'ACME-8.md', '---\nid: ACME-8\nstatus: todo\nblocked_by:\n  - ACME-104\n  # the loader\n\n  - ACME-101\nstatus_note: x\n  - ACME-999\n---\n')
+  write(board, 'ACME-9.md', '---\nid: ACME-9\nstatus: todo\nblocked_by:\n  - ACME-104\n# the loader\n  - ACME-101   # loader\n---\n')
+  const r = run('links', dir, '--board', board)
+  assert.equal(r.code, 0, r.out + r.err)
+  assert.deepEqual(r.lines, ['links OK: 4 published nodes checked'])
+  // The list still ends at the next key.
+  write(board, 'ACME-9.md', '---\nid: ACME-9\nstatus: todo\nblocked_by:\n  - ACME-104\nowner: alex\n  - ACME-101\n---\n')
+  assert.deepEqual(run('links', dir, '--board', board).lines, ['missing_blocked_by: T-3: ticket ACME-9 is not blocked_by ACME-101 (T-1)'])
 })
