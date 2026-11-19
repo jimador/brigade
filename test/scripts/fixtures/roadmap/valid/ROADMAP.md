@@ -1,5 +1,10 @@
 ---
 doc: roadmap
+schema: 1
+dish: order-export
+role: planner
+model: opus
+created: 2026-07-04T03:10:00Z
 mode: bfs
 focus: E-1
 max_depth: 3

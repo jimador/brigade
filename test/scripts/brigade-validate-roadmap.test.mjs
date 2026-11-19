@@ -2,14 +2,18 @@
 // `roadmap_node` (nodes/<id>.md) and `roadmap_batch` (batches/<n>.md).
 //
 //   E1  a roadmap needs dish, mode, focus, max_depth and next_ids; mode is bfs|dfs; focus is
-//       required under dfs; its nine sections come in order; the Systems access column and the
-//       Requirements kind and status columns are enum-checked.
-//   E2  a node's id, level, parent, drill, list keys, repo (on a leaf), status and size_swag are
-//       checked, and its sections depend on whether it is a leaf; budget 60 lines.
+//       required under dfs; next_ids is a list with one next id per level letter; its nine
+//       sections come in order; the Systems access column and the Requirements kind and status
+//       columns are enum-checked.
+//   E2  a node needs only id, level, title and drill, plus parent below an epic and repo on a
+//       leaf; ids are E-/F-/S-/T- plus a counter of any length; any other key may be left out,
+//       and a key that is written is still checked; its sections depend on whether it is a leaf;
+//       budget 60 lines.
 //   E3  a batch's state, each operation's op and target, the receipts list and its two sections.
 //   E4  a roadmap directory argument, and the default sweep of .brigade/roadmaps/*/, validate
 //       ROADMAP.md, nodes/, batches/ and briefs/.
 //   I1  the example block for each type in SCHEMAS.md validates with no problem and no warning.
+//   I2  every file in the library's valid fixture roadmap validates with no problem and no warning.
 //
 // Each test writes throwaway files and runs the real validator on them.
 // Run with `node --test test/scripts/*.test.mjs`.
@@ -40,7 +44,7 @@ ${ENVELOPE}
 mode: bfs
 focus: ""
 max_depth: 4
-next_ids: { E: 2, F: 1, S: 1, T: 1 }`
+next_ids: [E-2, F-1, S-1, T-1]`
 
 const ROADMAP_BODY = `## Intent
 Move the nightly jobs to the new warehouse.
@@ -190,7 +194,16 @@ test('E1: mode, focus, max_depth and next_ids are checked', () => {
   assertClean(doc(ROADMAP_FM.replace('mode: bfs', 'mode: dfs').replace('focus: ""', 'focus: E-001'), ROADMAP_BODY), 'dfs roadmap')
   assertFails(doc(ROADMAP_FM.replace('focus: ""', 'focus: sales'), ROADMAP_BODY), 'roadmap focus must be a node id')
   assertFails(doc(ROADMAP_FM.replace('max_depth: 4', 'max_depth: deep'), ROADMAP_BODY), 'roadmap max_depth must be a whole number')
-  assertFails(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids: [1, 2]'), ROADMAP_BODY), 'roadmap next_ids must be a flow map')
+  assertClean(doc(ROADMAP_FM.replace('focus: ""', 'focus: E-12'), ROADMAP_BODY), 'focus with a short id')
+})
+
+test('E1: next_ids is a list with one next id per level letter', () => {
+  assertClean(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids: [E-3, F-5, S-2, T-4]'), ROADMAP_BODY), 'flow list')
+  assertClean(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids:\n  - E-3\n  - T-12'), ROADMAP_BODY), 'block list')
+  assertClean(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids: []'), ROADMAP_BODY), 'empty list')
+  for (const bad of ['{ E: 2, F: 1, S: 1, T: 1 }', '[1, 2]', '[E-2, E-3]', '[X-2]', 'E-2', '[E-2, F-1']) {
+    assertFails(doc(ROADMAP_FM.replace(/next_ids: .*/, `next_ids: ${bad}`), ROADMAP_BODY), 'roadmap next_ids must be a list')
+  }
 })
 
 test('E1: roadmap sections must all be there, in order', () => {
@@ -222,17 +235,29 @@ test('E2: a valid leaf and a valid epic pass', () => {
   assertClean(doc(EPIC_FM, EPIC_BODY), 'epic')
 })
 
-test('E2: each required node key is required', () => {
-  for (const key of ['id', 'level', 'parent', 'title', 'drill', 'satisfies', 'covers', 'depends_on', 'ticket',
-    'status', 'size_swag', 'sources']) {
-    const fm = LEAF_FM.split('\n').filter((l) => !l.startsWith(`${key}:`) && !(key === 'sources' && l.startsWith('  - '))).join('\n')
-    assertFails(doc(fm, LEAF_BODY), `missing roadmap_node key: ${key}`)
+const without = (fm, keys) => fm.split('\n')
+  .filter((l) => !keys.some((k) => l.startsWith(`${k}:`)) && !(keys.includes('sources') && l.startsWith('  - ')))
+  .join('\n')
+
+test('E2: id, level, title and drill are required, and parent below an epic', () => {
+  for (const key of ['id', 'level', 'parent', 'title', 'drill']) {
+    assertFails(doc(without(LEAF_FM, [key]), LEAF_BODY), `missing roadmap_node key: ${key}`)
   }
+  assertClean(doc(without(EPIC_FM, ['parent']), EPIC_BODY), 'epic with no parent key')
+})
+
+test('E2: every other node key may be left out', () => {
+  const optional = ['satisfies', 'covers', 'depends_on', 'ticket', 'status', 'size_swag', 'sources']
+  assertClean(doc(without(LEAF_FM, optional), LEAF_BODY), 'bare leaf')
+  assertClean(doc(without(EPIC_FM, ['parent', ...optional]), EPIC_BODY), 'bare epic')
 })
 
 test('E2: id, level, parent and drill are checked', () => {
-  assertFails(doc(LEAF_FM.replace('id: T-001', 'id: T-1'), LEAF_BODY), 'roadmap_node id must match')
+  assertClean(doc(LEAF_FM.replace('id: T-001', 'id: T-1').replace('parent: S-001', 'parent: S-1'), LEAF_BODY), 'short ids')
+  assertClean(doc(LEAF_FM.replace('id: T-001', 'id: T-12345'), LEAF_BODY), 'long id')
   assertFails(doc(LEAF_FM.replace('id: T-001', 'id: X-001'), LEAF_BODY), 'roadmap_node id must match')
+  assertFails(doc(LEAF_FM.replace('id: T-001', 'id: T-'), LEAF_BODY), 'roadmap_node id must match')
+  assertFails(doc(LEAF_FM.replace('id: T-001', 'id: T-1a'), LEAF_BODY), 'roadmap_node id must match')
   assertFails(doc(LEAF_FM.replace('level: task', 'level: chore'), LEAF_BODY), 'invalid roadmap_node level: chore')
   assertFails(doc(LEAF_FM.replace('level: task', 'level: story'), LEAF_BODY), 'roadmap_node level story does not match id T-001 (expected task)')
   assertFails(doc(LEAF_FM.replace('parent: S-001', 'parent: ""'), LEAF_BODY), 'roadmap_node task needs a parent')
@@ -251,6 +276,7 @@ test('E2: list keys must be lists', () => {
 test('E2: a leaf needs a repo, a branch node does not', () => {
   assertFails(doc(LEAF_FM.replace('repo: /path/to/repo\n', ''), LEAF_BODY), 'roadmap_node leaf needs a repo')
   assertFails(doc(LEAF_FM.replace('repo: /path/to/repo', 'repo: ""'), LEAF_BODY), 'roadmap_node leaf needs a repo')
+  assertClean(doc(EPIC_FM, EPIC_BODY), 'epic without a repo')
 })
 
 test('E2: status uses the ticket vocabulary or is empty; size_swag is enum-checked', () => {
@@ -361,4 +387,13 @@ test('I1: the SCHEMAS.md example for each roadmap type validates cleanly', () =>
   assertClean(doc(example('roadmap'), ROADMAP_BODY), 'roadmap example')
   assertClean(doc(example('roadmap_node'), LEAF_BODY), 'roadmap_node example')
   assertClean(doc(example('roadmap_batch'), BATCH_BODY), 'roadmap_batch example')
+})
+
+// --- I2 the library's valid fixture ----------------------------------------------
+
+test('I2: the valid fixture roadmap passes the validator cleanly', () => {
+  const { status, out } = run(path.join(ROOT, 'test', 'scripts', 'fixtures', 'roadmap', 'valid'))
+  assert.equal(status, 0, out)
+  assert.doesNotMatch(out, /^(FAIL|warn)/m, out)
+  assert.match(out, /12 checked, 0 nonconforming/)
 })

@@ -53,11 +53,9 @@ const TYPES = {
   review_report: { keys: ['input', 'context_tier', 'tier', 'findings'], budget: 250 },
   red_team: { keys: ['head', 'range', 'find', 'verify', 'findings', 'verdict'], budget: 150 },
   roadmap: { keys: ['dish', 'mode', 'focus', 'max_depth', 'next_ids'], budget: null },
-  roadmap_node: {
-    keys: ['id', 'level', 'parent', 'title', 'drill', 'satisfies', 'covers', 'depends_on', 'ticket', 'status',
-      'size_swag', 'sources'],
-    budget: 60,
-  },
+  // A node needs only these four; parent (off an epic) and repo (on a leaf) are checked by
+  // checkRoadmapNode, and every other node key may be left out.
+  roadmap_node: { keys: ['id', 'level', 'title', 'drill'], budget: 60 },
   roadmap_batch: { keys: ['state', 'operations', 'receipts'], budget: null },
 }
 const ENVELOPE = ['doc', 'schema'] // hard-required; role/model/created are warnings
@@ -1207,7 +1205,7 @@ const ROADMAP_SECTIONS = ['## Intent', '## Original request', '## Systems', '## 
 const REQUIREMENT_KINDS = ['functional', 'inventory', 'parity', 'risk', 'constraint']
 const REQUIREMENT_STATUSES = ['proposed', 'accepted', 'dropped']
 const SYSTEM_ACCESS = ['ok', 'missing']
-const NODE_ID = /^[EFST]-\d{3,}$/
+const NODE_ID = /^[EFST]-\d+$/
 const NODE_LEVELS = { E: 'epic', F: 'feature', S: 'story', T: 'task' }
 const NODE_DRILLS = ['open', 'split', 'leaf', 'parked']
 const TICKET_STATUSES = ['backlog', 'scoping', 'design', 'todo', 'in_progress', 'in_review', 'rework', 'merging',
@@ -1301,6 +1299,17 @@ function isListValue(fm, key) {
   return value === '' && listEntries(fm, key).length > 0
 }
 
+// The entries of next_ids, from an inline [ ] list or `- ` lines, unquoted. Null when the value
+// is not a list.
+function nextIdEntries(fm) {
+  if (!isListValue(fm, 'next_ids')) return null
+  const raw = fmValue(fm, 'next_ids').replace(/(^|\s+)#.*$/, '').trim()
+  const items = raw.startsWith('[')
+    ? raw.slice(1, -1).split(',')
+    : listEntries(fm, 'next_ids').map((e) => e.replace(/^\s*-\s*/, ''))
+  return items.map((e) => e.trim().replace(/^(["'])(.*)\1$/, '$2')).filter((e) => e !== '')
+}
+
 function checkRoadmap(fm, body, problems) {
   const mode = plainValue(fm, 'mode')
   if (mode !== null && !ROADMAP_MODES.includes(mode)) {
@@ -1308,17 +1317,18 @@ function checkRoadmap(fm, body, problems) {
   }
   const focus = plainValue(fm, 'focus')
   if (focus !== null && focus !== '' && !NODE_ID.test(focus)) {
-    problems.push(`roadmap focus must be a node id like E-001 or empty (got ${focus})`)
+    problems.push(`roadmap focus must be a node id like E-1 or empty (got ${focus})`)
   }
   if (mode === 'dfs' && focus === '') problems.push('roadmap focus is required when mode is dfs')
   const depth = plainValue(fm, 'max_depth')
   if (depth !== null && !/^\d+$/.test(depth)) problems.push(`roadmap max_depth must be a whole number (got ${depth})`)
+  // next_ids holds the next free id for each level letter, written as a list of ids.
   const next = plainValue(fm, 'next_ids')
   if (next !== null) {
-    const map = next.match(/^\{(.*)\}$/)
-    const entries = map ? map[1].split(',').map((e) => e.trim()).filter((e) => e !== '') : []
-    if (!map || entries.some((e) => !/^[A-Za-z]+:\s*\d+$/.test(e))) {
-      problems.push(`roadmap next_ids must be a flow map like { E: 2, F: 5, S: 1, T: 1 } (got ${next})`)
+    const ids = nextIdEntries(fm)
+    const letters = (ids || []).map((e) => e[0])
+    if (ids === null || ids.some((e) => !NODE_ID.test(e)) || new Set(letters).size !== letters.length) {
+      problems.push(`roadmap next_ids must be a list with one next id per level letter, like [E-3, F-5, S-2, T-4] (got ${next})`)
     }
   }
   checkSectionOrder(body, 'roadmap', ROADMAP_SECTIONS, problems)
@@ -1329,7 +1339,7 @@ function checkRoadmap(fm, body, problems) {
 
 function checkRoadmapNode(fm, body, problems) {
   const id = plainValue(fm, 'id')
-  if (id !== null && !NODE_ID.test(id)) problems.push(`roadmap_node id must match E-/F-/S-/T- plus 3+ digits (got ${id})`)
+  if (id !== null && !NODE_ID.test(id)) problems.push(`roadmap_node id must match E-/F-/S-/T- plus a number, like T-3 (got ${id})`)
   const level = plainValue(fm, 'level')
   const levels = Object.values(NODE_LEVELS)
   if (level !== null && !levels.includes(level)) {
@@ -1338,6 +1348,9 @@ function checkRoadmapNode(fm, body, problems) {
     problems.push(`roadmap_node level ${level} does not match id ${id} (expected ${NODE_LEVELS[id[0]]})`)
   }
   const parent = plainValue(fm, 'parent')
+  if (parent === null && level !== null && levels.includes(level) && level !== 'epic') {
+    problems.push('missing roadmap_node key: parent')
+  }
   if (parent !== null && level !== null && levels.includes(level)) {
     if (level === 'epic' && parent !== '') problems.push(`roadmap_node epic must have an empty parent (got ${parent})`)
     if (level !== 'epic' && parent === '') problems.push(`roadmap_node ${level} needs a parent`)

@@ -511,10 +511,13 @@ role: planner
 model: opus
 created: 2026-07-04T03:10:00Z
 mode: dfs                          # bfs|dfs — the drill order
-focus: E-001                       # node id to drill under; required when mode is dfs, else ""
+focus: E-1                         # node id to drill under; required when mode is dfs, else ""
 max_depth: 4                       # deepest level the drill rounds may reach
-next_ids: { E: 2, F: 1, S: 1, T: 1 }   # next counter per id prefix; ids are never reused
+next_ids: [E-2, F-1, S-1, T-1]     # the next free id for each level letter; ids are never reused
 ```
+
+`dish`, `mode`, `focus`, `max_depth` and `next_ids` are required. `next_ids` is a flat list holding
+at most one id per letter; a round that creates `T-1` bumps the list to `T-2`.
 
 Body sections, in order: `## Intent`, `## Original request` (verbatim), `## Systems` (table:
 id | kind | locator | command | access, where `access` is `ok|missing` and `command` is the
@@ -538,14 +541,14 @@ dish: warehouse-migration          # the roadmap slug
 role: planner
 model: opus
 created: 2026-07-04T03:10:00Z
-id: T-003                          # E-|F-|S-|T- + 3+ digit counter; opaque, never reused
+id: T-3                            # E-|F-|S-|T- + a counter of any length; opaque, never reused
 level: task                        # epic|feature|story|task — must match the id's letter
-parent: S-002                      # empty ("") only on an epic
+parent: S-2                        # empty ("") or left out only on an epic
 title: Copy nightly sales tables to the new warehouse
 drill: leaf                        # open|split|leaf|parked
-satisfies: [R-004]                 # requirement ids
-covers: [I-012]                    # inventory row ids
-depends_on: [T-002]                # node ids
+satisfies: [R-4]                   # requirement ids
+covers: [I-12]                     # inventory row ids
+depends_on: [T-2]                  # node ids
 repo: /path/to/repo                # required when drill is leaf
 ticket: ""                         # board ticket id once published
 status: ""                         # ticket status once published (ticket vocabulary), else ""
@@ -554,9 +557,16 @@ sources:
   - briefs/3-sales-tables.md
 ```
 
+A node requires only `id`, `level`, `title` and `drill`, plus `parent` on anything below an epic
+and `repo` when `drill` is `leaf`. Every other key may be left out and then means its empty value:
+`[]` for the lists, `""` for `ticket` and `status`, `unknown` for `size_swag`. A key that is
+written is still checked: lists must be lists, `status` uses the ticket vocabulary, `size_swag`
+its enum.
+
 Body sections, in order: a leaf carries the ticket body contract, `## Goal`, `## Context`,
 `## Acceptance criteria`, `## Constraints`, `## Out of scope`; any other node carries `## Goal`
-and `## Children` (one line per child id). Budget: ≤ 60 lines.
+and `## Children` (one line per child id; a node not drilled yet says so in one line). Budget:
+≤ 60 lines.
 
 ### `roadmap_batch` — one confirmed round of changes (`<roadmap>/batches/<n>.md`)
 
@@ -572,12 +582,13 @@ model: opus
 created: 2026-07-04T03:10:00Z
 state: approved                    # proposed|approved|applied
 operations:                        # in apply order
-  - { op: create_node, target: T-003 }   # op: create_node|update_node|publish|link|status
-  - { op: publish, target: T-003 }
+  - { op: create_node, target: T-3 }     # op: create_node|update_node|publish|link|status
+  - { op: publish, target: T-3 }
 receipts:                          # one per applied operation: ticket id, read-back ok
-  - { target: T-003, ticket: ACME-41, read_back: ok }
+  - { target: T-3, ticket: ACME-41, read_back: ok }
 ```
 
+`state`, `operations` and `receipts` are required; write `[]` for a list with nothing in it yet.
 Body sections, in order: `## Proposal` (what the round changes and why), `## Dispositions` (the
 operator's answer and each inspector finding's ruling).
 
