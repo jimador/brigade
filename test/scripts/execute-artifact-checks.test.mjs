@@ -206,6 +206,8 @@ function schemaExamples() {
   const examples = Object.entries(blocks).map(([type, text]) => ({ from: `config.js ${type}`, text }))
   for (const section of md.split(/\n(?=### `)/).slice(1)) {
     const type = section.match(/^### `([a-z_]+)`/)[1]
+    // Roadmap types live outside a dish; brigade-validate-roadmap.test.mjs checks their examples.
+    if (type.startsWith('roadmap')) continue
     if (/^doc: /m.test(section)) examples.push({ from: `SCHEMAS.md ${type}`, text: section })
   }
   const envelope = md.slice(md.indexOf('## The common envelope'), md.indexOf('## Type registry'))

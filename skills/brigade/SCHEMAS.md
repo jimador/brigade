@@ -503,7 +503,7 @@ Producer: Planner, during `/brigade:roadmap`. Consumers: the operator, `brigade-
 (checks, frontier), later dishes picking up a published leaf. One per roadmap folder; nodes,
 batches and briefs sit beside it in `nodes/`, `batches/` and `briefs/`.
 
-```yaml
+---
 doc: roadmap
 schema: 1
 dish: warehouse-migration          # the roadmap slug
@@ -514,7 +514,7 @@ mode: dfs                          # bfs|dfs — the drill order
 focus: E-1                         # node id to drill under; required when mode is dfs, else ""
 max_depth: 4                       # deepest level the drill rounds may reach
 next_ids: [E-2, F-1, S-1, T-1]     # the next free id for each level letter; ids are never reused
-```
+---
 
 `dish`, `mode`, `focus`, `max_depth` and `next_ids` are required. `next_ids` is a flat list holding
 at most one id per letter; a round that creates `T-1` bumps the list to `T-2`.
@@ -534,7 +534,7 @@ at nothing, cycles and coverage gaps are `brigade-roadmap check`'s job.
 Producer: Planner, through confirmed batches. Consumers: `brigade-roadmap`, the board projection
 (a published leaf becomes a ticket), the operator.
 
-```yaml
+---
 doc: roadmap_node
 schema: 1
 dish: warehouse-migration          # the roadmap slug
@@ -555,7 +555,7 @@ status: ""                         # ticket status once published (ticket vocabu
 size_swag: S                       # XS|S|M|L|XL|unknown
 sources:
   - briefs/3-sales-tables.md
-```
+---
 
 A node requires only `id`, `level`, `title` and `drill`, plus `parent` on anything below an epic
 and `repo` when `drill` is `leaf`. Every other key may be left out and then means its empty value:
@@ -573,7 +573,7 @@ and `## Children` (one line per child id; a node not drilled yet says so in one 
 Producer: Planner, one per drill or publish round. Consumers: the operator (confirmation),
 resume (an `approved` batch that is not `applied` is replayed from its receipts).
 
-```yaml
+---
 doc: roadmap_batch
 schema: 1
 dish: warehouse-migration          # the roadmap slug
@@ -586,7 +586,7 @@ operations:                        # in apply order
   - { op: publish, target: T-3 }
 receipts:                          # one per applied operation: ticket id, read-back ok
   - { target: T-3, ticket: ACME-41, read_back: ok }
-```
+---
 
 `state`, `operations` and `receipts` are required; write `[]` for a list with nothing in it yet.
 Body sections, in order: `## Proposal` (what the round changes and why), `## Dispositions` (the

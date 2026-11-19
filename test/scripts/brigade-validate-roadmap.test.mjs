@@ -382,12 +382,12 @@ test('E4: the default sweep covers .brigade/roadmaps/*/', () => {
 
 // --- I1 SCHEMAS.md examples -----------------------------------------------------
 
-// The ```yaml block under one `### \`<type>\`` heading of SCHEMAS.md.
+// The bare --- frontmatter example under one `### \`<type>\`` heading of SCHEMAS.md.
 function example(type) {
   const start = SCHEMAS_MD.indexOf(`### \`${type}\``)
   assert.ok(start >= 0, `SCHEMAS.md has no ${type} section`)
-  const block = SCHEMAS_MD.slice(start).match(/```yaml\n([\s\S]*?)\n```/)
-  assert.ok(block, `SCHEMAS.md ${type} section has no yaml example`)
+  const block = SCHEMAS_MD.slice(start).match(/^---\n([\s\S]*?)\n---$/m)
+  assert.ok(block, `SCHEMAS.md ${type} section has no --- example`)
   return block[1]
 }
 
