@@ -1,213 +1,209 @@
-# Usage
+---
+title: Run a dish
+description: How to start, approve, resume and hand off one ticket with Brigade, from intake to an open pull request.
+---
 
-Everything you can say or run, and what it actually does.
+This page walks one ticket from "go" to an open pull request: what to say, what Brigade does at each phase, and the two moments it stops for you. Every slash command lives in [Commands](commands.md) and every helper script in [Scripts](scripts.md).
 
-<p align="center">
-  <img src="assets/svg/ember-terminal.svg" width="820" alt="A brigade run in the terminal: scouts fan out, a cook works an item, the inspector passes it, and it lands">
-</p>
+![A brigade run in the terminal: scouts fan out, a cook works an item, the inspector passes it, and it lands](assets/svg/ember-terminal.svg)
 
-## The shape of a session
+## Who you are talking to
 
-You talk to the **Planner** — the Claude Code or Codex session itself. It never reads
-source files or writes code; it plans, dispatches, and reports. All the token-heavy work
-happens in subagents you never talk to directly.
+You talk to the **Planner**, which is your Claude Code (or Codex) session itself. It never reads source to get oriented and never writes product code. It plans, dispatches subagents, reads their artifacts and reports back. Scouts research, cooks implement in their own git worktrees, and an inspector reviews every diff before it lands.
 
-A **dish** is one ticket cooked to completion. It has exactly two human checkpoints:
-approving the decomposition, and reviewing the PR.
+A **dish** is one ticket cooked to completion. Everything Brigade writes for it lives under `.brigade/dishes/<dish-slug>/`, which is never committed.
 
-Claude and Codex may work different dishes in the same repository at the same time. For
-one dish, Brigade acquires an atomic ownership lease before changing shared state and
-releases it at handoff or a human checkpoint. Either runtime can then resume from the same
-`PLAN.md`, reports, worktrees, and branches. Brigade never treats elapsed time alone as
-permission to break a lease.
+## Start a dish
 
-## Phrases
+Say one of these in a repo where Brigade is set up (run `/brigade:onboard` first if it is not):
 
-| Say this | What happens |
+| Say | What happens |
 | --- | --- |
-| `set up brigade` | First-run init: picks the source, interviews you, writes `.brigade/config.md` |
-| `work my board` | Lists your assigned tickets; you pick one; the full loop runs |
-| `work <ticket> with brigade` | Straight to research and decomposition for a named ticket |
-| `groom my board` | Grooming session — cluster, split, merge, sharpen. Never cooks |
-| `swag this ticket` / `flesh out the design` / `revisit the design` | Design pass; first run writes a decision ledger, each revisit resolves one open question; ticket stays in `design` |
-| `design the UI for <ticket>` / `ui loop` | Designer loop in your session: stand up the app or a canvas, iterate live, capture states as UI samples, ticket becomes implementer-ready |
-| `continue the dish` | Resumes from `PLAN.md` in any session, any time |
-| `upgrade my open work` | After a plugin update: brings open tickets and dishes up to the new rules, with one confirmation |
-| `brigade heavy` | Run this one dish at ★★★ |
-| `brigade light` | Run this one dish at ★ |
+| `work my board` or `work my tickets` | Lists your assigned tickets and runs the dish on the one you pick |
+| `brigade ACME-142` | Starts straight on the named ticket |
+| `parallelize this ticket` or `run the fleet` | Same as above, for the ticket you are already discussing |
+| `brigade heavy` | Runs this one dish at ★★★ |
+| `brigade light` | Runs this one dish at ★ |
+| `continue the dish` | Resumes a dish from its files, in any session |
 
-The trigger phrases override the configured tier for a single dish. To change the default,
-set `tier` in config or run `/brigade:tier`.
+`brigade heavy` and `brigade light` override the repo's tier for one dish only. A whole board goes to [grooming](grooming.md) first, and a ticket that needs a first design cut goes to [design swag](design-and-ui.md).
 
-## Slash commands
+## Follow the five phases
 
-| Command | What it shows |
-| --- | --- |
-| `/brigade:status` | Tier, each dish's items by status, worktrees, efficiency numbers |
-| `/brigade:config` | Resolved settings, which layer set each, prompt overrides, validation |
-| `/brigade:validate` | Schema conformance of every dish artifact |
-| `/brigade:tier` | Show or set the repo's default service tier |
-| `/brigade:retro` | Run the analyst pass on the current dish now (intensive at ★★★; `--standard`/`--intensive` to override) |
-| `/brigade:roadmap [slug] [resume\|refresh]` | Roadmap an initiative — intent, inventory, epics, drill rounds — as files under `roadmap_dir`; never claims or cooks |
-| `/brigade:design [ticket-id] [question-name]` | Design ledger for a ticket — first pass or one-question revisit — without claiming or cooking it |
-| `/brigade:ui [ticket-id] [state-name]` | UI design loop for a front-end ticket — live browser iteration, screenshots into the board, `## UI samples` spec; never claims or cooks |
-| `/brigade:review` | Advisory, tier-scaled code review of a branch, PR, or commit range |
-| `/brigade:review-dispatch` | Dispatch selected findings from a completed review report into a cooked mini-dish |
-| `/brigade:upgrade` | Upgrade open tickets and dishes to the installed version's rules (`skills/onboard/UPGRADES.md`) |
+The Planner copies a checklist into its first message and ticks it off as it goes:
 
-## Shell commands
-
-On the session's PATH whenever the plugin is enabled. All of them cost zero model tokens —
-reach for these instead of asking Claude to read state.
-
-```bash
-brigade-status                  # dish state: config, items, worktrees, efficiency
-brigade-status --json           # same, structured (needs jq)
-
-brigade-config resolve          # merged settings + winning layer per key
-brigade-config get tier         # one value
-brigade-config layers           # which layer files exist, in precedence order
-brigade-config prompts          # prompt-override stacks, by role
-brigade-config prompt cook      # the resolved override text for one role
-brigade-config doctor           # validate every layer; exit 1 on problems
-
-brigade-validate                # schema-check every dish artifact
-brigade-validate <path.md>...   # check specific files
-brigade-validate <dish-dir>     # check one dish (or the *.md files in any folder)
-brigade-validate --json         # structured results
-
-brigade-bundle                  # regenerate workflows/ from workflows/src/
-brigade-bundle --check          # fail if generated output is stale
-
-brigade-scope <PLAN.md> <item>   # is the item's diff inside its files and clear of contract-owned paths
-brigade-plan-view <PLAN.md>     # render PLAN.md as one HTML page beside it (never committed)
-
-brigade-roadmap check <dir>     # check a roadmap directory (add --complete for the final gate)
-brigade-roadmap next <dir>      # the next drill batch and the parked nodes
-brigade-roadmap-view <dir>      # render the roadmap as one offline HTML page (never committed)
-
-brigade-coord list              # active Claude/Codex dish owners
-brigade-coord status <dish>     # inspect one dish lease
+```text
+- [ ] 0 Intake
+- [ ] 1 Research
+- [ ] 2 Decompose
+- [ ] 3 to 5 Execute
+- [ ] 6 Handoff
 ```
 
-## Roadmaps
+### Intake
 
-`/brigade:roadmap` plans an initiative above the ticket level. It grills the intent, inventories
-the systems involved, proposes epics, and drills each one down in rounds you confirm, until the
-leaves are ready to become tickets. Its files live under `roadmap_dir` (default
-`.brigade/roadmaps`, set in `.brigade/config.md`). `brigade-roadmap check` validates them, and
-`brigade-roadmap-view` renders the same tree, dependencies and coverage as one offline page.
-A roadmap never claims a ticket or dispatches cooks; a ready leaf goes through normal intake.
+The Planner settles which ticket (the one you named, the one already in progress, or the only one assigned to you; otherwise it asks), reads it once and claims it: assignee set to you, `kind` set, status moved to in progress.
 
-## The phases, in order
+It then sweeps your other open tickets for overlap and records one decision for each: absorb it, cross-reference it, or leave it. A raw idea instead of a ticket gets a short interview first: a product round (who it is for, what success looks like, what is out of scope), then an architecture round (what it touches, how each criterion gets checked).
 
-**0 — Intake.** Resolve which ticket, read it once, sweep your other open tickets for
-scope overlap. A raw idea gets grilled first — product intent, then system shape — until a
-spec can be written without hedging.
+### Research
 
-**1 — Research.** The Planner writes focused questions and fans them out to scouts, which
-read the codebase in parallel and return short briefs with pasted contracts and anchors.
-The tier caps how many scouts run; anything dropped is logged, never silently skipped.
+The Planner writes the smallest set of focused questions the plan needs and sends each to a scout. Scouts read the codebase in parallel and return short briefs with pasted signatures and file anchors. Your tier caps how many run, and anything dropped is logged. You only hear from the Planner here if a genuine unknown changes scope.
 
-**2 — Decompose.** The Planner splits the ticket into work items that each touch 1–3 named
-files, do one thing, and need zero exploration because everything the cook needs is already
-in the packet. About 150 changed lines is a splitting heuristic, not a limit: a bigger item
-that is still one thing is flagged heavy, and one that does several things is split. Items in
-the same wave never share files — anything that overlaps gets a dependency edge instead.
+### Decompose
 
-This is the expensive thinking, and it happens once. At ★★★ (and at ★★ on triggers) an
-Inspector blind-sketches its own decomposition first, then critiques the Planner's — the
-comparison catches coverage gaps that groupthink would miss.
+The Planner splits the ticket into work items. Each item touches one to three named files, does one thing, carries everything the cook needs (pasted contracts, anchors, exact verify commands), and can be checked mechanically. Items in the same wave never share a file; overlap becomes a dependency edge. An item that is still one behavior but big or risky is flagged heavy and goes to the stronger cook from the start. The full rulebook is [DECOMPOSE.md](../skills/brigade/DECOMPOSE.md).
 
-**You approve the plan here.**
+When the tier calls for one, an inspector runs a **plan check** before you see the plan: it sketches its own decomposition blind, compares it with the Planner's, and executes the packets' checks against the real tree. Every finding gets a written ruling in the plan.
 
-**3–5 — Execute.** A deterministic script runs the DAG: create a worktree per item, cook,
-inspect, escalate on FAIL, then rebase and fast-forward onto the delivery branch — one
-landing at a time, with a contamination check that refuses to land if anything outside
-`.brigade/` is dirty in the main checkout.
+### Execute
 
-Repeated failure trips a **circuit breaker**. That is a signal the plan's premises were
-wrong, not bad luck; the run stops and hands back to you rather than burning another
-attempt against a bad assumption.
+After you approve, a workflow runs the whole dependency graph without stopping to ask: a worktree per item, a cook, an inspector verdict, a retry or a stronger cook on failure, then a rebase and fast-forward onto the delivery branch, one landing at a time. It refuses to land if anything outside `.brigade/` is dirty in your main checkout.
 
-**6 — Handoff.** Full verification gate on the integration branch, an acceptance pass over
-every criterion run by the inspector (Mode 4), one PR, the ticket moved to in-review with a
-plain-language comment, and an analyst retro.
+Repeated failure trips a circuit breaker. That means the plan's premises were wrong, so the Planner re-plans from first principles instead of burning another attempt.
 
-## Reviewing code on demand
+### Handoff
 
-`/brigade:review <branch|PR|range>` runs an advisory code review outside the six phases
-above — no packet, no PASS/FAIL gate, and it never posts to a pull request. It scales
-review depth to the tier (more dimensions and a stronger verify pass at ★★★, a single
-merged pass at ★) and returns findings that are already packet-shaped, so any of them can
-be handed to the execute pipeline later as a work item. See `skills/brigade/REVIEW.md`
-for the full contract.
+The Planner proves the gate at full scope on the delivery branch, has an inspector check every acceptance criterion, runs the red team, opens one draft PR with a checked body, moves the ticket to in review with a plain-language comment, and runs the analyst retro when your tier calls for one. See [Hand off the branch](#hand-off-the-branch) below.
 
-## Undo is git, not /rewind
+## Approve at the checkpoints
 
-Claude Code checkpointing doesn't track subagent edits or bash-driven changes — which is
-every mutation brigade makes (cooks edit in worktrees, landings are git merges). To undo
-brigade work, use git: reset the delivery branch, drop the item branch, or revert the
-merge. `/rewind` only restores the planner conversation.
+A plain dish stops for you twice:
 
-## When something blocks
+1. **The plan.** At the end of Decompose you see item titles, dependency edges, the wave layout, heavy flags and the plan check verdict. One yes starts execution, and nothing stops again until handoff unless a stop condition fires.
+2. **The pull request.** You review it like any other PR.
 
-Brigade never guesses a value to keep moving. A blocked item comes back as a
-**decision-ready question**: the exact missing value, the options, and a recommendation.
-Answer it and re-run execute.
+A dish that changes a shared interface plans one level at a time. It first shows you only the **contract** items (the interface, the decisions made, the questions parked for later). After those merge, it writes the implementation items and asks once more. A dish with no contract item has a single plan checkpoint.
 
-Ladder exhausted with no PASS is the one case the Planner fixes itself — announced, with a
-minimal diff, re-inspected by a fresh inspector before landing.
+Between approval and handoff, the Planner interrupts only for: a collision with another dish or branch, a blocked item that needs a value it will not guess, a rebase conflict it must resolve by hand, an item whose retries all failed, or the circuit breaker. A blocked item always comes back as one decision-ready question: the exact value needed, the options, and a recommendation.
 
-## The Planner's ledger
+## Resume a dish
 
-A dish can outlive a context window. The Planner keeps `state/planner.md` under the dish —
-Canon (the ticket's constraints, the operator's directives, the delivery branch) and World
-state (what has been verified, wave by wave). `brigade-status` prints the live World state, so
-`continue the dish` in a fresh session starts from verified facts. Protocol:
-`skills/brigade/MEMORY.md` § The Planner's ledger.
+Say `continue the dish` in any session, Claude Code or Codex. Resume is mechanical:
 
-## Self-improvement
+1. The Planner runs `brigade-status` and `brigade-coord list`, takes the dish lease, and reads its own ledger at `state/planner.md` (the facts it already verified).
+2. It reads `PLAN.md` only for the items it is about to act on, and reconciles them against the worktrees, branches and reports on disk. When the files and the plan disagree, the files win.
+3. It tells you in two lines where the dish stands, then carries on from the current phase.
 
-Retros compound in three layers:
+Approved levels are never re-planned and landed items are never re-cooked. A ticket sent back from review (`rework`) or approved for landing (`merging`) resumes at the matching step of [HANDOFF.md](../skills/brigade/HANDOFF.md).
 
-1. **Every dish (cadence set by tier)** — the analyst scores the run from its own
-   artifacts and proposes 1–3 evidence-backed process changes. Repo-local ones land in
-   `.brigade/LEARNINGS.md`, re-read at every dish start. At three-star the end-of-dish
-   retro is **intensive**: a stronger model with cross-dish inputs, a closure ledger over
-   past proposals (applied / ignored / dead), and web-backed tooling research — up to 5
-   proposals, which may include adopting a tool, lint rule, CI step, or hook. Tooling
-   proposals are yours to apply; nothing is ever auto-installed.
-2. **Across repos** — proposals that generalize go to your knowledge base (if you have one
-   configured) or `skills/brigade/policies/heuristics.md` for teams.
-3. **Periodically** — a heavy-model pass folds accumulated heuristics into the plugin
-   source itself, you review the diff, and absorbed heuristics are retired so they are
-   never re-proposed.
+Undo is git, not `/rewind`. Cooks edit in worktrees and landings are git merges, so checkpointing never sees them. Reset the delivery branch, drop an item branch or revert a merge instead.
 
-The fleet never edits its own installed brain. Upgrades go source → your review → rollout.
+## Watch the plan page
 
-## Upgrading
+`brigade-plan-view` renders a `PLAN.md` as one self-contained HTML page: dish facts, status counts, a dependency graph, the items table and the parked questions. It writes `plan.html` next to the plan by default (or wherever `--out` points) and is never committed. The scripts are not on your `PATH`; [Scripts](scripts.md) shows how to call them from your own terminal.
 
-Update the plugin with `claude plugin update brigade@brigade`, then start a new session.
-SessionStart heals config drift by itself. When the new version changes what open work
-should contain, it also says so; then say `upgrade my open work` or run `/brigade:upgrade`.
-The pass lists open tickets and dishes, shows one table of the changes the new version's
-ledger entries call for, applies them after your yes, validates every touched dish, and
-records the version in `.brigade/upgrade.json`. It never claims, cooks, or moves a ticket,
-never touches done work, and only changes the frontmatter of an item a cook is working on.
-A second pass over the same work changes nothing.
+```bash
+"$CLAUDE_PLUGIN_ROOT/scripts/brigade-plan-view" .brigade/dishes/<dish-slug>/PLAN.md
+"$CLAUDE_PLUGIN_ROOT/scripts/brigade-plan-view" --out .brigade/acme-142.html .brigade/dishes/<dish-slug>/PLAN.md
+```
 
-## Cost control
+The Planner re-renders it after every plan change and republishes it to the same page. A comment you leave on that page becomes a plan edit or a parked question, never a silent drop.
 
-The whole design is about not spending the expensive model on cheap work:
+## Watch the live board
 
-- The Planner plans once and never explores or implements.
-- Scouts, cooks, inspectors, and analysts run on the tier's cheap models.
-- `brigade-status`, `brigade-config`, and `brigade-validate` answer state questions for
-  free, and the SessionStart hook injects a snapshot so a resumed session does not
-  re-read artifacts.
-- Escalation is per item and evidence-driven — never fleet-wide.
+Run `/brigade-board` to open the task board in a pane beside the chat. It shows every agent on the dish as a sprite with its role and what it is working on, the work items moving through their lanes, recent messages from the dish folder, and how full the session's context is. It only reads: nothing on the board changes a ticket or a plan.
 
-The granularity rules in `skills/brigade/DECOMPOSE.md` exist for this reason: a cheap cook
-handed exact files, contracts, and a verification command produces mergeable code, while
-the same model told to "look around for the auth logic" produces garbage.
+![The live board playing a made-up dish](assets/svg/board-demo.svg)
+
+## Rehearse a plan before it runs
+
+`brigade-rehearse` runs the pipeline's own mechanical checks over a whole plan before anything is dispatched. It cooks nothing and changes nothing. The plan check runs it first, and you can run it yourself from inside the repo:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/scripts/brigade-rehearse" .brigade/dishes/<dish-slug>/PLAN.md
+"$CLAUDE_PLUGIN_ROOT/scripts/brigade-rehearse" .brigade/dishes/<dish-slug>/PLAN.md --base main --json
+"$CLAUDE_PLUGIN_ROOT/scripts/brigade-rehearse" .brigade/dishes/<dish-slug>/PLAN.md --no-exec
+```
+
+It compares the plan against the base branch (the plan's `delivery_branch`, falling back to the main line when that branch does not exist yet) and prints one line per finding:
+
+| Check | What it catches |
+| --- | --- |
+| `validate` | Anything `brigade-validate` fails on the plan |
+| `premise` | A file marked `(edit)` that is missing on the base, or `(create)` that already exists |
+| `owner` | A non-contract item listing a path a contract item owns |
+| `overlap` | Two independent items listing the same file |
+| `chain` | One file listed by three or more items (a warning) |
+| `risk` | An item the risk table escalates that is not flagged heavy |
+| `pin` | Tests outside an item's files that mention a file it edits (a warning) |
+| `premise FAIL` | A packet's premise line that exits non-zero on the base |
+| `verify UNRUNNABLE` | A Verify command that cannot run on the base for a reason the change will not fix |
+| `verify incomplete` | A Verify line that never ran because the block ended early |
+
+**Premise lines.** A packet that depends on a fact about the tree states it as a runnable check under its header lines. The command exits 0 when the fact holds:
+
+```markdown
+- **premise:** `grep -q 'export function exportOrders' src/orders/api.ts`
+```
+
+**The Verify runner.** Premises and Verify blocks run in a temporary detached worktree of the base, reset before each packet so nothing leaks between them. Each Verify block runs as one script with lines in order, so `cd` and variables carry over, and `set -e` is turned back off after every line so an expected failure never ends the block. Each premise and block gets 60 seconds. `--no-exec` skips running them.
+
+**Pin warnings.** A pin warning names the test files that mention a file the item edits but are not in its file list. The cook may have to change behavior those tests pin, so either add the tests to the item or confirm they should stay untouched.
+
+Exit codes: 0 means no findings (warnings allowed), 1 means findings, 2 means a usage or I/O error. Every finding needs a disposition row in the plan, like any plan-check finding.
+
+## Set up the verification gate
+
+The gate is the list of exact commands a cook must run and paste real output from. It lives under `## Repo` in `.brigade/config.md`; a `gate` key in a JSON config layer wins over it (see [Configuration](configuration.md)):
+
+```markdown
+## Repo
+
+- main_branch: main
+- verification_gate:
+  - npm run typecheck
+  - npm run lint
+  - npm test
+```
+
+One pattern keeps the gate honest as it grows: put every command in one script that stops at the first failure and prints a final line when all of them pass. Brigade's own repo does this with `test/gate.sh`, which ends by printing `GATE OK`. The same shape for a Node project:
+
+```bash
+#!/usr/bin/env bash
+set -e
+cd "$(dirname "$0")/.."
+npm run typecheck
+npm run lint
+npm test
+echo "GATE OK"
+```
+
+Then list it as the gate (`- ./test/gate.sh`). Two things to know:
+
+- **Scope is checked, not assumed.** `brigade-evidence` classifies every gate command. `npm test -- --filter orders` is `targeted` and never counts as repo green, even though it exits 0 like the full suite.
+- **A wrapper script reads as a test run.** `brigade-evidence` cannot see inside `./test/gate.sh`, so a handoff that claims lint and typecheck coverage fails on it alone. List the lint and typecheck commands next to the script, or claim only what the script proves.
+
+## Hand off the branch
+
+Handoff runs in this order, and the PR stays a draft until the last step is clean:
+
+1. **Prove the gate** on the delivery branch at full scope. A red gate with several landed items is bisected to the first bad commit, and that item goes back to rework.
+2. **Acceptance pass.** An inspector gives every acceptance criterion and every ticket test plan line exactly one verdict: verified with evidence, covered by a named test, or not verified. Anything not verified gets fixed first.
+3. **Red team.** Two fresh reviews of the whole delivery range: a find pass in a tool other than the one that wrote the code, then a verify pass in a tool other than the find pass's. Surviving errors become rework items, each starting with a test that fails on the reviewed head. A new head means a new review. Details in [Reviews](reviews.md#the-handoff-red-team).
+4. **PR body.** Rendered from the configured template and checked with `brigade-pr check` before anyone sees it. The PR opens as a draft and is marked ready only when `brigade-pr check --pr <n> --ready` passes, which needs a clean red-team verdict or a human override on the current head.
+5. **Ticket.** Moved to in review with a plain-language comment: what changed, how it was verified, how to review. Out-of-scope notes become filed, covered or dropped follow-ups.
+
+## Pick a tier
+
+A tier sets how much model each dish buys: ★★ two-star is the default, ★★★ three-star (`brigade heavy`) adds a stronger first cook, an always-on plan check and an intensive retro, and ★ one-star (`brigade light`) trims scouts and skips the plan check for mechanical work. The roles never change, only the spend. Set the repo default with `/brigade:tier`. The full table is in [Tiers](tiers.md).
+
+## Upgrade open work after a plugin update
+
+After `claude plugin update brigade@brigade` and a new session, the session start says when the new version changes what open tickets and dishes should contain. Say `upgrade my open work` or run `/brigade:upgrade`: it shows one table of changes, applies them after your yes, and never claims, cooks or moves a ticket.
+
+## Worked example: ACME-142
+
+You say `brigade ACME-142`. The ticket reads "Add CSV export to the orders page".
+
+1. **Intake.** The Planner claims ACME-142 and finds ACME-118 ("Export orders as PDF") in your queue. It records a cross-reference, not an absorb: different format, same button row.
+2. **Research.** Two scouts answer "where is the orders table's data loaded and in what shape?" and "how do the existing download endpoints set headers?".
+3. **Decompose.** Three items: `csv-serializer` (a pure function plus its test), `export-endpoint` (depends on the serializer), and `export-button` (depends on the endpoint). `export-endpoint` carries a premise that the orders query exists:
+
+   ```markdown
+   - **premise:** `grep -q 'export function listOrders' src/orders/query.ts`
+   ```
+
+   `brigade-rehearse` passes, apart from one pin warning: `test/orders/page.test.tsx` mentions the page the button item edits. The Planner adds that test to the item's files. You approve the plan.
+4. **Execute.** The serializer lands first, then the endpoint after one inspector FAIL (a missing header), then the button.
+5. **Handoff.** `./test/gate.sh` prints `GATE OK`, the acceptance pass verifies all four criteria, the red team comes back clean, and a PR opens from `feat/orders-csv-export` with ACME-142 in review.

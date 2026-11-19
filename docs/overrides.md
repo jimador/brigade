@@ -1,48 +1,59 @@
-# Prompt and agent overrides
+---
+title: Prompt overrides
+description: Add your own instructions to any Brigade role, per person or per team, without forking the agents.
+---
 
-Config settings replace values. Prompt overrides **stack**: every layer that has text for
-a role contributes, appended in layer order, after the shipped prompt. A repo can tighten
-a global rule without losing it, and nothing you write can delete a shipped rule.
+Prompt overrides let you add instructions to a role, such as "never edit generated files" for
+every cook, without editing the shipped agents. This page shows where the files go, how they
+stack, and how to check what each role actually receives.
 
-That last part is deliberate. Overrides add instructions; they never remove the Inspector
-gate, the Analyst pass, or the evidence requirements. If you need those gone, fork the
-agent files — don't paper over them with an override.
+## Overrides add, they never remove
 
-## Where the files go
+Config settings replace values. Prompt overrides stack: every layer that has text for a role
+contributes, appended in layer order after the shipped prompt. A repo can tighten a global
+rule without losing it, and nothing you write can delete a shipped rule.
+
+That is deliberate. Overrides never remove the inspector gate, the analyst pass or the
+evidence requirements. If you need those gone, fork the agent files instead.
+
+## Put the file in the right place
 
 | Layer | Agent overrides | Prompt overrides | Committed? |
 | --- | --- | --- | --- |
-| global | `~/.brigade/overrides/agents/<name>.md` | `~/.brigade/overrides/prompts/<name>.md` | no |
-| team | `<repo>/.brigade-overrides/agents/<name>.md` | `<repo>/.brigade-overrides/prompts/<name>.md` | **yes** |
-| local | `<repo>/.brigade/overrides/agents/<name>.md` | `<repo>/.brigade/overrides/prompts/<name>.md` | no |
+| global | `~/.brigade/overrides/agents/<role>.md` | `~/.brigade/overrides/prompts/<role>.md` | no |
+| team | `.brigade-overrides/agents/<role>.md` | `.brigade-overrides/prompts/<role>.md` | yes |
+| local | `.brigade/overrides/agents/<role>.md` | `.brigade/overrides/prompts/<role>.md` | no |
 
-`<name>` is a role: `scout`, `cook`, `cookHeavy`, `inspector`, `analyst`, `design`,
-`steward`, or `planner`.
+Team and local paths are relative to the repo root. `<role>` is one of `scout`, `cook`,
+`cookHeavy`, `inspector`, `analyst`, `design`, `designer`, `steward` or `planner`.
 
-The `agents/` and `prompts/` split is organizational, not functional — both stack into the
-same resolved text. Use `agents/` for durable role instructions and `prompts/` for
-task-shaped nudges if the distinction helps you; brigade does not care.
+The `cook` stack applies to every cheap rung of the ladder, the retry included. `cookHeavy`
+applies to the heavy cook.
 
-## Inspecting the stack
+The `agents/` and `prompts/` split is for your own organization: both stack into the same
+resolved text. Use `agents/` for durable role instructions and `prompts/` for task-shaped
+nudges if the distinction helps you.
+
+## Check what a role receives
 
 ```bash
 brigade-config prompts          # every override, in the order it applies
 brigade-config prompt cook      # the resolved text for one role, with layer markers
 ```
 
-Example:
+Example output:
 
-```
+```text
 ## prompt overrides (applied in this order, appended to the shipped text)
   cook:
-    global  /home/you/.brigade/overrides/agents/cook.md (6 lines)
-    team    /path/to/acme/web/.brigade-overrides/agents/cook.md (11 lines)
+    global  ~/.brigade/overrides/agents/cook.md (6 lines)
+    team    /path/to/repo/.brigade-overrides/agents/cook.md (11 lines)
     config  (inline in config) (1 lines)
 ```
 
-## Inline additions
+## Add a sentence inline
 
-One or two sentences do not deserve a file:
+One or two sentences do not deserve a file. Put them in any JSON config layer:
 
 ```json
 {
@@ -54,21 +65,21 @@ One or two sentences do not deserve a file:
 }
 ```
 
-Inline fragments apply after file overrides from the same layer.
+Inline fragments apply after the file overrides from the same layer.
 
-## Writing a good override
+## Write a good override
 
-Overrides are appended to a prompt that already has rules, so write them as **additional
-constraints**, not as a new brief.
+Overrides are appended to a prompt that already has rules, so write them as extra
+constraints, not as a new brief.
 
 Good:
 
 ```markdown
-This repo's HTTP handlers are generated. Never edit files under `src/generated/` —
-change the schema in `schema/` and note in your report that regeneration is required.
+This repo's HTTP handlers are generated. Never edit files under `src/generated/`.
+Change the schema in `schema/` and note in your report that regeneration is required.
 ```
 
-Bad — restates what the shipped prompt already says, and burns tokens on every dispatch:
+Bad, because it restates the shipped prompt and burns tokens on every dispatch:
 
 ```markdown
 You are a cook. Implement exactly one work packet. Stay inside the file list. Run the
@@ -76,24 +87,27 @@ verification gate and paste the output...
 ```
 
 Keep each override under about 20 lines. Every line is re-sent on every dispatch of that
-role, so a bloated override is a per-item tax on a run that may dispatch dozens of agents.
+role, and a run may dispatch dozens of agents.
 
-## How it reaches the agents
+## How overrides reach the agents
 
-The Planner resolves the stack once at dish start and passes it to the workflow scripts as
-`promptOverrides`, keyed by role. `brigade-execute` and `brigade-research` append the
-fragments to each dispatch. Agents never read the override files themselves — resolution
-happens once, so a mid-run edit to an override file does not change agents already in
-flight.
+The Planner resolves the stack once at dish start with `brigade-config prompts --json` and
+passes it to the workflow scripts as `promptOverrides`, keyed by role. The execute, research
+and review workflows append the text to each dispatch. Agents never read the override files
+themselves, so editing an override mid-run does not change agents already in flight.
 
-## Precedence recap
+The `planner` stack is the exception, because nothing dispatches the Planner: the SessionStart
+hook inlines it into the session. If that block is missing, the Planner runs
+`brigade-config prompt planner` itself at dish start.
 
+## Precedence at a glance
+
+```text
+shipped agent or skill text
+  + ~/.brigade/overrides/...          (global, yours)
+  + .brigade-overrides/...            (team, committed)
+  + .brigade/overrides/...            (local, yours, this repo)
+  + config prompts.<role>.append      (same layer order)
 ```
-shipped agent/skill text
-  + ~/.brigade/overrides/…            (global, yours)
-  + <repo>/.brigade-overrides/…       (team, committed)
-  + <repo>/.brigade/overrides/…       (local, yours, this repo)
-  + config `prompts.<role>.append`    (same layer order)
-```
 
-Specificity wins for settings; for prompts, everything applies.
+For settings, the most specific layer wins. For prompts, everything applies.

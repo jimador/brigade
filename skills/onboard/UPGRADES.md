@@ -49,6 +49,14 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.53.1
+
+- touches: none
+- what: the docs are rewritten as a site-ready set (frontmatter on every page, a `docs/docs.json`
+  navigation file, new installation, concepts, roadmap, roadmap demo, grooming, design and UI, reviews,
+  commands, scripts and artifacts pages); a made-up showcase roadmap ships at
+  `skills/roadmap/examples/launch-demo/`; the roadmap view's heading shows the roadmap's own title.
+
 ### 0.53.0
 
 - touches: none

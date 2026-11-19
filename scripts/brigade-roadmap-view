@@ -327,13 +327,45 @@ function renderFacts(a, problems) {
   ].map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')
 }
 
-function render(model, template) {
+// The roadmap's own name for the page heading. The roadmap schema has no title key, so this takes
+// a `title:` in the frontmatter when someone wrote one, then the body's first `# ` heading, then
+// the first sentence of the Intent. Empty when none of those has any text.
+function roadmapTitle(model, text) {
+  const fromFrontmatter = str(model.roadmap.frontmatter.title).trim()
+  if (fromFrontmatter) return fromFrontmatter
+  const lines = str(text).split(/\r?\n/)
+  let start = 0
+  if (lines[0] === '---') {
+    const end = lines.indexOf('---', 1)
+    start = end === -1 ? lines.length : end + 1
+  }
+  const body = lines.slice(start)
+  for (const line of body) {
+    const h1 = /^#\s+(.+?)\s*#*\s*$/.exec(line)
+    if (h1) return h1[1].trim()
+  }
+  const at = body.findIndex((line) => /^##\s+Intent\s*$/.test(line))
+  if (at === -1) return ''
+  const para = []
+  for (const line of body.slice(at + 1)) {
+    if (/^#/.test(line)) break
+    if (line.trim() === '') { if (para.length) break; continue }
+    para.push(line.trim())
+  }
+  const intent = para.join(' ')
+  const sentence = (/^(.+?[.!?])(?=\s|$)/.exec(intent) || [, intent])[1]
+  const short = sentence.replace(/[.!?]$/, '').trim()
+  return short.length > 120 ? `${short.slice(0, 119).trimEnd()}…` : short
+}
+
+function render(model, template, text = '') {
   const a = analyse(model)
   const cycles = findCycles(model)
   const problems = problemLines(a, cycles)
-  const title = str(model.roadmap.frontmatter.title).trim()
+  const title = roadmapTitle(model, text)
   const values = {
     TITLE: esc(title ? `Roadmap: ${title}` : 'Roadmap'),
+    HEADING: title ? `<span class="label">Roadmap</span> ${esc(title)}` : 'Roadmap',
     FACTS: renderFacts(a, problems.length),
     PROBLEMS: renderProblems(problems),
     OUTLINE: renderOutline(a),
@@ -367,9 +399,15 @@ function main(argv) {
     return 2
   }
 
+  // The heading reads the Intent, which the parsed model does not keep, so read the file once more.
+  let text = ''
+  try {
+    text = fs.readFileSync(path.join(dir, 'ROADMAP.md'), 'utf8')
+  } catch { /* a missing ROADMAP.md is listed as a problem on the page */ }
+
   const outPath = path.resolve(args.out ?? path.join(dir, 'roadmap.html'))
   try {
-    fs.writeFileSync(outPath, render(parseRoadmap(dir), template))
+    fs.writeFileSync(outPath, render(parseRoadmap(dir), template, text))
   } catch (err) {
     console.error(`could not write ${outPath}: ${err.message}`)
     return 2

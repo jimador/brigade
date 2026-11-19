@@ -12,6 +12,8 @@
 //      lanes with an unpublished lane for leaves without a ticket; coverage lists the gaps.
 //   E3 ensures: a malformed or cyclic roadmap still renders, its problems listed above the outline.
 //   E4 ensures: roadmap text is escaped; the page holds no <script element and no network URL.
+//   E5 ensures: the heading and <title> carry the roadmap's name (a frontmatter `title`, else the
+//      first `# ` heading, else the Intent's first sentence), escaped, with "Roadmap" as a label.
 //   I1 invariant: the page depends only on the roadmap's content: two runs, or the same roadmap in
 //      two places, give the same bytes.
 
@@ -209,4 +211,29 @@ test('E4: hostile titles and table text are escaped; no script and no network UR
   assert.ok(html.includes('<title>Roadmap: &lt;script&gt;bad()&lt;/script&gt;</title>'))
   assert.ok(!/https?:\/\//.test(html), 'page names a network URL')
   assert.ok(!/<link|<iframe|<object|<embed/i.test(html))
+})
+
+test('E5: the heading and page title name the roadmap, with Roadmap as a small label', () => {
+  const write = (lines) => {
+    const dir = path.join(tmp(), 'named')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'ROADMAP.md'), lines.join('\n'))
+    return render(dir)
+  }
+  const head = ['---', 'doc: roadmap', 'mode: bfs', '---', '']
+
+  // No title key and no H1: the Intent's first sentence, escaped.
+  let html = write([...head, '## Intent', '', 'Acme moves <billing> & invoices to the new ledger. Nothing else', 'changes.', ''])
+  assert.ok(html.includes('<title>Roadmap: Acme moves &lt;billing&gt; &amp; invoices to the new ledger</title>'), html.slice(0, 400))
+  assert.ok(html.includes('<h1><span class="label">Roadmap</span> Acme moves &lt;billing&gt; &amp; invoices to the new ledger</h1>'))
+
+  // A first-level heading in the body wins over the Intent.
+  html = write([...head, '# Ledger move', '', '## Intent', '', 'Something longer. More.', ''])
+  assert.ok(html.includes('<title>Roadmap: Ledger move</title>'))
+  assert.ok(html.includes('<h1><span class="label">Roadmap</span> Ledger move</h1>'))
+
+  // Nothing to name it by: plain Roadmap, no label.
+  html = write([...head, '## Systems', ''])
+  assert.ok(html.includes('<title>Roadmap</title>'))
+  assert.ok(html.includes('<h1>Roadmap</h1>'))
 })

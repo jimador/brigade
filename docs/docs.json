@@ -1,0 +1,36 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Brigade",
+  "colors": {
+    "primary": "#FF6B35"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": ["index", "quickstart", "installation", "concepts"]
+      },
+      {
+        "group": "Guides",
+        "pages": ["usage", "roadmap", "roadmap-demo", "grooming", "design-and-ui", "reviews"]
+      },
+      {
+        "group": "Configure",
+        "pages": ["configuration", "overrides", "tiers", "sources"]
+      },
+      {
+        "group": "Reference",
+        "pages": ["commands", "scripts", "artifacts"]
+      },
+      {
+        "group": "Under the hood",
+        "pages": ["architecture", "intent", "experiments"]
+      },
+      {
+        "group": "Help",
+        "pages": ["troubleshooting"]
+      }
+    ]
+  }
+}

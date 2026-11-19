@@ -1,53 +1,59 @@
-# Brigade documentation
+---
+title: Brigade
+description: Brigade turns one Claude Code session into the planner of a cheap, parallel coding fleet that works your ticket board.
+---
 
-<p align="center">
-  <img src="assets/svg/ember-badge.svg" width="220" alt="Brigade — let your agents cook">
-</p>
+![Brigade, let your agents cook](assets/svg/ember-badge.svg)
 
-A Claude Code plugin that turns one session into the planner of a parallel dev fleet.
+Brigade is a Claude Code plugin that turns your session into the planner of a parallel coding fleet. Point it at a ticket, and scouts research, cooks implement small packets in their own git worktrees, an inspector reviews every diff, and you get one PR to review.
 
-## Start here
+You keep two jobs: approve the plan, and review the PR. Everything in between runs on cheap subagents, with real command output as evidence at every step.
 
-- **[quickstart.md](quickstart.md)** — nothing to a merged PR in ten minutes, no service
-  or token required
-- **[usage.md](usage.md)** — every phrase, slash command, and shell command (including the
-  plan view and the scope check), and what each actually does
+## What you can do
 
-## Configure it
+- **Cook a ticket end to end.** Say `work my board`, pick a ticket, approve the split, and parallel cooks take it to one reviewed PR. See [Run a dish](usage.md).
+- **Groom a board.** Cluster, split, merge and sharpen tickets until they are ready to cook, one confirmed batch at a time. See [Grooming](grooming.md).
+- **Plan a whole initiative.** `/brigade:roadmap` turns an intent into epics and drills them down into cookable tickets, with an offline HTML view. See [Roadmaps](roadmap.md).
+- **Review a branch.** `/brigade:review` reviews a branch, PR or commit range along named dimensions, and `/brigade:review-dispatch` cooks the findings you pick. See [Reviews](reviews.md).
 
-- **[configuration.md](configuration.md)** — the four settings layers, every key, and how
-  to see which layer won
-- **[overrides.md](overrides.md)** — prompt and agent overrides that stack across layers
-- **[tiers.md](tiers.md)** — service tiers, and how to override one row of a tier
+It works with Notion, ClickUp, an Obsidian vault, or a plain folder of markdown files, so you can try it with no service and no token.
 
-## Understand it
+## Where to go next
 
-- **[architecture.md](architecture.md)** — the pipeline, the roles, the git model, and why
-  it is built this way
-- **[sources.md](sources.md)** — ticket sources and the four-operation adapter contract
-- **[intent.md](intent.md)** — what brigade optimizes for, its bet and non-goals, and how the intent changes
-- **[experiments.md](experiments.md)** — hypotheses the fleet has tested: setup, metric, result, decision
-- **[retros/](retros/)** — what a dish cost and what changed because of it, one record per published run
+### Get started
 
-## When it goes wrong
+- [Quickstart](quickstart.md): from nothing to a landed change in ten minutes, using a local board.
+- [Installation](installation.md): requirements, installing, updating, and upgrading open work.
+- [Concepts](concepts.md): the nouns Brigade uses, one or two sentences each.
 
-- **[troubleshooting.md](troubleshooting.md)** — blocked items, stopped runs, config that
-  seems ignored, landing failures
+### Guides
 
-## Reference (ships with the plugin)
+- [Run a dish](usage.md): every phrase, slash command and helper, and what each one does.
+- [Roadmaps](roadmap.md): plan an initiative from intent down to ready tickets.
+- [Roadmap demo](roadmap-demo.md): a worked roadmap, with its HTML view.
+- [Grooming](grooming.md): get a messy board ready to cook.
+- [Design and UI](design-and-ui.md): swag a design or iterate a front-end ticket live before anyone cooks.
+- [Reviews](reviews.md): review a branch, PR or range, and dispatch the findings.
 
-- [`skills/brigade/SKILL.md`](../skills/brigade/SKILL.md) — the Planner's router: standing rules, the dish checklist, and pointers into the phase companions
-- [`skills/brigade/DECOMPOSE.md`](../skills/brigade/DECOMPOSE.md) — Phase 2: premise rules, DAG rules, the haiku bar, heavy flags, the plan check
-- [`skills/brigade/EXECUTE.md`](../skills/brigade/EXECUTE.md) — Phases 3–5: pre-flight, the execute workflow, the ledger, stop conditions
-- [`skills/brigade/HANDOFF.md`](../skills/brigade/HANDOFF.md) — Phase 6: proving the gate, the acceptance pass, PR or push, ticket, retro
-- [`skills/brigade/COORDINATION.md`](../skills/brigade/COORDINATION.md) — the Claude/Codex dish lease and wire contract
-- [`skills/brigade/CONFIG.md`](../skills/brigade/CONFIG.md) — settings layers, resolution, prompt overrides
-- [`skills/brigade/MEMORY.md`](../skills/brigade/MEMORY.md) — working memory: the cook ledger and the Planner's ledger
-- [`evals/`](../evals/) — the `claude plugin eval` suite: eight expected-workflow cases with fixtures
-- [`skills/brigade/SCHEMAS.md`](../skills/brigade/SCHEMAS.md) — the typed artifact registry
-- [`skills/brigade/TIERS.md`](../skills/brigade/TIERS.md) — machine-readable tier policy
-- [`skills/brigade/policies/heuristics.md`](../skills/brigade/policies/heuristics.md) — process rules earned by retros, shared by the team
-- [`skills/brigade/GRAPHITE.md`](../skills/brigade/GRAPHITE.md) — optional Graphite modes
-- [`skills/groom/SKILL.md`](../skills/groom/SKILL.md) — the board-grooming session
-- [`skills/brigade/sources/`](../skills/brigade/sources/) — one file per ticket source
-- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — how to change the plugin safely
+### Configure
+
+- [Configuration](configuration.md): the settings layers, every key, and how to see which layer won.
+- [Overrides](overrides.md): prompt and agent overrides that stack across layers.
+- [Tiers](tiers.md): how much model each dish buys, and how to change one row.
+- [Sources](sources.md): ticket boards and the four-operation adapter contract.
+
+### Reference
+
+- [Commands](commands.md): every `/brigade:` slash command.
+- [Scripts](scripts.md): the zero-token helper scripts.
+- [Artifacts](artifacts.md): the files a dish, review or roadmap writes, and their schemas.
+
+### Under the hood
+
+- [Architecture](architecture.md): the pipeline, the roles, the git model, and why it is built this way.
+- [Intent](intent.md): what Brigade optimizes for, its bet, and its non-goals.
+- [Experiments](experiments.md): the hypotheses the fleet has tested, with results and decisions.
+
+### Help
+
+- [Troubleshooting](troubleshooting.md): blocked items, stopped runs, config that seems ignored, landing failures.

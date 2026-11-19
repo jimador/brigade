@@ -22,6 +22,7 @@ html { scroll-behavior: smooth; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 1200px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 1.4rem; margin: 0 0 12px; overflow-wrap: anywhere; }
+h1 .label { display: block; color: var(--muted); font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 h2 { font-size: 1.15rem; margin: 32px 0 10px; scroll-margin-top: 56px; }
 h3 { font-size: 1rem; margin: 22px 0 8px; scroll-margin-top: 56px; overflow-wrap: anywhere; }
 nav.top { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
@@ -90,7 +91,7 @@ td.bad { color: var(--blocked); font-weight: 700; }
   <a href="#coverage">Coverage</a>
 </nav>
 <main>
-  <h1>{{TITLE}}</h1>
+  <h1>{{HEADING}}</h1>
   <dl class="card facts">{{FACTS}}</dl>
   {{PROBLEMS}}
 

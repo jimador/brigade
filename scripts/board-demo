@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// board-demo — draws docs/assets/svg/board-demo.svg, the animated board in the README.
+// board-demo — draws docs/assets/svg/board-demo.svg, the animated board in the docs (docs/usage.md).
 //
 // It plays one made-up run of a dish through the board's own code. The run is written the way
 // the live board sees one: model steps and tool calls for each agent, a PLAN.md the Planner keeps

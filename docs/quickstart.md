@@ -1,26 +1,22 @@
-# Quickstart
+---
+title: Quickstart
+description: Go from nothing to a landed, reviewed change in about ten minutes, using a folder of markdown files as your board.
+---
 
-Ten minutes from nothing to a merged PR, using a folder of markdown files as the board.
-No service, no token, no config file to write by hand.
+This page takes you from a fresh install to one ticket cooked, inspected and landed on a delivery branch. You use the local board, a folder of markdown files, so there is no service to connect and no token to set.
 
-## 1. Install the plugin
+## Install the plugin
 
 ```bash
 claude plugin marketplace add jimador/brigade
 claude plugin install brigade@brigade
 ```
 
-Working from a local clone, pass the clone's path to `marketplace add` instead.
+Requirements and other ways to install are on [Installation](installation.md).
 
-Or try it without installing: `claude --plugin-dir /path/to/brigade`.
+## Make a board
 
-Requirements: `git`, `node` (for `brigade-config`, `brigade-validate`, `brigade-bundle`),
-`python3` (for the git-hygiene guard). `jq` and `gh` are optional — `jq` unlocks
-`brigade-status --json`, `gh` lets brigade open the PR for you.
-
-## 2. Make a board
-
-In the repo you want to work on:
+In the repo you want to work on, create a `tasks/` folder with one ticket in it:
 
 ```bash
 mkdir -p tasks
@@ -41,85 +37,81 @@ password check every time.
 ## Acceptance criteria
 
 - After 5 failed attempts from an IP within 5 minutes, further attempts return 429.
-- Successful login resets the counter for that IP.
+- A successful login resets the counter for that IP.
 - The limit is configurable and covered by a test.
 EOF
 ```
 
-Set `assignee` to whatever you want to call yourself — it just has to match the `user`
-value in the config brigade writes next.
+Set `assignee` to whatever you want to call yourself. It only has to match the `user` value you give Brigade in the next step, because the local board lists tickets whose `assignee` is you and whose `status` is `todo`.
 
-## 3. Set up brigade in the repo
+## Set up Brigade in the repo
 
-Start Claude Code in the repo and say:
+Start Claude Code in the repo and run:
 
-```
-set up brigade
-```
-
-The init flow asks which source (pick **local**), where the board is (`tasks/`), your
-assignee name, and the commands that verify a change in this repo — the test and typecheck
-you would run before opening a PR. It writes `.brigade/config.md` and excludes `.brigade/`
-from git.
-
-Check it landed:
-
-```bash
-brigade-status
-brigade-config layers
+```text
+/brigade:onboard
 ```
 
-## 4. Cook a ticket
+Saying `set up brigade` does the same thing. Onboarding scans the repo, shows you a short plan of what it will create, and asks one approval for the whole plan. Then it asks only what it could not detect:
 
+- **Source:** pick `local`, with `tasks/` as the board folder.
+- **Your name on the board:** the `assignee` value you used above.
+- **Verification gate:** the commands that prove a change works here, like your test and typecheck commands. It suggests candidates it found in the repo.
+
+It writes `.brigade/config.md`, adds `.brigade/` to `.git/info/exclude` so nothing under it is ever committed, records the plugin version, and offers to add a short `## Brigade` section to your `AGENTS.md`. It finishes by validating the config and reading the board once, so a broken setup shows up now rather than mid-dish.
+
+Check the result at zero token cost:
+
+```text
+/brigade:config
+/brigade:status
 ```
+
+## Cook your first ticket
+
+Say:
+
+```text
 work my board
 ```
 
-Brigade lists your `todo` tickets, you pick one, and then:
+Brigade lists your `todo` tickets. Pick one, and the dish begins:
 
-1. **Scouts** research the codebase in parallel and write short briefs.
-2. The **Planner** breaks the ticket into small, disjoint work items and shows you the
-   plan. **This is your one approval point** — check the split before saying go.
-3. **Cooks** implement each item in its own git worktree, running your verification
-   commands and pasting the real output.
-4. An **Inspector** reviews every diff and rules PASS or FAIL. FAIL sends the item back up
-   an escalation ladder — a stronger model, with the findings attached.
-5. Passed items land onto one delivery branch in dependency order.
-6. An **Analyst** writes a retro, and brigade opens one PR for your review.
+1. **Intake.** The planner claims the ticket: it moves it to `in_progress` and checks your other open tickets for overlap.
+2. **Research.** Scouts answer a few focused questions about the codebase in parallel and write short briefs.
+3. **Plan.** The planner splits the ticket into small work items, each one or a few named files with its own verification command, and shows you the plan. **This is your approval point.** Check the split, then say go.
+4. **Cook.** Cooks implement the items in parallel, each in its own git worktree, and paste the real output of your gate commands as evidence.
+5. **Inspect.** An inspector reviews every diff and rules PASS or FAIL. A FAIL sends the item back up an escalation ladder with the findings attached, ending at a stronger cook.
+6. **Land.** Passed items land on one delivery branch in dependency order, by rebase and fast-forward.
+7. **Hand off.** The planner proves the gate at full scope, runs an acceptance pass against the ticket's criteria, opens one PR (or hands you the branch), moves the ticket to review, and runs the retro when the tier calls for one.
 
-You review the PR. Everything between the plan approval and that PR is autonomous.
+Between your plan approval and the handoff, the fleet runs on its own. It stops early only for a decision it cannot make: then it asks you one question with options and a recommendation, or marks the ticket `blocked` with a comment.
 
-## 5. Watch it without spending tokens
+## Watch it without spending tokens
 
-In any session, in the repo:
+Open another Claude Code session in the same repo at any time:
 
-```bash
-brigade-status              # tier, item statuses, worktrees, efficiency
-brigade-validate            # do the artifacts conform to their schemas?
-brigade-config resolve      # what settings are actually in effect
+```text
+/brigade:status      # tier, each dish's items by status, worktrees, leases, efficiency
+/brigade:validate    # do the dish artifacts match their schemas?
+/brigade:config      # which settings are in effect, and which layer set them
 ```
 
-Slash commands wrap these: `/brigade:status`, `/brigade:validate`, `/brigade:config`.
+The dish's files live in `.brigade/dishes/<slug>/`: the plan in `PLAN.md`, briefs, cook reports and inspector verdicts under it.
 
-## 6. Resume anything
+## Resume anything
 
-Close the session mid-run and open a new one. Say `continue the dish`. State lives in
-`.brigade/dishes/<slug>/PLAN.md` and the report trail, not in the conversation, so a fresh
-session picks up exactly where the last one stopped. Items already landed are skipped, not
-re-cooked.
+Close the session mid-run and open a new one, then say `continue the dish`. State lives in `PLAN.md` and the report trail on disk, not in the conversation, so a fresh session picks up where the last one stopped. Items that already landed are skipped, never cooked twice.
 
 ## What to change first
 
-- **Tier.** `two-star` is the default. `brigade heavy` for one dish, or set `tier` in
-  `brigade.config.json` for the repo. See [tiers.md](tiers.md).
-- **Parallelism.** `maxParallel` in config, if four concurrent cooks is too much for your
-  machine or your test suite.
-- **A rule the cooks keep getting wrong.** Add it once as a prompt override rather than
-  repeating it every dish. See [overrides.md](overrides.md).
+- **Tier.** Two-star is the default. Say `brigade heavy` for one dish on a stronger model, or run `/brigade:tier three-star` to change the repo. See [Tiers](tiers.md).
+- **Parallelism.** Set `maxParallel` in config if four cooks at once is too much for your machine or your test suite. See [Configuration](configuration.md).
+- **A rule the cooks keep missing.** Add it once as a prompt override instead of repeating it every dish. See [Overrides](overrides.md).
 
 ## Next
 
-- [usage.md](usage.md) — every command and phrase, and what each actually does
-- [configuration.md](configuration.md) — the four config layers
-- [sources.md](sources.md) — Notion, ClickUp, Obsidian, or your own board
-- [troubleshooting.md](troubleshooting.md) — when a run stalls
+- [Concepts](concepts.md): the nouns you just saw, defined.
+- [Run a dish](usage.md): every phrase, command and helper.
+- [Sources](sources.md): move from the local board to Notion, ClickUp or Obsidian.
+- [Troubleshooting](troubleshooting.md): when a run stalls.
