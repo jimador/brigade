@@ -1,0 +1,360 @@
+#!/usr/bin/env node
+// brigade-roadmap — zero-token checks and traversal over a roadmap directory (ROADMAP.md,
+// nodes/*.md, batches/*.md). It reads the roadmap through scripts/lib/roadmap.mjs and never
+// calls a model. Four commands:
+//
+//   check [--json] [--complete] <dir>
+//       Fails on duplicate ids, dangling refs, parent and dependency cycles (with the cycle
+//       path), a `drill: leaf` node that is not ready (naming the unmet rules), a `drill: split`
+//       node with no children, and any file the parser could not read cleanly. --complete also
+//       fails on `drill: open` nodes, inventory rows nobody covers or excludes, accepted
+//       requirements no leaf satisfies, and ready leaves with no `ticket`.
+//       Prints one `<code>: <id>: <message>` line per problem, or
+//       `roadmap OK: <n> nodes, <m> leaves ready`. --json prints { ok, problems: [{ code, id,
+//       message }] } instead.
+//
+//   next [--json] <dir>
+//       The next drill batch for the mode and focus saved in ROADMAP.md, then the parked nodes
+//       with the open questions that park them. Prints `focus complete: <id>` when a dfs focus
+//       has no `drill: open` node left under it.
+//
+//   sync <dir> --board <board_dir>
+//       For each node with a `ticket`, finds the markdown board file (<board_dir>/*.md) whose
+//       frontmatter `id` (or file name, when it has no id) matches, and copies that ticket's
+//       `status` into the node's `status`. Prints one line per change. Reads the board, never
+//       writes it.
+//
+//   status <dir>
+//       The derived status of every epic (from its children) and every requirement (met when
+//       every leaf that satisfies it is done).
+//
+// Exit codes: 0 fine, 1 problems found (check), a frontier the roadmap cannot answer (next) or
+// tickets sync could not match, 2 usage or I/O error.
+import fs from 'node:fs'
+import path from 'node:path'
+import {
+  parseRoadmap, children, descendants, findCycles, danglingRefs, leafReadiness, frontier, coverage,
+  openQuestionsFor, depth, compareIds,
+} from './lib/roadmap.mjs'
+
+const USAGE = [
+  'usage: brigade-roadmap check [--json] [--complete] <dir>',
+  '       brigade-roadmap next [--json] <dir>',
+  '       brigade-roadmap sync <dir> --board <board_dir>',
+  '       brigade-roadmap status <dir>',
+].join('\n')
+
+// The local board's status words (skills/brigade/sources/local.md). Sync copies only these.
+const BOARD_STATUSES = new Set(['backlog', 'scoping', 'design', 'todo', 'in_progress', 'in_review', 'rework', 'merging', 'done', 'blocked'])
+
+class UsageError extends Error {}
+class IoError extends Error {}
+
+const nodeList = (model) => Object.keys(model.nodes).sort(compareIds).map((id) => model.nodes[id])
+
+// Loads the roadmap, or throws IoError when <dir> holds no ROADMAP.md at all, so a mistyped path
+// is a usage problem rather than a page of roadmap problems.
+function load(dir) {
+  let stat = null
+  try { stat = fs.statSync(path.join(dir, 'ROADMAP.md')) } catch { /* reported below */ }
+  if (!stat || !stat.isFile()) throw new IoError(`no ROADMAP.md in ${dir}`)
+  return parseRoadmap(dir)
+}
+
+// ---------------------------------------------------------------------------------------------
+// check
+
+function checkProblems(model, complete) {
+  const problems = []
+  const add = (code, id, message) => problems.push({ code, id, message })
+
+  for (const err of model.errors) {
+    const dup = /^(\S+): duplicate id (\S+) \(also in (\S+)\)$/.exec(err)
+    if (dup) add('duplicate_id', dup[2], `${dup[1]} and ${dup[3]} both use id ${dup[2]}`)
+    else add('parse', (/^([^:\s]+):/.exec(err) || [])[1] || '', err)
+  }
+
+  const what = { parent: 'node', depends_on: 'node', satisfies: 'requirement', covers: 'inventory row' }
+  for (const d of danglingRefs(model)) add('dangling_ref', d.node, `${d.field} names unknown ${what[d.field] || 'id'} ${d.ref}`)
+
+  for (const c of findCycles(model)) {
+    const kind = c.kind === 'parent' ? 'parent' : 'dependency'
+    add(`${kind}_cycle`, c.path[0], `${kind} cycle: ${c.path.join(' -> ')}`)
+  }
+
+  const nodes = nodeList(model)
+  const ready = []
+  for (const n of nodes) {
+    if (n.drill === 'leaf') {
+      const unmet = leafReadiness(model, n.id)
+      if (unmet.length === 0) ready.push(n)
+      else add('leaf_not_ready', n.id, `leaf not ready: ${unmet.map((u) => `${u.rule} (${u.message})`).join('; ')}`)
+    } else if (n.drill === 'split' && children(model, n.id).length === 0) {
+      add('split_no_children', n.id, 'drill is split but no node names it as parent')
+    }
+  }
+
+  if (complete) {
+    const cov = coverage(model)
+    for (const n of nodes) if (n.drill === 'open') add('open_node', n.id, 'drill is still open')
+    for (const id of cov.uncoveredInventory) add('uncovered_inventory', id, 'no node covers this inventory row and no decision excludes it')
+    for (const id of cov.unsatisfiedRequirements) add('unsatisfied_requirement', id, 'accepted requirement with no leaf satisfying it')
+    for (const n of ready) if (n.ticket.trim() === '') add('unpublished_leaf', n.id, 'ready leaf has no ticket')
+  }
+  return { problems, nodes: nodes.length, ready: ready.length }
+}
+
+function runCheck(dir, flags) {
+  const model = load(dir)
+  const { problems, nodes, ready } = checkProblems(model, flags.complete)
+  const ok = problems.length === 0
+  if (flags.json) console.log(JSON.stringify({ ok, problems }))
+  else if (ok) console.log(`roadmap OK: ${nodes} node${nodes === 1 ? '' : 's'}, ${ready} lea${ready === 1 ? 'f' : 'ves'} ready`)
+  else for (const p of problems) console.log(`${p.code}: ${p.id || '-'}: ${p.message}`)
+  return ok ? 0 : 1
+}
+
+// ---------------------------------------------------------------------------------------------
+// next
+
+function runNext(dir, flags) {
+  const model = load(dir)
+  const f = frontier(model)
+  const title = (id) => (model.nodes[id] ? model.nodes[id].title : '')
+  const parked = f.parked.map((id) => ({
+    id,
+    title: title(id),
+    questions: openQuestionsFor(model, id).map((q) => q.name || `line ${q.line}`),
+  }))
+  const under = f.mode === 'dfs' && f.focus && model.nodes[f.focus] ? [f.focus, ...descendants(model, f.focus)] : null
+  const focusComplete = f.errors.length === 0 && under !== null && !under.some((id) => model.nodes[id].drill === 'open')
+
+  if (flags.json) {
+    console.log(JSON.stringify({
+      mode: f.mode,
+      focus: f.focus,
+      nodes: f.nodes.map((id) => ({ id, title: title(id), depth: depth(model, id) })),
+      parked,
+      focus_complete: focusComplete,
+      errors: f.errors,
+      warnings: model.errors,
+    }))
+    return f.errors.length ? 1 : 0
+  }
+
+  for (const w of model.errors) console.error(`warning: ${w}`)
+  if (f.errors.length) {
+    for (const e of f.errors) console.error(`brigade-roadmap: ${e}`)
+    return 1
+  }
+  const where = `${f.mode}${f.mode === 'dfs' && f.focus ? `, focus ${f.focus}` : ''}`
+  if (focusComplete) console.log(`focus complete: ${f.focus}`)
+  else if (f.nodes.length === 0) console.log(`batch (${where}): none`)
+  else {
+    console.log(`batch (${where}): ${f.nodes.length} node${f.nodes.length === 1 ? '' : 's'}`)
+    for (const id of f.nodes) console.log(`  ${id}  ${title(id)}`)
+  }
+  if (parked.length) {
+    console.log(`parked: ${parked.length} node${parked.length === 1 ? '' : 's'}`)
+    for (const p of parked) console.log(`  ${p.id}  ${p.title} — ${p.questions.length ? p.questions.join(', ') : 'drill: parked'}`)
+  }
+  return 0
+}
+
+// ---------------------------------------------------------------------------------------------
+// sync
+
+// A scalar frontmatter value as written: a trailing ` # comment` dropped, one pair of quotes
+// removed.
+function scalar(raw) {
+  let t = raw.trim()
+  if (t[0] === '"' || t[0] === "'") {
+    const close = t.indexOf(t[0], 1)
+    return close === -1 ? t.slice(1) : t.slice(1, close)
+  }
+  t = t.replace(/(^|\s)#.*$/, '').trim()
+  return t
+}
+
+// The frontmatter lines of a markdown file and where they end, or null when it has none.
+function frontmatterLines(text) {
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/)
+  if (lines[0] !== '---') return null
+  const end = lines.indexOf('---', 1)
+  return end === -1 ? null : { lines, end }
+}
+
+// Reads every ticket file in the board folder as { id, status, file }. A file with no
+// frontmatter is a note, not a ticket.
+function readBoard(boardDir) {
+  let names
+  try {
+    names = fs.readdirSync(boardDir).filter((n) => n.endsWith('.md')).sort()
+  } catch (err) {
+    throw new IoError(`cannot list board ${boardDir} (${err.code || err.message})`)
+  }
+  const tickets = []
+  const notes = []
+  for (const name of names) {
+    const file = path.join(boardDir, name)
+    let text
+    try {
+      if (!fs.statSync(file).isFile()) continue
+      text = fs.readFileSync(file, 'utf8')
+    } catch (err) {
+      throw new IoError(`cannot read board file ${file} (${err.code || err.message})`)
+    }
+    const fm = frontmatterLines(text)
+    if (!fm) { notes.push(`board file ${file} has no frontmatter`); continue }
+    const field = (key) => {
+      for (let i = 1; i < fm.end; i++) {
+        const m = new RegExp(`^${key}\\s*:(.*)$`).exec(fm.lines[i])
+        if (m) return scalar(m[1])
+      }
+      return ''
+    }
+    tickets.push({ id: field('id') || name.slice(0, -3), status: field('status'), file })
+  }
+  return { tickets, notes }
+}
+
+// Returns the node file text with its frontmatter `status` set to `value`, adding the key when
+// it is missing. Every other line, the line endings and a byte-order mark are kept.
+function withStatus(text, value) {
+  const bom = text.startsWith('﻿') ? '﻿' : ''
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const fm = frontmatterLines(text)
+  if (!fm) return null
+  const { lines, end } = fm
+  const line = `status: ${value}`
+  const at = lines.slice(1, end).findIndex((l) => /^status\s*:/.test(l)) + 1
+  if (at === 0) lines.splice(end, 0, line)
+  else {
+    // Drop any continuation lines a malformed list value left under the old key.
+    let stop = at + 1
+    while (stop < end && /^(\s+\S|\s*-(\s|$))/.test(lines[stop])) stop++
+    lines.splice(at, stop - at, line)
+  }
+  return bom + lines.join(eol)
+}
+
+function writeNodeStatus(dir, node, value) {
+  const file = path.join(dir, ...node.file.split('/'))
+  // Re-read right before writing: the operator may have edited the node since we parsed it.
+  const text = fs.readFileSync(file, 'utf8')
+  const next = withStatus(text, value)
+  if (next === null) throw new IoError(`${node.file} lost its frontmatter while syncing`)
+  const tmp = `${file}.sync-${process.pid}.tmp`
+  fs.writeFileSync(tmp, next)
+  fs.renameSync(tmp, file)
+}
+
+function runSync(dir, flags) {
+  if (!flags.board) throw new UsageError('sync needs --board <board_dir>')
+  const model = load(dir)
+  for (const w of model.errors) console.error(`warning: ${w}`)
+  const { tickets, notes } = readBoard(flags.board)
+  for (const n of notes) console.error(`warning: ${n}`)
+  const byId = new Map()
+  for (const t of tickets) byId.set(t.id, [...(byId.get(t.id) || []), t])
+
+  let changed = 0, unchanged = 0, skipped = 0
+  for (const node of nodeList(model)) {
+    const ticket = node.ticket.trim()
+    if (!ticket) continue
+    const found = byId.get(ticket) || []
+    const skip = (why) => { skipped++; console.log(`skipped: ${node.id}: ${why}`) }
+    if (found.length === 0) { skip(`ticket ${ticket} is not on the board`); continue }
+    if (found.length > 1) { skip(`ticket ${ticket} is in ${found.length} board files: ${found.map((t) => t.file).join(', ')}`); continue }
+    const status = found[0].status.trim()
+    if (!BOARD_STATUSES.has(status)) {
+      skip(`ticket ${ticket} has ${status ? `unknown status ${JSON.stringify(status)}` : 'no status'} in ${found[0].file}`)
+      continue
+    }
+    const before = node.status.trim()
+    if (before === status) { unchanged++; continue }
+    try {
+      writeNodeStatus(dir, node, status)
+    } catch (err) {
+      if (err instanceof IoError) throw err
+      throw new IoError(`cannot write ${node.file} (${err.code || err.message})`)
+    }
+    changed++
+    console.log(`${node.id}: ${before || '(none)'} -> ${status} (ticket ${ticket})`)
+  }
+  console.log(`sync: ${changed} changed, ${unchanged} unchanged, ${skipped} skipped`)
+  return skipped ? 1 : 0
+}
+
+// ---------------------------------------------------------------------------------------------
+// status
+
+function runStatus(dir) {
+  const model = load(dir)
+  for (const w of model.errors) console.error(`warning: ${w}`)
+  const cov = coverage(model)
+  const epics = nodeList(model).filter((n) => n.level === 'epic' || (!n.level && /^E-/.test(n.id)))
+  console.log('epics:')
+  if (epics.length === 0) console.log('  none')
+  for (const n of epics) {
+    const derived = cov.parentStatus[n.id] || n.status.trim().toLowerCase().replace(/[\s-]+/g, '_') || 'backlog'
+    console.log(`  ${n.id.padEnd(6)} ${derived.padEnd(11)} ${n.title}`)
+  }
+  console.log('requirements:')
+  if (model.requirements.length === 0) console.log('  none')
+  for (const r of model.requirements) {
+    if (!r.id) continue
+    console.log(`  ${r.id.padEnd(6)} ${(cov.requirementStatus[r.id] || 'unmet').padEnd(11)} ${(r.status || '-').padEnd(9)} ${r.statement || ''}`.trimEnd())
+  }
+  return 0
+}
+
+// ---------------------------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const [command, ...rest] = argv
+  const flags = { json: false, complete: false, board: '' }
+  const positional = []
+  const allowed = {
+    check: ['--json', '--complete'],
+    next: ['--json'],
+    sync: ['--board'],
+    status: [],
+  }
+  if (!Object.prototype.hasOwnProperty.call(allowed, command || '')) throw new UsageError(command ? `unknown command ${command}` : 'no command')
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]
+    if (arg.startsWith('-')) {
+      if (!allowed[command].includes(arg)) throw new UsageError(`${command} does not take ${arg}`)
+      if (arg === '--board') {
+        const value = rest[++i]
+        if (value === undefined || value === '' || value.startsWith('--')) throw new UsageError('--board needs a folder')
+        flags.board = value
+      } else flags[arg.slice(2)] = true
+    } else positional.push(arg)
+  }
+  if (positional.length !== 1) throw new UsageError(`${command} takes exactly one roadmap directory`)
+  return { command, dir: positional[0], flags }
+}
+
+function main() {
+  try {
+    const { command, dir, flags } = parseArgs(process.argv.slice(2))
+    if (command === 'check') return runCheck(dir, flags)
+    if (command === 'next') return runNext(dir, flags)
+    if (command === 'sync') return runSync(dir, flags)
+    return runStatus(dir)
+  } catch (err) {
+    if (err instanceof UsageError) {
+      console.error(`brigade-roadmap: ${err.message}\n${USAGE}`)
+      return 2
+    }
+    if (err instanceof IoError) {
+      console.error(`brigade-roadmap: ${err.message}`)
+      return 2
+    }
+    throw err
+  }
+}
+
+process.exitCode = main()
