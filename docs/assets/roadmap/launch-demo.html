@@ -26,7 +26,15 @@ h1 .label { display: block; color: var(--muted); font-size: .75rem; font-weight:
 h2 { font-size: 1.15rem; margin: 32px 0 10px; scroll-margin-top: 56px; }
 h3 { font-size: 1rem; margin: 22px 0 8px; scroll-margin-top: 56px; overflow-wrap: anywhere; }
 nav.top { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
-nav.top a { color: var(--active); font-weight: 600; text-decoration: none; }
+/* The four views are tabs: a hidden radio per view, a label per tab, and CSS that shows the checked
+   view. Plain anchor links do not move inside sandboxed viewers, so the tabs never navigate. */
+input.tab { position: absolute; opacity: 0; pointer-events: none; }
+nav.top label { color: var(--active); font-weight: 600; cursor: pointer; padding-bottom: 2px; border-bottom: 2px solid transparent; }
+main > section[id] { display: none; }
+#tab-outline:checked ~ main > #outline, #tab-dependencies:checked ~ main > #dependencies, #tab-boards:checked ~ main > #boards, #tab-coverage:checked ~ main > #coverage { display: block; }
+#tab-outline:checked ~ nav.top label[for="tab-outline"], #tab-dependencies:checked ~ nav.top label[for="tab-dependencies"], #tab-boards:checked ~ nav.top label[for="tab-boards"], #tab-coverage:checked ~ nav.top label[for="tab-coverage"] { color: var(--fg); border-bottom-color: var(--active); }
+#tab-outline:focus-visible ~ nav.top label[for="tab-outline"], #tab-dependencies:focus-visible ~ nav.top label[for="tab-dependencies"], #tab-boards:focus-visible ~ nav.top label[for="tab-boards"], #tab-coverage:focus-visible ~ nav.top label[for="tab-coverage"] { outline: 2px solid var(--active); outline-offset: 2px; }
+@media print { main > section[id] { display: block; } input.tab, nav.top { display: none; } }
 .facts { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 0; }
 .facts div { min-width: 0; }
 .facts dt { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
@@ -84,11 +92,15 @@ td.bad { color: var(--blocked); font-weight: 700; }
 </style>
 </head>
 <body>
+<input class="tab" type="radio" name="view" id="tab-outline" checked>
+<input class="tab" type="radio" name="view" id="tab-dependencies">
+<input class="tab" type="radio" name="view" id="tab-boards">
+<input class="tab" type="radio" name="view" id="tab-coverage">
 <nav class="top" aria-label="Sections">
-  <a href="#outline">Outline</a>
-  <a href="#dependencies">Dependencies</a>
-  <a href="#boards">Boards</a>
-  <a href="#coverage">Coverage</a>
+  <label for="tab-outline">Outline</label>
+  <label for="tab-dependencies">Dependencies</label>
+  <label for="tab-boards">Boards</label>
+  <label for="tab-coverage">Coverage</label>
 </nav>
 <main>
   <h1><span class="label">Roadmap</span> Acme Skyhop launches 30-minute drone delivery in two pilot cities</h1>

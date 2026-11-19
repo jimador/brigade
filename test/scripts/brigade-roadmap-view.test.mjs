@@ -94,15 +94,20 @@ test('I1: two runs, and the same roadmap in two places, give identical bytes', (
   assert.equal(render(c), render(c))
 })
 
-test('E2: the top nav links all four anchored sections', () => {
+test('E2: the top nav switches between the four views without navigating', () => {
   const html = render(copyFixture('valid'))
   const nav = /<nav class="top"[\s\S]*?<\/nav>/.exec(html)
   assert.ok(nav, 'no top nav')
   for (const id of ['outline', 'dependencies', 'boards', 'coverage']) {
-    assert.ok(nav[0].includes(`href="#${id}"`), `nav lacks #${id}`)
+    assert.ok(nav[0].includes(`<label for="tab-${id}">`), `nav lacks a tab for ${id}`)
+    assert.ok(html.includes(`id="tab-${id}"`), `no radio for ${id}`)
+    assert.ok(new RegExp(`#tab-${id}:checked ~ main > #${id}`).test(html), `no rule showing ${id}`)
     assert.ok(html.includes(`<section id="${id}">`), `no section #${id}`)
   }
   assert.ok(html.indexOf('<nav class="top"') < html.indexOf('<section id="outline">'))
+  // Anchor links do not move inside sandboxed viewers; the tabs must not depend on them.
+  assert.ok(!/<nav class="top"[\s\S]*?href="#/.test(html), 'nav still uses anchor links')
+  assert.match(html, /id="tab-outline" checked/)
 })
 
 test('E2: the outline nests each node inside its parent with its facts', () => {

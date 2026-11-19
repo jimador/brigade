@@ -49,6 +49,13 @@ how it is run. `touches` is `none`, `tickets`, `dishes` or `tickets, dishes`; th
 script reads it, so keep the line exact. An entry with `touches: none` changes procedure
 only: open work picks it up at its next phase and the pass records it without edits.
 
+### 0.53.2
+
+- touches: none
+- what: the roadmap view's Outline, Dependencies, Boards and Coverage links are tabs that switch views
+  without navigating, so they work in sandboxed viewers (an app's preview panel) as well as a browser;
+  printing still shows every view.
+
 ### 0.53.1
 
 - touches: none
