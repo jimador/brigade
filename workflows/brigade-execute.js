@@ -216,7 +216,7 @@ const ARGS_REVIEW = {
   optional: { tier: 'string', overrides: 'object', promptOverrides: 'object', mainLine: 'string', boardConfigured: 'boolean', writing: 'any' },
 }
 
-const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' } } }
+const SCHEMA_BRIEF_RETURN = { type: 'object', required: ['answer', 'confidence', 'briefPath'], properties: { answer: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] }, briefPath: { type: 'string' }, notVerified: { type: 'string' }, briefDoc: { type: 'string' } } }
 
 const SCHEMA_COOK_RETURN = { type: 'object', required: ['status', 'attempt', 'branch', 'reportPath', 'filesChanged', 'summary'], properties: { status: { enum: ['done', 'blocked'] }, attempt: { type: 'integer' }, branch: { type: 'string' }, reportPath: { type: 'string' }, filesChanged: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' }, blockedReason: { type: 'string' } } }
 
@@ -231,6 +231,14 @@ const SCHEMA_VERDICT_RETURN = { type: 'object', required: ['verdict', 'verdictPa
 const SCHEMA_VERDICT_PROBE = { type: 'object', required: ['exists', 'valid', 'detail'], properties: { exists: { type: 'boolean' }, valid: { type: 'boolean' }, detail: { type: 'string' } } }
 
 const SCHEMA_STEWARD_RETURN = { type: 'object', required: ['ok', 'detail'], properties: { ok: { type: 'boolean' }, detail: { type: 'string' }, landedRange: { type: 'string' }, contamination: { type: 'boolean' } } }
+
+// What research's brief probe and review's report probe return: whether the file is on disk,
+// and one line on what the probe saw.
+const SCHEMA_FILE_PROBE = { type: 'object', required: ['exists', 'detail'], properties: { exists: { type: 'boolean' }, detail: { type: 'string' } } }
+
+// What review's report-write steward returns: the usual steward result, plus the exact text it
+// wrote (or tried to write), so the workflow can write it out when the steward's own write was refused.
+const SCHEMA_REPORT_WRITE_RETURN = { type: 'object', required: ['ok', 'detail'], properties: { ok: { type: 'boolean' }, detail: { type: 'string' }, reportDoc: { type: 'string' } } }
 
 const SCHEMA_REVIEW_RETURN = { type: 'object', required: ['findings', 'contextTier', 'reportPath'], properties: { findings: { type: 'array', items: { type: 'object', required: ['id', 'severity', 'location', 'summary', 'dimension'], properties: { id: { type: 'string' }, severity: { enum: ['blocking', 'high', 'medium', 'low'] }, location: { type: 'string' }, summary: { type: 'string' }, dimension: { type: 'string' }, fix: { type: 'string' }, verify: { type: 'string' } } } }, contextTier: { enum: ['bare', 'documented', 'tracked'] }, reportPath: { type: 'string' } } }
 
