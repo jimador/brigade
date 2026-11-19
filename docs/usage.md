@@ -48,6 +48,7 @@ set `tier` in config or run `/brigade:tier`.
 | `/brigade:validate` | Schema conformance of every dish artifact |
 | `/brigade:tier` | Show or set the repo's default service tier |
 | `/brigade:retro` | Run the analyst pass on the current dish now (intensive at ★★★; `--standard`/`--intensive` to override) |
+| `/brigade:roadmap [slug] [resume\|refresh]` | Roadmap an initiative — intent, inventory, epics, drill rounds — as files under `roadmap_dir`; never claims or cooks |
 | `/brigade:design [ticket-id] [question-name]` | Design ledger for a ticket — first pass or one-question revisit — without claiming or cooking it |
 | `/brigade:ui [ticket-id] [state-name]` | UI design loop for a front-end ticket — live browser iteration, screenshots into the board, `## UI samples` spec; never claims or cooks |
 | `/brigade:review` | Advisory, tier-scaled code review of a branch, PR, or commit range |
@@ -81,9 +82,22 @@ brigade-bundle --check          # fail if generated output is stale
 brigade-scope <PLAN.md> <item>   # is the item's diff inside its files and clear of contract-owned paths
 brigade-plan-view <PLAN.md>     # render PLAN.md as one HTML page beside it (never committed)
 
+brigade-roadmap check <dir>     # check a roadmap directory (add --complete for the final gate)
+brigade-roadmap next <dir>      # the next drill batch and the parked nodes
+brigade-roadmap-view <dir>      # render the roadmap as one offline HTML page (never committed)
+
 brigade-coord list              # active Claude/Codex dish owners
 brigade-coord status <dish>     # inspect one dish lease
 ```
+
+## Roadmaps
+
+`/brigade:roadmap` plans an initiative above the ticket level. It grills the intent, inventories
+the systems involved, proposes epics, and drills each one down in rounds you confirm, until the
+leaves are ready to become tickets. Its files live under `roadmap_dir` (default
+`.brigade/roadmaps`, set in `.brigade/config.md`). `brigade-roadmap check` validates them, and
+`brigade-roadmap-view` renders the same tree, dependencies and coverage as one offline page.
+A roadmap never claims a ticket or dispatches cooks; a ready leaf goes through normal intake.
 
 ## The phases, in order
 

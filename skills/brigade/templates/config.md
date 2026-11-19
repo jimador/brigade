@@ -47,6 +47,7 @@
 
 - main_branch: main
 - tier: two-star           # three-star | two-star | one-star — see TIERS.md
+- roadmap_dir: .brigade/roadmaps  # where /brigade:roadmap keeps its files
 - verification_gate:        # exact commands a Cook must run and paste output from
   - <e.g. bun run types>
   - <e.g. bun run test>

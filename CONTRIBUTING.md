@@ -21,8 +21,10 @@ CONNECTORS.md       connector categories brigade binds to (~~tickets, ~~kb)
 scripts/            brigade-status, brigade-config, brigade-validate, brigade-bundle,
                     brigade-coord, brigade-subagent-line, brigade-risk, brigade-evidence,
                     brigade-onboard, brigade-eval, brigade-pr, brigade-scope,
-                    brigade-plan-view
-scripts/lib/        plan.mjs, the shared PLAN.md parser (brigade-scope, brigade-plan-view)
+                    brigade-plan-view, brigade-roadmap, brigade-roadmap-view
+scripts/lib/        plan.mjs, the shared PLAN.md parser (brigade-scope, brigade-plan-view);
+                    roadmap.mjs, the roadmap directory parser; dag.mjs, the shared graph
+                    layout (brigade-plan-view, brigade-roadmap-view)
 hooks/              SessionStart state injection, PreToolUse git guard,
                     SubagentStop artifact-validate gate, PostToolUse turn-budget warning
 workflows/src/      hand-edited Workflow script sources
@@ -71,8 +73,12 @@ node --check scripts/brigade-pr
 node --check scripts/brigade-scope
 node --check scripts/brigade-plan-view
 node --check scripts/brigade-rehearse
+node --check scripts/brigade-roadmap
+node --check scripts/brigade-roadmap-view
 node --check scripts/lib/plan.mjs
 node --check scripts/lib/schemas.mjs
+node --check scripts/lib/roadmap.mjs
+node --check scripts/lib/dag.mjs
 node --check hooks/turn-budget.mjs
 node --check scripts/board-demo
 node --check workflows/config.js

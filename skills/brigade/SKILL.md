@@ -32,6 +32,7 @@ Companion paths below are relative to this skill's directory; helper scripts liv
 | First run in this repo | `/brigade:onboard` (`SETUP.md`) |
 | Handed a whole board | the companion `groom` skill |
 | Swagging a design, no cook | `### Design swag` |
+| Roadmapping an initiative, no cook (`/brigade:roadmap`) | `### Roadmap` |
 | A front-end ticket | `### UI design loop` |
 | Writing or revising `PLAN.md` | `DECOMPOSE.md` |
 | Dispatching cooks or applying a ledger | `EXECUTE.md` |
@@ -136,6 +137,8 @@ Asking and stopping:
 - `brigade-pr`: picks the red-team tools and writes their brief; renders and checks the PR body.
 - `brigade-scope` — checks an item's diff against its packet's files and contract-owned paths.
 - `brigade-plan-view` — renders PLAN.md as one HTML page beside it; a view, never committed.
+- `brigade-roadmap` — checks a roadmap directory and prints its next drill batch (`check`, `next`).
+- `brigade-roadmap-view` — renders a roadmap as one offline HTML page beside it; a view, never committed.
 - `brigade-onboard` — checks and applies one-time repo setup (`.git/info/exclude`, board config).
 
 They cost zero model tokens; prefer them over re-reading artifacts. The SessionStart hook
@@ -240,6 +243,8 @@ record one decision per overlap in PLAN.md: absorb (fold in, comment and close t
 ticket), cross-reference (comment linking both), or leave (checked, unrelated). An
 unreconciled overlap is a readiness failure.
 
+A ticket carrying `roadmap`/`blocked_by` with an unfinished blocker is a readiness question for the operator: ask whether to wait for the blocker, or go ahead anyway and record why.
+
 Derive `<dish-slug>` per `COORDINATION.md` and create `.brigade/dishes/<dish-slug>/`.
 
 **Claim the ticket** (skip for Design swag): (1) acquire the dish slug as `claude`; (2) set
@@ -333,6 +338,16 @@ resolves one named (or first unblocked) question, records the decision, re-score
 
 **Do not claim, set worker, or dispatch cooks.** Acquire the dish slug before writing and
 release it before stopping for human curation.
+
+### Roadmap
+
+`/brigade:roadmap [slug] [resume|refresh]` loads `skills/roadmap/SKILL.md`. It grills the
+initiative's intent, inventories the systems it touches, proposes epics, then drills down in
+confirmed rounds until each leaf is ready for a ticket. The roadmap lives as files under
+`roadmap_dir` (default `.brigade/roadmaps`); `brigade-roadmap check` verifies it.
+
+It never claims a ticket, sets `worker`, or dispatches cooks. Hand a ready leaf to the
+Phase 0 intake when the operator wants to cook it.
 
 ### UI design loop
 
