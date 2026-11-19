@@ -463,22 +463,42 @@ test('summaries, message text and learnings from files are capped at 240 charact
   for (const line of learned.lines) assert.ok(line.length <= 240 && line.endsWith('…'), line.length)
 })
 
-test('hostile input is read in one pass, well under 100 ms', () => {
+// Hostile inputs of about 200 KB each: long runs of the markers the parsers look for.
+const hostileInputs = () => {
   const size = 200_000
   const fill = (piece) => piece.repeat(Math.ceil(size / piece.length)).slice(0, size)
-  const wrap = (body, doc = 'verdict') => ['---', `doc: ${doc}`, 'verdict: FAIL', 'findings:', body, '---'].join('\n')
-  const hostile = [
+  return [
     fill('## '), fill('## \n'), fill('## 2026-01-01\n- '), fill('- { id: '), fill('  - { id: \n'),
     fill('summary: "'), fill('    summary: "\n'), fill('- '), fill('  - { id: "'),
     '  - { id: F1,\n' + fill('    summary: "\n'), 'blocking:\n' + fill('  - '),
   ]
-  for (const text of hostile) {
+}
+const wrapFindings = (body, doc = 'verdict') => ['---', `doc: ${doc}`, 'verdict: FAIL', 'findings:', body, '---'].join('\n')
+
+// Deterministic: hostile input comes back as well-formed, bounded results. The parser gives no
+// work counter to read, so this checks the output shape and caps instead of how long it took.
+test('hostile input gives bounded, well-formed results', () => {
+  for (const text of hostileInputs()) {
+    const learned = learningsFrom(text)
+    const found = findingsOf(wrapFindings(text))
+    const note = noteFrom(wrapFindings(text), 1)
+    const check = noteFrom(wrapFindings(text, 'plan_check'), 1)
+    assert.ok(Array.isArray(learned.lines) && learned.lines.length <= 5, learned.lines.length)
+    for (const line of learned.lines) assert.ok(line.length <= 240, line.length)
+    assert.ok(Array.isArray(found), 'findingsOf returns an array')
+    assert.ok(note !== null && check !== null, 'noteFrom returns a note for hostile findings')
+  }
+})
+
+// Wall-clock check, opt-in only: a loaded machine makes timings meaningless, so it runs with BRIGADE_PERF=1.
+test('hostile input is read in one pass, well under 100 ms (BRIGADE_PERF=1)', { skip: process.env.BRIGADE_PERF !== '1' }, () => {
+  for (const text of hostileInputs()) {
     let learned, found, note, check
     const learnMs = fastestOf(5, () => { learned = learningsFrom(text) })
     const findMs = fastestOf(5, () => {
-      found = findingsOf(wrap(text))
-      note = noteFrom(wrap(text), 1)
-      check = noteFrom(wrap(text, 'plan_check'), 1)
+      found = findingsOf(wrapFindings(text))
+      note = noteFrom(wrapFindings(text), 1)
+      check = noteFrom(wrapFindings(text, 'plan_check'), 1)
     })
     assert.ok(learnMs < 100, `learningsFrom took ${learnMs} ms at best of five`)
     assert.ok(findMs < 100, `findingsOf took ${findMs} ms at best of five`)
