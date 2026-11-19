@@ -1299,6 +1299,23 @@ function isListValue(fm, key) {
   return value === '' && listEntries(fm, key).length > 0
 }
 
+// Drops a trailing comment from one `- ` entry. A `#` counts as a comment only when it starts the
+// entry or follows a space, and a `#` inside quotes is part of the value.
+function stripEntryComment(entry) {
+  let quote = null
+  for (let i = 0; i < entry.length; i++) {
+    const ch = entry[i]
+    if (quote) {
+      if (ch === quote) quote = null
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if (ch === '#' && (i === 0 || /\s/.test(entry[i - 1]))) {
+      return entry.slice(0, i)
+    }
+  }
+  return entry
+}
+
 // The entries of next_ids, from an inline [ ] list or `- ` lines, unquoted. Null when the value
 // is not a list.
 function nextIdEntries(fm) {
@@ -1306,7 +1323,7 @@ function nextIdEntries(fm) {
   const raw = fmValue(fm, 'next_ids').replace(/(^|\s+)#.*$/, '').trim()
   const items = raw.startsWith('[')
     ? raw.slice(1, -1).split(',')
-    : listEntries(fm, 'next_ids').map((e) => e.replace(/^\s*-\s*/, ''))
+    : listEntries(fm, 'next_ids').map((e) => stripEntryComment(e.replace(/^\s*-\s*/, '')))
   return items.map((e) => e.trim().replace(/^(["'])(.*)\1$/, '$2')).filter((e) => e !== '')
 }
 

@@ -206,6 +206,14 @@ test('E1: next_ids is a list with one next id per level letter', () => {
   }
 })
 
+test('E1: a block-list next_ids entry may end in a comment', () => {
+  assertClean(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids:\n  - E-4 # next epic\n  - T-12'), ROADMAP_BODY), 'block list with comment')
+  assertClean(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids:\n  - "E-4" # next epic\n  - \'T-12\''), ROADMAP_BODY), 'quoted block list with comment')
+  assertClean(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids:\n  - "E-4"\n  - T-12'), ROADMAP_BODY), 'quoted block list')
+  assertFails(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids:\n  - E-x # c\n  - T-12'), ROADMAP_BODY), 'roadmap next_ids must be a list')
+  assertFails(doc(ROADMAP_FM.replace(/next_ids: .*/, 'next_ids:\n  - "E-4 # c"\n  - T-12'), ROADMAP_BODY), 'roadmap next_ids must be a list')
+})
+
 test('E1: roadmap sections must all be there, in order', () => {
   assertFails(doc(ROADMAP_FM, ROADMAP_BODY.replace('## Batches', '## Log')), 'roadmap missing "## Batches" section')
   const swapped = ROADMAP_BODY.replace('## Intent', '## TMP').replace('## Decisions', '## Intent').replace('## TMP', '## Decisions')
