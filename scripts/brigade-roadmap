@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // brigade-roadmap — zero-token checks and traversal over a roadmap directory (ROADMAP.md,
 // nodes/*.md, batches/*.md). It reads the roadmap through scripts/lib/roadmap.mjs and never
-// calls a model. Four commands:
+// calls a model. Five commands:
 //
-//   check [--json] [--complete] <dir>
+//   check [--json] [--complete [--board <board_dir>]] <dir>
 //       Fails on duplicate ids, dangling refs, parent and dependency cycles (with the cycle
 //       path), a `drill: leaf` node that is not ready (naming the unmet rules), a `drill: split`
 //       node with no children, and any file the parser could not read cleanly. --complete also
-//       fails on `drill: open` nodes, inventory rows nobody covers or excludes, accepted
-//       requirements no leaf satisfies, and ready leaves with no `ticket`.
+//       fails on `drill: open` and `drill: parked` nodes, inventory rows nobody covers or
+//       excludes (a parked node and everything under it cover nothing), accepted requirements
+//       no leaf satisfies, and ready leaves with no `ticket`; with --board it also runs the
+//       links check against that board.
 //       Prints one `<code>: <id>: <message>` line per problem, or
 //       `roadmap OK: <n> nodes, <m> leaves ready`. --json prints { ok, problems: [{ code, id,
 //       message }] } instead.
@@ -18,18 +20,27 @@
 //       with the open questions that park them. Prints `focus complete: <id>` when a dfs focus
 //       has no `drill: open` node left under it.
 //
-//   sync <dir> --board <board_dir>
+//   sync <dir> --board <board_dir> [--config <config.md>]
 //       For each node with a `ticket`, finds the markdown board file (<board_dir>/*.md) whose
-//       frontmatter `id` (or file name, when it has no id) matches, and copies that ticket's
-//       `status` into the node's `status`. Prints one line per change. Reads the board, never
-//       writes it.
+//       frontmatter `id` (or file name, when it has no id) matches, turns that ticket's `status`
+//       back into the brigade status word through the board's status mapping, and copies it into
+//       the node's `status`. The mapping is the `- <status>: <board word>` lines of the nearest
+//       .brigade/config.md above <dir> (or --config); with no config the words are used as they
+//       are. Prints one line per change. Reads the board, never writes it.
+//
+//   links [--json] <dir> [--board <board_dir>]
+//       For every node with a `ticket`, each `depends_on` node that also has a ticket must show up
+//       in the dependent ticket's `blocked_by` list: on the markdown board file when --board is
+//       given, otherwise in the node's own `blocked_by`. Prints one line per missing link, or
+//       `links OK: <n> published nodes checked`. Run it after every publish batch: a leaf
+//       published before its prerequisite never had the link written.
 //
 //   status <dir>
 //       The derived status of every epic (from its children) and every requirement (met when
 //       every leaf that satisfies it is done).
 //
-// Exit codes: 0 fine, 1 problems found (check), a frontier the roadmap cannot answer (next) or
-// tickets sync could not match, 2 usage or I/O error.
+// Exit codes: 0 fine, 1 problems found (check), a frontier the roadmap cannot answer (next),
+// tickets sync or links could not match, or missing links (links), 2 usage or I/O error.
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -38,14 +49,17 @@ import {
 } from './lib/roadmap.mjs'
 
 const USAGE = [
-  'usage: brigade-roadmap check [--json] [--complete] <dir>',
+  'usage: brigade-roadmap check [--json] [--complete [--board <board_dir>]] <dir>',
   '       brigade-roadmap next [--json] <dir>',
-  '       brigade-roadmap sync <dir> --board <board_dir>',
+  '       brigade-roadmap sync <dir> --board <board_dir> [--config <config.md>]',
+  '       brigade-roadmap links [--json] <dir> [--board <board_dir>]',
   '       brigade-roadmap status <dir>',
 ].join('\n')
 
-// The local board's status words (skills/brigade/sources/local.md). Sync copies only these.
-const BOARD_STATUSES = new Set(['backlog', 'scoping', 'design', 'todo', 'in_progress', 'in_review', 'rework', 'merging', 'done', 'blocked'])
+// Brigade's own status words (skills/brigade/sources/local.md). Sync writes only these into a
+// node, after mapping the board's words back to them.
+const CANONICAL = ['backlog', 'scoping', 'design', 'todo', 'in_progress', 'in_review', 'rework', 'merging', 'done', 'blocked']
+const BOARD_STATUSES = new Set(CANONICAL)
 
 class UsageError extends Error {}
 class IoError extends Error {}
@@ -63,6 +77,17 @@ function load(dir) {
 
 // ---------------------------------------------------------------------------------------------
 // check
+
+// A node marked `drill: parked` and everything under it: the branch that waits on a question.
+function parkedBranch(model) {
+  const out = new Set()
+  for (const n of nodeList(model)) {
+    if (n.drill !== 'parked') continue
+    out.add(n.id)
+    for (const d of descendants(model, n.id)) out.add(d)
+  }
+  return out
+}
 
 function checkProblems(model, complete) {
   const problems = []
@@ -96,8 +121,18 @@ function checkProblems(model, complete) {
 
   if (complete) {
     const cov = coverage(model)
-    for (const n of nodes) if (n.drill === 'open') add('open_node', n.id, 'drill is still open')
-    for (const id of cov.uncoveredInventory) add('uncovered_inventory', id, 'no node covers this inventory row and no decision excludes it')
+    // Inventory only a parked branch covers is still a gap: nobody has committed to that work.
+    const parked = parkedBranch(model)
+    const live = { ...model, nodes: Object.fromEntries(Object.entries(model.nodes).filter(([id]) => !parked.has(id))) }
+    const uncovered = coverage(live).uncoveredInventory
+    for (const n of nodes) {
+      if (n.drill === 'open') add('open_node', n.id, 'drill is still open')
+      else if (n.drill === 'parked') {
+        const qs = openQuestionsFor(model, n.id).map((q) => q.name || `line ${q.line}`)
+        add('parked_node', n.id, qs.length ? `parked by ${qs.join(', ')}` : 'parked with no open question left; drill it or drop it')
+      }
+    }
+    for (const id of uncovered) add('uncovered_inventory', id, 'no node covers this inventory row and no decision excludes it')
     for (const id of cov.unsatisfiedRequirements) add('unsatisfied_requirement', id, 'accepted requirement with no leaf satisfying it')
     for (const n of ready) if (n.ticket.trim() === '') add('unpublished_leaf', n.id, 'ready leaf has no ticket')
   }
@@ -105,8 +140,14 @@ function checkProblems(model, complete) {
 }
 
 function runCheck(dir, flags) {
+  if (flags.board && !flags.complete) throw new UsageError('check takes --board only with --complete')
   const model = load(dir)
   const { problems, nodes, ready } = checkProblems(model, flags.complete)
+  if (flags.complete && flags.board) {
+    const links = linkGaps(model, readBoard(flags.board))
+    for (const u of links.unchecked) problems.push({ code: 'link_unchecked', id: u.node, message: u.reason })
+    for (const m of links.missing) problems.push({ code: 'missing_blocked_by', id: m.node, message: missingText(m) })
+  }
   const ok = problems.length === 0
   if (flags.json) console.log(JSON.stringify({ ok, problems }))
   else if (ok) console.log(`roadmap OK: ${nodes} node${nodes === 1 ? '' : 's'}, ${ready} lea${ready === 1 ? 'f' : 'ves'} ready`)
@@ -184,8 +225,27 @@ function frontmatterLines(text) {
   return end === -1 ? null : { lines, end }
 }
 
-// Reads every ticket file in the board folder as { id, status, file }. A file with no
-// frontmatter is a note, not a ticket.
+// A list frontmatter value: `[a, b]`, a bare `a`, or `- a` lines under the key (passed as
+// `rest`). Quotes and trailing comments are dropped.
+function listValue(raw, rest) {
+  const t = raw.replace(/(^|\s)#.*$/, '').trim()
+  if (t.startsWith('[')) {
+    const close = t.lastIndexOf(']')
+    return t.slice(1, close === -1 ? undefined : close).split(',').map(scalar).filter(Boolean)
+  }
+  if (t !== '') return [scalar(t)].filter(Boolean)
+  const out = []
+  for (const line of rest) {
+    const m = /^\s*-\s+(.*)$/.exec(line)
+    if (!m) break
+    const v = scalar(m[1])
+    if (v) out.push(v)
+  }
+  return out
+}
+
+// Reads every ticket file in the board folder as { id, status, blocked_by, file }. A file with
+// no frontmatter is a note, not a ticket.
 function readBoard(boardDir) {
   let names
   try {
@@ -206,14 +266,21 @@ function readBoard(boardDir) {
     }
     const fm = frontmatterLines(text)
     if (!fm) { notes.push(`board file ${file} has no frontmatter`); continue }
-    const field = (key) => {
+    const at = (key) => {
       for (let i = 1; i < fm.end; i++) {
         const m = new RegExp(`^${key}\\s*:(.*)$`).exec(fm.lines[i])
-        if (m) return scalar(m[1])
+        if (m) return { raw: m[1], i }
       }
-      return ''
+      return null
     }
-    tickets.push({ id: field('id') || name.slice(0, -3), status: field('status'), file })
+    const field = (key) => { const f = at(key); return f ? scalar(f.raw) : '' }
+    const deps = at('blocked_by')
+    tickets.push({
+      id: field('id') || name.slice(0, -3),
+      status: field('status'),
+      blocked_by: deps ? listValue(deps.raw, fm.lines.slice(deps.i + 1, fm.end)) : [],
+      file,
+    })
   }
   return { tickets, notes }
 }
@@ -249,10 +316,70 @@ function writeNodeStatus(dir, node, value) {
   fs.renameSync(tmp, file)
 }
 
+// The nearest .brigade/config.md at or above `dir`, or '' when there is none.
+function findConfig(dir) {
+  let cur = path.resolve(dir)
+  for (;;) {
+    const file = path.join(cur, '.brigade', 'config.md')
+    try { if (fs.statSync(file).isFile()) return file } catch { /* keep looking */ }
+    const up = path.dirname(cur)
+    if (up === cur) return ''
+    cur = up
+  }
+}
+
+// The board's status mapping as a Map from board word to brigade status. It reads the
+// `- <status>: <board word>` lines of the config's "Status mapping" section, or of the whole
+// file when it has no such heading; commented lines (`# - merging: merging`) are skipped. A
+// brigade status the config does not mention keeps its own word. When one board word stands for
+// several statuses, as when a board with no rework column gives rework the in_progress word, the
+// status named like the word wins, then any status but the optional rework and merging, then
+// the first one listed.
+const OPTIONAL_STATUSES = new Set(['rework', 'merging'])
+// A markdown heading, but not a commented-out bullet such as `# - merging: merging`.
+const heading = (line) => { const m = /^(#+)\s+(?![-*]\s)\S/.exec(line); return m ? m[1].length : 0 }
+
+function statusMapping(configFile) {
+  const map = new Map(CANONICAL.map((s) => [s, s]))
+  if (!configFile) return map
+  let text
+  try {
+    text = fs.readFileSync(configFile, 'utf8')
+  } catch (err) {
+    throw new IoError(`cannot read config ${configFile} (${err.code || err.message})`)
+  }
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  const head = lines.findIndex((l) => heading(l) && /status mapping/i.test(l))
+  let scope = lines
+  if (head !== -1) {
+    const level = heading(lines[head])
+    const stop = lines.findIndex((l, i) => i > head && heading(l) && heading(l) <= level)
+    scope = lines.slice(head + 1, stop === -1 ? undefined : stop)
+  }
+  const pairs = []
+  for (const line of scope) {
+    const m = /^\s*[-*]\s+([a-z_]+)\s*:(.*)$/.exec(line)
+    if (!m || !BOARD_STATUSES.has(m[1])) continue
+    const word = scalar(m[2])
+    if (word) pairs.push([m[1], word])
+  }
+  const named = new Set(pairs.map(([s]) => s))
+  for (const s of named) map.delete(s)
+  const rank = (status, word) => (status === word ? 0 : OPTIONAL_STATUSES.has(status) ? 2 : 1)
+  const best = new Map()
+  for (const [status, word] of pairs) {
+    const held = best.get(word)
+    if (held === undefined || rank(status, word) < rank(held, word)) best.set(word, status)
+  }
+  for (const [word, status] of best) map.set(word, status)
+  return map
+}
+
 function runSync(dir, flags) {
   if (!flags.board) throw new UsageError('sync needs --board <board_dir>')
   const model = load(dir)
   for (const w of model.errors) console.error(`warning: ${w}`)
+  const mapping = statusMapping(flags.config || findConfig(dir))
   const { tickets, notes } = readBoard(flags.board)
   for (const n of notes) console.error(`warning: ${n}`)
   const byId = new Map()
@@ -266,9 +393,10 @@ function runSync(dir, flags) {
     const skip = (why) => { skipped++; console.log(`skipped: ${node.id}: ${why}`) }
     if (found.length === 0) { skip(`ticket ${ticket} is not on the board`); continue }
     if (found.length > 1) { skip(`ticket ${ticket} is in ${found.length} board files: ${found.map((t) => t.file).join(', ')}`); continue }
-    const status = found[0].status.trim()
-    if (!BOARD_STATUSES.has(status)) {
-      skip(`ticket ${ticket} has ${status ? `unknown status ${JSON.stringify(status)}` : 'no status'} in ${found[0].file}`)
+    const native = found[0].status.trim()
+    const status = mapping.get(native)
+    if (!status) {
+      skip(`ticket ${ticket} has ${native ? `unknown status ${JSON.stringify(native)}` : 'no status'} in ${found[0].file}`)
       continue
     }
     const before = node.status.trim()
@@ -284,6 +412,69 @@ function runSync(dir, flags) {
   }
   console.log(`sync: ${changed} changed, ${unchanged} unchanged, ${skipped} skipped`)
   return skipped ? 1 : 0
+}
+
+// ---------------------------------------------------------------------------------------------
+// links
+
+// Which published prerequisites are missing from their dependents' `blocked_by`. A leaf
+// published before its prerequisite had no ticket id to point at, so nothing ever wrote the
+// link; this finds those. With a board, the dependent ticket's board file is the record; without
+// one, the node's own `blocked_by`. Returns { checked, missing: [{ node, ticket, depends_on,
+// depends_on_ticket }], unchecked: [{ node, ticket, reason }] }.
+function linkGaps(model, board) {
+  const result = { checked: 0, missing: [], unchecked: [] }
+  const byId = new Map()
+  if (board) for (const t of board.tickets) byId.set(t.id, [...(byId.get(t.id) || []), t])
+  for (const node of nodeList(model)) {
+    const ticket = node.ticket.trim()
+    if (!ticket) continue
+    let have
+    if (board) {
+      const found = byId.get(ticket) || []
+      if (found.length !== 1) {
+        result.unchecked.push({
+          node: node.id,
+          ticket,
+          reason: found.length === 0 ? `ticket ${ticket} is not on the board` : `ticket ${ticket} is in ${found.length} board files: ${found.map((t) => t.file).join(', ')}`,
+        })
+        continue
+      }
+      have = found[0].blocked_by
+    } else {
+      const own = node.frontmatter ? node.frontmatter.blocked_by : undefined
+      have = Array.isArray(own) ? own : typeof own === 'string' && own.trim() ? [own] : []
+    }
+    const blockers = new Set(have.map((x) => String(x).trim()))
+    result.checked++
+    for (const dep of node.depends_on) {
+      if (!Object.prototype.hasOwnProperty.call(model.nodes, dep)) continue
+      const pre = model.nodes[dep]
+      const preTicket = pre.ticket.trim()
+      if (!preTicket || blockers.has(preTicket)) continue
+      result.missing.push({ node: node.id, ticket, depends_on: dep, depends_on_ticket: preTicket })
+    }
+  }
+  return result
+}
+
+const missingText = (m) => `ticket ${m.ticket} is not blocked_by ${m.depends_on_ticket} (${m.depends_on})`
+
+function runLinks(dir, flags) {
+  const model = load(dir)
+  const board = flags.board ? readBoard(flags.board) : null
+  const gaps = linkGaps(model, board)
+  const ok = gaps.missing.length === 0 && gaps.unchecked.length === 0
+  if (flags.json) {
+    console.log(JSON.stringify({ ok, checked: gaps.checked, missing: gaps.missing, unchecked: gaps.unchecked }))
+    return ok ? 0 : 1
+  }
+  for (const w of model.errors) console.error(`warning: ${w}`)
+  if (board) for (const n of board.notes) console.error(`warning: ${n}`)
+  for (const u of gaps.unchecked) console.log(`skipped: ${u.node}: ${u.reason}`)
+  for (const m of gaps.missing) console.log(`missing_blocked_by: ${m.node}: ${missingText(m)}`)
+  if (ok) console.log(`links OK: ${gaps.checked} published node${gaps.checked === 1 ? '' : 's'} checked`)
+  return ok ? 0 : 1
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -313,12 +504,13 @@ function runStatus(dir) {
 
 function parseArgs(argv) {
   const [command, ...rest] = argv
-  const flags = { json: false, complete: false, board: '' }
+  const flags = { json: false, complete: false, board: '', config: '' }
   const positional = []
   const allowed = {
-    check: ['--json', '--complete'],
+    check: ['--json', '--complete', '--board'],
     next: ['--json'],
-    sync: ['--board'],
+    sync: ['--board', '--config'],
+    links: ['--json', '--board'],
     status: [],
   }
   if (!Object.prototype.hasOwnProperty.call(allowed, command || '')) throw new UsageError(command ? `unknown command ${command}` : 'no command')
@@ -326,10 +518,10 @@ function parseArgs(argv) {
     const arg = rest[i]
     if (arg.startsWith('-')) {
       if (!allowed[command].includes(arg)) throw new UsageError(`${command} does not take ${arg}`)
-      if (arg === '--board') {
+      if (arg === '--board' || arg === '--config') {
         const value = rest[++i]
-        if (value === undefined || value === '' || value.startsWith('--')) throw new UsageError('--board needs a folder')
-        flags.board = value
+        if (value === undefined || value === '' || value.startsWith('--')) throw new UsageError(`${arg} needs a ${arg === '--board' ? 'folder' : 'file'}`)
+        flags[arg.slice(2)] = value
       } else flags[arg.slice(2)] = true
     } else positional.push(arg)
   }
@@ -343,6 +535,7 @@ function main() {
     if (command === 'check') return runCheck(dir, flags)
     if (command === 'next') return runNext(dir, flags)
     if (command === 'sync') return runSync(dir, flags)
+    if (command === 'links') return runLinks(dir, flags)
     return runStatus(dir)
   } catch (err) {
     if (err instanceof UsageError) {
